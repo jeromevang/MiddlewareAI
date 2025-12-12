@@ -47,16 +47,16 @@ export default function HealthGrid() {
       {cards.map((card) => (
         <Card
           key={card.title}
-          className="relative overflow-hidden"
+          className="relative overflow-hidden border-white/10 bg-white/5"
           subtitle={card.subtitle}
           title={card.title}
           action={<Badge tone={card.healthy ? "positive" : "danger"}>{card.healthy ? "Healthy" : "Check"}</Badge>}
         >
           <div className="flex items-center gap-4">
-            <div className="rounded-2xl bg-night-800 p-3 text-accent-secondary">{card.icon}</div>
+            <div className="rounded-2xl bg-white/10 p-3 text-accent-secondary">{card.icon}</div>
             <div>
               <p className="text-2xl font-semibold text-white">{card.value}</p>
-              <p className="text-sm text-slate-400">{card.detail}</p>
+              <p className="text-sm text-white/70">{card.detail}</p>
             </div>
           </div>
         </Card>

@@ -44,13 +44,13 @@ export default function TelemetryPanel({ telemetry, isLoading }: TelemetryPanelP
           <Badge tone={telemetry?.enabled ? "info" : "warn"}>{stateLabel}</Badge>
           {telemetry && <Badge tone={telemetry.source === "override" ? "info" : "neutral"}>{telemetry.source}</Badge>}
         </div>
-        <dl className="grid grid-cols-1 gap-3 text-sm text-slate-300">
-          <div className="rounded-2xl border border-night-900 bg-night-950/60 p-3">
-            <dt className="stat-label">Override</dt>
+        <dl className="grid grid-cols-1 gap-3 text-sm text-white/80">
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+            <dt className="stat-label text-white/60">Override</dt>
             <dd className="text-white">{overrideLabel}</dd>
           </div>
-          <div className="rounded-2xl border border-night-900 bg-night-950/60 p-3">
-            <dt className="stat-label">Env flag</dt>
+          <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
+            <dt className="stat-label text-white/60">Env flag</dt>
             <dd className="text-white">{envLabel}</dd>
           </div>
         </dl>

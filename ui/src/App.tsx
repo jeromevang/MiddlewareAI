@@ -48,7 +48,7 @@ function App() {
 
   if (!bootstrapped && !bootstrapError) {
     return (
-      <div className="min-h-screen bg-night-950 text-slate-100 flex items-center justify-center">
+      <div className="min-h-screen text-slate-100 flex items-center justify-center">
         <div className="glass-card px-8 py-6 text-center">
           <p className="stat-label mb-2">Initializing dashboard</p>
           <p className="text-2xl font-semibold text-accent-secondary">Connecting…</p>
@@ -59,7 +59,7 @@ function App() {
 
   if (bootstrapError) {
     return (
-      <div className="min-h-screen bg-night-950 text-slate-100 flex items-center justify-center">
+      <div className="min-h-screen text-slate-100 flex items-center justify-center">
         <div className="glass-card px-8 py-6 max-w-lg text-center space-y-4">
           <p className="stat-label mb-2">Dashboard failed to load</p>
           <p className="text-2xl font-semibold text-accent-danger">{bootstrapError}</p>
@@ -73,29 +73,31 @@ function App() {
 
   return (
     <div className="min-h-screen bg-night-950 text-slate-50">
-      <div className="flex min-h-screen">
-        <SessionsPanel />
-        <div className="flex-1 flex flex-col">
-          <HeaderBar telemetry={telemetryQuery.data ?? null} />
-          <main className="flex-1 p-6 lg:p-8 space-y-6">
-            <HealthGrid />
-            <QuickStatsPanel />
-            <div className="grid gap-6 xl:grid-cols-3">
-              <ContextPanel className="xl:col-span-2" />
-              <SummaryPanel />
-            </div>
-            <div className="grid gap-6 lg:grid-cols-2">
-              <HistoryPanel />
-              <LogsPanel />
-            </div>
-            <div className="grid gap-6 xl:grid-cols-3">
-              <ConfigPanel className="xl:col-span-2" />
-              <TelemetryPanel telemetry={telemetryQuery.data ?? null} isLoading={telemetryQuery.isLoading} />
-            </div>
+      <HeaderBar telemetry={telemetryQuery.data ?? null} />
+      <main className="py-10">
+        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6">
+          <HealthGrid />
+          <QuickStatsPanel />
+
+          <div className="grid gap-6 xl:grid-cols-3">
+            <ContextPanel className="xl:col-span-2" />
+            <SummaryPanel />
+          </div>
+
+          <div className="grid gap-6 xl:grid-cols-3">
+            <TelemetryPanel telemetry={telemetryQuery.data ?? null} isLoading={telemetryQuery.isLoading} />
             <ActionPanel />
-          </main>
+            <SessionsPanel />
+          </div>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            <HistoryPanel />
+            <LogsPanel />
+          </div>
+
+          <ConfigPanel />
         </div>
-      </div>
+      </main>
     </div>
   );
 }

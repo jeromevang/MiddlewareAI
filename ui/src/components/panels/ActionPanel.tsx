@@ -57,14 +57,14 @@ export default function ActionPanel() {
     <Card title="Action Center" subtitle={`Last context refresh: ${contextLabel}`}>
       <div className="grid gap-4 md:grid-cols-3">
         {ACTION_CONFIG.map(({ key, label, description, icon: Icon, variant }) => (
-          <div key={key} className="flex flex-col gap-3 rounded-2xl border border-night-900 bg-night-950/60 p-4">
+          <div key={key} className="flex flex-col gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
             <div className="flex items-center gap-3">
-              <div className="rounded-2xl bg-night-900 p-2 text-accent-secondary">
+              <div className="rounded-2xl bg-white/10 p-2 text-accent-secondary">
                 <Icon className="h-5 w-5" />
               </div>
               <div>
                 <p className="font-semibold text-white">{label}</p>
-                <p className="text-xs text-slate-400">{description}</p>
+                <p className="text-xs text-white/70">{description}</p>
               </div>
             </div>
             <Button
@@ -78,7 +78,7 @@ export default function ActionPanel() {
           </div>
         ))}
       </div>
-      <p className="mt-4 text-xs text-slate-500">
+      <p className="mt-4 text-xs text-white/60">
         These actions call the middleware endpoints directly. Double-check LM Studio status and API key auth before issuing
         destructive operations.
       </p>

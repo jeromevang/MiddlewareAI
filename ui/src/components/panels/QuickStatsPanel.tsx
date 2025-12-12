@@ -23,10 +23,10 @@ export default function QuickStatsPanel() {
     <Card title="Live Metrics" subtitle="Traffic" className="overflow-hidden">
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {stats.map((stat) => (
-          <div key={stat.label} className="rounded-2xl border border-night-800/80 bg-night-900/60 px-4 py-3">
-            <p className="stat-label">{stat.label}</p>
-            <p className="text-2xl font-semibold text-white">{stat.value}</p>
-            <p className="text-xs text-slate-500">{stat.hint}</p>
+          <div key={stat.label} className="rounded-2xl border border-white/10 bg-white/5 px-4 py-4 shadow-inner">
+            <p className="stat-label text-white/70">{stat.label}</p>
+            <p className="text-3xl font-semibold text-white">{stat.value}</p>
+            <p className="text-xs text-white/60">{stat.hint}</p>
           </div>
         ))}
       </div>

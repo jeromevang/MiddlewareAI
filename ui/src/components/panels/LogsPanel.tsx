@@ -23,7 +23,7 @@ export default function LogsPanel() {
         <select
           value={logLevel}
           onChange={(e) => setLogLevel(e.target.value as typeof logLevel)}
-          className="rounded-xl border border-night-700 bg-night-900 px-3 py-1 text-xs text-slate-200"
+          className="rounded-xl border border-white/15 bg-white/10 px-3 py-1 text-xs text-white"
         >
           <option value="all">All</option>
           <option value="info">Info</option>
@@ -33,14 +33,14 @@ export default function LogsPanel() {
       }
     >
       <div className="max-h-80 overflow-auto space-y-2 text-sm font-mono">
-        {filtered.length === 0 && <p className="text-slate-500">No log entries.</p>}
+        {filtered.length === 0 && <p className="text-white/60">No log entries.</p>}
         {filtered.map((log) => (
-          <div key={`${log.ts}-${log.message}`} className="rounded-xl border border-night-800/60 bg-night-900/60 px-3 py-2">
-            <p className="flex items-center justify-between text-xs text-slate-500">
+          <div key={`${log.ts}-${log.message}`} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2">
+            <p className="flex items-center justify-between text-xs text-white/60">
               <span>{new Date(log.ts).toLocaleTimeString()}</span>
               <span className={clsx("uppercase", LEVEL_COLORS[log.level] ?? "text-slate-400")}>{log.level}</span>
             </p>
-            <p className="text-slate-100">{log.message}</p>
+            <p className="text-white">{log.message}</p>
           </div>
         ))}
       </div>

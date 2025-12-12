@@ -198,7 +198,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
           <select
             value={runtimeMode}
             onChange={(e) => setRuntimeMode(e.target.value)}
-            className="rounded-xl border border-night-800 bg-night-900 px-3 py-2 text-sm text-slate-100"
+            className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white"
           >
             <option value="local">Local</option>
             <option value="cloud">Cloud</option>
@@ -209,7 +209,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
           <input
             value={cloudModel}
             onChange={(e) => setCloudModel(e.target.value)}
-            className="rounded-xl border border-night-800 bg-night-900 px-3 py-2 text-sm text-slate-100"
+            className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white"
             placeholder="gpt-4o-mini"
           />
         </div>
@@ -218,7 +218,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
           <input
             value={cloudBaseUrl}
             onChange={(e) => setCloudBaseUrl(e.target.value)}
-            className="rounded-xl border border-night-800 bg-night-900 px-3 py-2 text-sm text-slate-100"
+            className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white"
             placeholder="https://api.openai.com/v1"
           />
         </div>
@@ -229,7 +229,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
               type="password"
               value={cloudApiKey}
               onChange={(e) => setCloudApiKey(e.target.value)}
-              className="rounded-xl border border-night-800 bg-night-900 px-3 py-2 text-sm text-slate-100"
+              className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white"
               placeholder="Leave blank to keep saved key"
             />
           </div>
@@ -241,7 +241,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
           const draft = models[modelKey];
           const title = modelKey === "main" ? "Main" : modelKey.charAt(0).toUpperCase() + modelKey.slice(1);
           return (
-            <div key={modelKey} className="rounded-2xl border border-night-900 bg-night-950/60 p-4 space-y-3">
+            <div key={modelKey} className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
               <div>
                 <p className="text-sm font-semibold text-white">{title}</p>
                 <p className="text-xs text-slate-500">{modelKey === "embedding" ? "Embeddings" : modelKey === "summarization" ? "Summarizer" : "Primary LLM"}</p>
@@ -252,7 +252,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
                   <select
                     value={draft.engine}
                     onChange={(e) => handleModelChange(modelKey, "engine", e.target.value)}
-                    className="rounded-xl border border-night-800 bg-night-900 px-3 py-2 text-sm text-slate-100"
+                    className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white"
                   >
                     <option value="local">Local (CPU)</option>
                     <option value="lmstudio">LM Studio</option>
@@ -265,7 +265,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
                 <input
                   value={draft.modelName}
                   onChange={(e) => handleModelChange(modelKey, "modelName", e.target.value)}
-                  className="rounded-xl border border-night-800 bg-night-900 px-3 py-2 text-sm text-slate-100"
+                  className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white"
                   placeholder="Repository or GGUF"
                 />
               </div>
@@ -274,7 +274,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
                 <input
                   value={draft.identifier}
                   onChange={(e) => handleModelChange(modelKey, "identifier", e.target.value)}
-                  className="rounded-xl border border-night-800 bg-night-900 px-3 py-2 text-sm text-slate-100"
+                  className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white"
                   placeholder="Short handle"
                 />
               </div>
@@ -283,7 +283,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
                 <input
                   value={draft.contextLength}
                   onChange={(e) => handleModelChange(modelKey, "contextLength", e.target.value)}
-                  className="rounded-xl border border-night-800 bg-night-900 px-3 py-2 text-sm text-slate-100"
+                  className="rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white"
                   type="number"
                   min={1}
                   placeholder="Tokens"
@@ -294,7 +294,7 @@ export default function ConfigPanel({ className }: ConfigPanelProps) {
         })}
       </div>
 
-      <div className="mt-6 flex flex-wrap items-center gap-4 border-t border-night-900 pt-4">
+      <div className="mt-6 flex flex-wrap items-center gap-4 border-t border-white/10 pt-4">
         <Button onClick={handleSave} loading={mutation.isPending} disabled={!snapshot}>
           Save runtime + models
         </Button>

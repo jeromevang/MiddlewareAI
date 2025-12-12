@@ -4,7 +4,7 @@ import clsx from "clsx";
 type BadgeTone = "neutral" | "positive" | "warn" | "danger" | "info";
 
 const toneStyles: Record<BadgeTone, string> = {
-  neutral: "bg-night-800 text-slate-200 border border-slate-700",
+  neutral: "bg-white/20 text-white border border-white/30",
   positive: "bg-accent-success/20 text-accent-success border border-accent-success/40",
   warn: "bg-accent-warning/20 text-accent-warning border border-accent-warning/40",
   danger: "bg-accent-danger/20 text-accent-danger border border-accent-danger/40",

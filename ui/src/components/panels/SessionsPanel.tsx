@@ -3,8 +3,14 @@ import { useMutation } from "@tanstack/react-query";
 import { purgeSessions } from "../../lib/api";
 import { useDashboardStore } from "../../state/dashboard-store";
 import { Button } from "../ui/Button";
+import { Card } from "../ui/Card";
+import clsx from "clsx";
 
-export default function SessionsPanel() {
+interface SessionsPanelProps {
+  className?: string;
+}
+
+export default function SessionsPanel({ className }: SessionsPanelProps) {
   const sessions = useDashboardStore((s) => s.status?.sessions ?? []);
   const history = useDashboardStore((s) => s.history);
   const selected = useDashboardStore((s) => s.selectedSession);
@@ -56,19 +62,19 @@ export default function SessionsPanel() {
     }
     purgeMutation.mutate({ beforeTs: parsed.toISOString() });
   };
-
   return (
-    <aside className="hidden lg:flex w-80 flex-col border-r border-night-900 bg-night-950/80">
-      <div className="px-5 py-4 border-b border-night-900">
-        <p className="stat-label mb-2">Sessions</p>
-        <div className="flex items-center justify-between">
-          <p className="text-2xl font-semibold text-white">{sessions.length}</p>
-          <Button variant="ghost" onClick={() => selectSession(null)} className="text-xs px-3 py-1">
-            View all
-          </Button>
+    <Card title="Sessions" subtitle="Rolling memory" className={clsx("space-y-5", className)}>
+      <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
+        <div>
+          <p className="stat-label mb-1">Total tracked</p>
+          <p className="text-3xl font-semibold text-white">{sessions.length}</p>
         </div>
+        <Button variant="ghost" onClick={() => selectSession(null)} className="text-xs px-3 py-1">
+          View all
+        </Button>
       </div>
-      <div className="px-5 py-4 border-b border-night-900 space-y-3">
+
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
         <p className="stat-label">Maintenance</p>
         <div className="flex flex-wrap gap-3">
           <Button variant="secondary" onClick={handlePurgeAll} loading={purgeMutation.isPending}>
@@ -79,57 +85,58 @@ export default function SessionsPanel() {
               type="datetime-local"
               value={cutoff}
               onChange={(e) => setCutoff(e.target.value)}
-              className="flex-1 rounded-xl border border-night-800 bg-night-900 px-3 py-2 text-sm text-slate-100"
+              className="flex-1 rounded-xl border border-white/10 bg-night-900/40 px-3 py-2 text-sm text-white"
             />
             <Button variant="ghost" onClick={handlePurgeBefore} loading={purgeMutation.isPending}>
-              Purge before
+              Cutoff
             </Button>
           </div>
         </div>
       </div>
-      <div className="flex-1 overflow-auto divide-y divide-night-900">
+
+      <div className="space-y-2 max-h-52 overflow-auto pr-1">
+        {sessions.length === 0 && <p className="text-sm text-white/60">No session metadata yet.</p>}
         {sessions.map((session) => (
           <button
             key={session.conversation_id}
             onClick={() => selectSession(session.conversation_id)}
-            className={`w-full px-5 py-3 text-left ${
-              session.conversation_id === activeId ? "bg-night-900/80" : "hover:bg-night-900/40"
-            }`}
+            className={clsx(
+              "w-full rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-left transition",
+              session.conversation_id === activeId ? "ring-2 ring-accent-secondary/60" : "hover:bg-white/10"
+            )}
           >
             <p className="text-sm font-semibold text-white">{session.conversation_id}</p>
-            <p className="text-xs text-slate-500">{new Date(session.last_activity).toLocaleString()}</p>
-            <p className="text-xs text-slate-400 mt-1">{session.turn_count} turns · {session.updates} updates</p>
+            <p className="text-xs text-white/60">{new Date(session.last_activity).toLocaleString()}</p>
+            <p className="text-xs text-white/60 mt-1">{session.turn_count} turns · {session.updates} updates</p>
           </button>
         ))}
-        {sessions.length === 0 && <p className="p-5 text-sm text-slate-500">No session metadata yet.</p>}
       </div>
-      <div className="px-5 py-4 border-t border-night-900 space-y-3">
-        <p className="stat-label">Focused session</p>
+
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="stat-label">Focused session</p>
+          {activeId && <span className="text-xs text-white/70">{activeId}</span>}
+        </div>
         {activeId ? (
           <>
-            <ul className="space-y-2 text-sm text-slate-300">
+            <ul className="space-y-2 text-sm text-white/80">
               {recentForSession.map((entry) => (
-                <li key={`${entry.ts}`} className="rounded-xl border border-night-900/80 bg-night-900/60 px-3 py-2">
-                  <p className="text-xs text-slate-500">{new Date(entry.ts).toLocaleTimeString()}</p>
+                <li key={`${entry.ts}`} className="rounded-xl border border-white/10 bg-night-900/40 px-3 py-2">
+                  <p className="text-xs text-white/60">{new Date(entry.ts).toLocaleTimeString()}</p>
                   <p>{entry.path}</p>
                 </li>
               ))}
-              {recentForSession.length === 0 && <li className="text-slate-500">No recent traffic.</li>}
+              {recentForSession.length === 0 && <li className="text-white/60">No recent traffic.</li>}
             </ul>
-            <Button
-              variant="secondary"
-              loading={purgeMutation.isPending}
-              onClick={handlePurgeSelected}
-              className="w-full"
-            >
+            <Button variant="secondary" loading={purgeMutation.isPending} onClick={handlePurgeSelected} className="w-full">
               Purge selected session
             </Button>
           </>
         ) : (
-          <p className="text-sm text-slate-500">Select a session to view recent requests.</p>
+          <p className="text-sm text-white/60">Select a session to view recent requests.</p>
         )}
-        <p className="text-xs text-slate-500">{panelMessage}</p>
+        <p className="text-xs text-white/60">{panelMessage}</p>
       </div>
-    </aside>
+    </Card>
   );
 }

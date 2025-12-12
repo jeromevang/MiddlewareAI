@@ -7,20 +7,20 @@ export default function SummaryPanel() {
   return (
     <Card title="Rolling Summary" subtitle="Memory">
       {summary ? (
-        <div className="space-y-3 text-sm text-slate-200">
-          <div className="flex items-center justify-between text-xs text-slate-400">
+        <div className="space-y-3 text-sm text-white/80">
+          <div className="flex items-center justify-between text-xs text-white/60">
             <span>Session {summary.sessionId}</span>
             <span>{new Date(summary.ts).toLocaleTimeString()}</span>
           </div>
-          <div className="max-h-72 overflow-auto rounded-2xl border border-night-800/70 bg-night-900/60 p-4 text-slate-100">
+          <div className="max-h-72 overflow-auto rounded-2xl border border-white/10 bg-white/5 p-4 text-white">
             {summary.summaryText || "No summary text."}
           </div>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-white/60">
             {summary.turnCount} turns · {summary.summaryLength} chars
           </p>
         </div>
       ) : (
-        <p className="text-sm text-slate-400">No summarizer activity yet.</p>
+        <p className="text-sm text-white/60">No summarizer activity yet.</p>
       )}
     </Card>
   );
