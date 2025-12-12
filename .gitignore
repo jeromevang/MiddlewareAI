@@ -1,0 +1,47 @@
+# Node dependencies
+node_modules/
+ui/node_modules/
+
+# Build and dist artifacts
+dist/
+ui/dist/
+build/
+coverage/
+.nyc_output/
+
+# Environment and local config overrides
+.env
+.env.*
+!.env.example
+config.local.json
+config.override.json
+
+# Logs and temporary files
+logs/
+*.log
+*.err
+*.out
+*.pid
+*.tmp
+*.temp
+tmp/
+temp/
+.DS_Store
+Thumbs.db
+server.err
+tmp_body.json
+
+# Local data stores and indexes
+data/
+vector_db/
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.faiss
+*.faiss.ids.json
+
+# Misc editor caches
+*.swp
+*.swo
+.vscode/

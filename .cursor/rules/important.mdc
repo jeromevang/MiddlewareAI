@@ -1,0 +1,9 @@
+---
+alwaysApply: true
+max_context_tokens: 15000
+summarize_if_exceeds: true
+aggressive_summarization: true
+---
+
+ # I will work interactively in the open
+ - I am showing each adjustment step-by-step—just as you’d expect with a human pair-programmer. You will see exactly what I am changing, running, and fixing as I go, without invisible "background" work

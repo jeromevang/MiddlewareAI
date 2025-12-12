@@ -1,0 +1,11 @@
+---
+alwaysApply: true
+max_context_tokens: 15000
+summarize_if_exceeds: true
+aggressive_summarization: true
+---
+
+# Edits
+- Use patch/diff format only.
+- Do not rewrite unchanged code.
+- Do not reformat unrelated files.

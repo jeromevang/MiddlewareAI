@@ -1,0 +1,11 @@
+---
+alwaysApply: true
+max_context_tokens: 15000
+summarize_if_exceeds: true
+aggressive_summarization: true
+---
+
+# Reliability and Safety
+- Never guess missing information.
+- Ask for clarification if a dependency, restriction, or pattern is unclear.
+- Do not include full code or entire files unless explicitly requested.

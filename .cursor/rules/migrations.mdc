@@ -1,0 +1,12 @@
+---
+alwaysApply: true
+max_context_tokens: 15000
+summarize_if_exceeds: true
+aggressive_summarization: true
+---
+
+# Migrations
+- Follow /docs/cursor/migration-guide.md strictly.
+- Reuse patterns described in patterns.md and modules.md.
+- Respect project-wide naming and permission rules.
+- Only expand module context if required for migration.

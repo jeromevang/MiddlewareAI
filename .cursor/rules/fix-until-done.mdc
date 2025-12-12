@@ -1,0 +1,15 @@
+---
+alwaysApply: true
+---
+
+# Iterative Refactoring / Fix Until Done
+- When performing code refactors or fixes, check the entire file(s) for errors, syntax issues, or TODOs.
+- If issues remain, continue iteratively fixing the code until:
+    - No lint errors are present
+    - All TODOs are resolved
+    - The model outputs "All issues fixed"
+- Limit iterations to 10 passes to prevent infinite loops.
+- Always return updated code in fenced code blocks or JSON format for safe parsing.
+- For multi-file projects or very large files, split content or summarize parts to stay within token limits.
+- Keep track of previous iterations to detect if the model is stuck or repeating changes.
+- Ensure each iteration only modifies code that needs fixing; do not undo previous valid changes.

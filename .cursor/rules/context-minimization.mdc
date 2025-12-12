@@ -1,0 +1,19 @@
+---
+alwaysApply: true
+max_context_tokens: 15000
+summarize_if_exceeds: true
+aggressive_summarization: true
+---
+
+# Context Size Minimization
+
+- Always keep working context as small as possible.
+- Use layered summarization:
+  1. First summarize the information.
+  2. If still lengthy, compress further.
+  3. If still long, produce an ultra-compact version.
+
+- **New Rule**: If context exceeds 20k tokens, automatically summarize it to bring it down to approximately 5k tokens while preserving key details and relevance.
+
+- Only include raw code if explicitly asked.
+- For multiple files/modules, summarize each individually.

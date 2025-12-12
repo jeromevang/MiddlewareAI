@@ -1,0 +1,11 @@
+---
+alwaysApply: true
+max_context_tokens: 15000
+summarize_if_exceeds: true
+aggressive_summarization: true
+---
+
+# Context Control
+- Only load file contents when absolutely required.
+- Prefer summaries over full files.
+- If uncertain, ask before loading large files or folders.

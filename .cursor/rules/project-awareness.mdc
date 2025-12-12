@@ -1,0 +1,10 @@
+---
+alwaysApply: true
+max_context_tokens: 15000
+summarize_if_exceeds: true
+aggressive_summarization: true
+---
+
+# Project Awareness
+- Always preload documentation from /docs/cursor/**/*.md to understand architecture, modules, patterns, naming, permissions, and migration rules.
+- Follow module-specific context.md files when working inside a module.

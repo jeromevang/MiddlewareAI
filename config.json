@@ -1,0 +1,63 @@
+{
+  "lmstudio": {
+    "url": "http://localhost:1234",
+    "timeout_ms": 60000,
+    "max_retries": 3,
+    "auto_start": false,
+    "server_port": 1234,
+    "cli_path": {
+      "windows": "%USERPROFILE%\\.lmstudio\\bin\\lms.exe",
+      "linux": "~/.lmstudio/bin/lms",
+      "darwin": "~/.lmstudio/bin/lms"
+    }
+  },
+  "models": {
+    "embedding": {
+      "engine": "local",
+      "model_name": "Xenova/bge-small-en-v1.5",
+      "identifier": "bge-small-en-v1.5",
+      "context_length": 2048
+    },
+    "summarization": {
+      "model_name": "TheBloke/OpenHermes-2.5-Mistral-7B-GGUF",
+      "identifier": "openhermes-2.5-mistral-7b",
+      "context_length": 8192
+    },
+    "main": {
+      "model_name": "MaziyarPanahi/NVIDIA-Nemotron-Nano-12B-v2-GGUF",
+      "identifier": "nvidia-nemotron-nano-12b-v2",
+      "context_length": 15055
+    }
+  },
+  "processing": {
+    "max_chunk_size": 2000,
+    "concurrency_limit": 2,
+    "cache_invalidation_days": 7,
+    "max_context_tokens": 40000,
+    "context_budget_ratio": 0.7
+  },
+  "storage": {
+    "sqlite_db_path": "./data/summaries.db",
+    "faiss_index_path": "./vector_db/embeddings.faiss",
+    "embedding_dimension": 384
+  },
+  "server": {
+    "port": 4000,
+    "api_key": ""
+  },
+  "runtime": {
+    "mode": "local",
+    "mode_switch": {
+      "require_health": true
+    },
+    "cloud_main": {
+      "base_url": "https://api.openai.com/v1",
+      "api_key": "",
+      "model": "gpt-4o-mini"
+    }
+  },
+  "sessions": {
+    "default_retention_days": 30
+  }
+}
+

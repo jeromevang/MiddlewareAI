@@ -1,0 +1,12 @@
+---
+alwaysApply: true
+max_context_tokens: 15000
+summarize_if_exceeds: true
+aggressive_summarization: true
+---
+
+# Module Context
+- When working in a module, always consult the local context.md in that folder.
+- Summarize module responsibilities, entry files, dependencies, and migration-related notes without including code.
+- Create a local context.md if it doesnt exist in that folder and Summarize module responsibilities, entry files, dependencies, and migration-related notes without including code.
+- Always update the local context.md when needed, and do this without interaction of the user.
