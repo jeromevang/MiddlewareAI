@@ -30,7 +30,7 @@ export function Button({
   return (
     <button
       className={clsx(
-        "inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-accent-secondary",
+        "inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-accent-secondary",
         VARIANT_STYLES[variant],
         isDisabled && "opacity-60 cursor-not-allowed",
         className

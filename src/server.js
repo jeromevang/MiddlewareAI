@@ -25,6 +25,16 @@ const { getRuntimeMode, isCloudMode, requireModeHealthCheck } = require('./runti
 const { main: runIndexer } = require('./middleware.js'); // to trigger reindex
 const { logDebugEvent, isTelemetryEnabled, setTelemetryOverride, getTelemetryOverride } = require('./debug_logger.js');
 const { createRagService } = require('./services/rag_service.js');
+const { getSummaryKeepRecentTurns, setSummaryKeepRecentTurns, refreshProcessingStateFromConfig } = require('./processing_state.js');
+const {
+    getEnginesSnapshot,
+    isRagEnabled: isRagEngineEnabled,
+    isSummaryEnabled,
+    updateEngineEnabled,
+    refreshEngineStateFromConfig,
+    incrementRagBypass,
+    resetRagBypassCount,
+} = require('./engine_state.js');
 
 // Global error logging to avoid silent crashes (opt-in via debug logger)
 process.on('unhandledRejection', (err) => {
@@ -83,6 +93,7 @@ const mainModelCfg = getModelConfig('main');
 const runtimeMode = getRuntimeMode();
 const cloudMode = isCloudMode();
 const sessionConfig = getSessionConfig();
+refreshProcessingStateFromConfig();
 const SERVER_API_KEY = serverConfig.api_key;
 const CONTEXT_MAX_TOKENS = processingConfig.max_context_tokens || 40000;
 const CONTEXT_BUDGET_RATIO = processingConfig.context_budget_ratio || 0.7;
@@ -115,19 +126,46 @@ const metrics = {
     lastSummaryAction: null,
 };
 
-function isRagEnabled() {
-    return !cloudMode;
+const THINK_BLOCK_REGEX = /<think>[\s\S]*?<\/think>/gi;
+const USER_QUERY_TAG_REGEX = /<\/?user_query>/gi;
+const ASSISTANT_RESPONSE_TAG_REGEX = /<\/?assistant_response>/gi;
+
+function sanitizeUserText(text = '') {
+    if (!text) return '';
+    return text.replace(USER_QUERY_TAG_REGEX, '').trim();
+}
+
+function sanitizeAssistantText(text = '') {
+    if (!text) return '';
+    return text
+        .replace(THINK_BLOCK_REGEX, '')
+        .replace(ASSISTANT_RESPONSE_TAG_REGEX, '')
+        .trim();
+}
+
+function sanitizeSummaryText(text = '') {
+    if (!text) return '';
+    return sanitizeAssistantText(sanitizeUserText(text));
+}
+
+function isRagFeatureEnabled() {
+    return !cloudMode && isRagEngineEnabled();
+}
+
+function isSummaryFeatureEnabled() {
+    return isSummaryEnabled();
 }
 
 const ragService = createRagService({
     sqliteCacheManager,
     faissIndexManager,
     embedText,
-    isRagEnabled,
+    isRagEnabled: isRagFeatureEnabled,
     isIndexing: () => indexingInProgress,
+    onRagBypass: () => incrementRagBypass(),
 });
 
-const { ragSearch, buildContextWithBudget, extractAssistantText } = ragService;
+const { ragSearch, buildContextWithBudget, extractAssistantText, estimateTokens } = ragService;
 
 function generateSessionId() {
     if (crypto.randomUUID) {
@@ -136,14 +174,43 @@ function generateSessionId() {
     return crypto.randomBytes(16).toString('hex');
 }
 
-function resolveConversationId(requestedId) {
+function resolveConversationId(requestedId, { headerId = null, fallbackId = null } = {}) {
     if (typeof requestedId === 'string') {
         const trimmed = requestedId.trim();
         if (trimmed) {
             return { sessionId: trimmed, generated: false };
         }
     }
+    if (typeof headerId === 'string') {
+        const trimmedHeader = headerId.trim();
+        if (trimmedHeader) {
+            return { sessionId: trimmedHeader, generated: false };
+        }
+    }
+    if (typeof fallbackId === 'string') {
+        const trimmedFallback = fallbackId.trim();
+        if (trimmedFallback) {
+            return { sessionId: trimmedFallback, generated: false };
+        }
+    }
     return { sessionId: generateSessionId(), generated: true };
+}
+
+function extractConversationIdFromHeaders(req) {
+    const headerKeys = ['x-conversation-id', 'x-session-id', 'x-cursor-session'];
+    for (const key of headerKeys) {
+        const raw = req.headers?.[key];
+        if (typeof raw === 'string' && raw.trim()) {
+            return raw.trim();
+        }
+        if (Array.isArray(raw)) {
+            const found = raw.find((entry) => typeof entry === 'string' && entry.trim());
+            if (found) {
+                return found.trim();
+            }
+        }
+    }
+    return null;
 }
 
 function buildTelemetryStatus() {
@@ -168,6 +235,7 @@ function resetInMemoryStats() {
     metrics.lastContextTs = null;
     metrics.lastRagResults = [];
     metrics.lastSummaryAction = null;
+    resetRagBypassCount();
 }
 
 function modelSummary(cfg, extras = {}) {
@@ -200,8 +268,11 @@ async function ensureReady() {
 
         const warmers = [
             warmEmbeddingModel(embeddingCfg),
-            warmModel(summarizationCfg),
         ];
+
+        if (isSummaryFeatureEnabled()) {
+            warmers.push(warmModel(summarizationCfg));
+        }
         if (!cloudMode) {
             warmers.push(warmModel(mainCfg));
         }
@@ -230,7 +301,7 @@ async function ensureReady() {
         }
     }
 
-    if (isRagEnabled()) {
+    if (isRagFeatureEnabled()) {
         console.log('[Server] Starting automatic file scan and RAG indexing in background...');
         void startIndexer({ reason: 'startup', background: true });
     } else {
@@ -302,6 +373,116 @@ function recordRequest(data) {
     void broadcastDashboardSnapshot();
 }
 
+function formatRagSnippets(ragResults = []) {
+    return ragResults.map(r => `- [${r.filePath}] (${r.distance.toFixed(4)}): ${r.summaryText}`).join('\n');
+}
+
+function formatRecentTurns(turns = []) {
+    return turns.map((turn, idx) => ({
+        label: `Recent turn ${turn?.turnIndex ?? idx + 1}`,
+        text: (() => {
+            const userText = sanitizeUserText(turn?.userPrompt || '');
+            const assistantText = sanitizeAssistantText(turn?.assistantResponse || '');
+            return [userText ? `User: ${userText}` : '', assistantText ? `Assistant: ${assistantText}` : '']
+                .filter(Boolean)
+                .join('\n')
+                .trim();
+        })()
+    }));
+}
+
+async function getFormattedRecentTurns(conversationId, keepRecentTurns) {
+    if (!conversationId || !keepRecentTurns) {
+        return [];
+    }
+    try {
+        const turns = await sqliteCacheManager.getRecentTurns(conversationId, keepRecentTurns);
+        return formatRecentTurns(turns);
+    } catch (err) {
+        console.warn('[Server] Failed to load recent turns:', err?.message || err);
+        return [];
+    }
+}
+
+function buildRawContext({ rollingSummaryText, recentTurns = [], ragResults = [], userPrompt }) {
+    const parts = [];
+    if (rollingSummaryText) {
+        parts.push(`Rolling summary:\n${rollingSummaryText}`);
+    }
+    if (recentTurns.length) {
+        parts.push(`Recent turns:\n${recentTurns.map(rt => `${rt.label}\n${rt.text}`).join('\n\n')}`);
+    }
+    if (ragResults.length) {
+        parts.push(`RAG context:\n${formatRagSnippets(ragResults)}`);
+    }
+    if (userPrompt) {
+        parts.push(`User prompt:\n${userPrompt}`);
+    }
+    return parts.join('\n\n');
+}
+
+function composeContextPayload({ summaryEnabled, rollingSummaryText, recentTurns, ragResults, userPrompt }) {
+    const rawContextText = buildRawContext({ rollingSummaryText, recentTurns, ragResults, userPrompt });
+    if (summaryEnabled) {
+        const { contextText, info } = buildContextWithBudget({
+            rollingSummaryText,
+            recentTurns,
+            ragResults,
+            userPrompt,
+            budgetTokens: CONTEXT_BUDGET_TOKENS
+        });
+        return {
+            contextText,
+            rawContextText,
+            budgetInfo: { ...info, mode: 'compressed' }
+        };
+    }
+    const usedTokens = estimateTokens(rawContextText);
+    return {
+        contextText: rawContextText,
+        rawContextText,
+        budgetInfo: {
+            budgetTokens: null,
+            usedTokens,
+            rawTokens: usedTokens,
+            savedTokens: 0,
+            compressionPct: 0,
+            trimmed: false,
+            mode: 'raw-pass-through'
+        }
+    };
+}
+
+async function persistConversationTurn({
+    sessionId,
+    userPrompt,
+    assistantResponse,
+    rawContextText,
+    composedContextText,
+    budgetInfo,
+    ragResults,
+}) {
+    try {
+        const turnId = await sqliteCacheManager.saveConversationTurn({
+            conversationId: sessionId,
+            userPrompt,
+            assistantResponse,
+            rawContext: rawContextText,
+            composedContext: composedContextText,
+            budgetInfo,
+            ragChunks: ragResults,
+            compressionMode: budgetInfo?.mode || null,
+        });
+        if (!turnId) {
+            return null;
+        }
+        return await sqliteCacheManager.getConversationTurnById(turnId);
+    } catch (err) {
+        console.error('[Server] Failed to persist conversation turn:', err?.message || err);
+        return null;
+    }
+}
+
 function updateMetrics(durationMs, budgetInfo, ok = true) {
     metrics.totalRequests += 1;
     if (!ok) metrics.totalErrors += 1;
@@ -317,7 +498,7 @@ function isAbortError(error) {
 }
 
 function startIndexer({ modelVersion = null, reason = 'manual', background = false } = {}) {
-    if (!isRagEnabled()) {
+    if (!isRagFeatureEnabled()) {
         const err = new Error('RAG is disabled; indexing unavailable.');
         err.code = 'RAG_DISABLED';
         return Promise.reject(err);
@@ -396,14 +577,17 @@ async function buildStatusPayload() {
         config: getRedactedConfig(),
         runtime: {
             mode: runtimeMode,
-            rag_enabled: isRagEnabled(),
+            rag_enabled: isRagFeatureEnabled(),
+            summary_enabled: isSummaryFeatureEnabled(),
             cloud: cloudMode,
         },
+        engines: getEnginesSnapshot(),
         processing: {
             max_chunk_size: processingConfig.max_chunk_size,
             concurrency_limit: processingConfig.concurrency_limit,
             context_budget_tokens: CONTEXT_BUDGET_TOKENS,
             max_context_tokens: CONTEXT_MAX_TOKENS,
+            summary_keep_recent_turns: getSummaryKeepRecentTurns(),
         },
         models: {
             embedding: modelSummary(embeddingModelCfg, { embedding_dimension: storageCfg.embedding_dimension }),
@@ -435,6 +619,7 @@ function buildMetricsPayload() {
     const storageCfg = getStorageConfig();
     return {
         ...metrics,
+        engines: getEnginesSnapshot(),
         models: {
             embedding: modelSummary(embeddingModelCfg, { embedding_dimension: storageCfg.embedding_dimension }),
             summarization: modelSummary(summarizationModel),
@@ -452,6 +637,7 @@ function buildMetricsPayload() {
             concurrency_limit: processingConfig.concurrency_limit,
             context_budget_tokens: CONTEXT_BUDGET_TOKENS,
             max_context_tokens: CONTEXT_MAX_TOKENS,
+            summary_keep_recent_turns: getSummaryKeepRecentTurns(),
         },
     };
 }
@@ -475,29 +661,100 @@ async function sendDashboardSnapshot(ws) {
 async function broadcastDashboardSnapshot() {
     if (!wss || wss.clients.size === 0) return;
     const snapshot = await buildDashboardSnapshot();
-    const serialized = JSON.stringify({ type: 'dashboard', payload: snapshot });
+    broadcastWsMessage({ type: 'dashboard', payload: snapshot });
+}
+
+function broadcastWsMessage(message) {
+    if (!wss || wss.clients.size === 0) return;
+    let serialized;
+    try {
+        serialized = JSON.stringify(message);
+    } catch (err) {
+        console.warn('[WS] Failed to serialize message:', err?.message || err);
+        return;
+    }
     for (const client of wss.clients) {
         if (client.readyState === WebSocketLib.OPEN) {
-            client.send(serialized);
+            try {
+                client.send(serialized);
+            } catch (err) {
+                console.warn('[WS] Failed to send payload:', err?.message || err);
+            }
         }
     }
 }
-/**
- * Update rolling summary: summarize (prior summary + interaction) using summarization model.
- */
-async function updateRollingSummary(previousSummaryRow, interactionText, conversationId) {
-    const previousSummary = previousSummaryRow?.summary || '';
-    const base = previousSummary ? `${previousSummary}\n\n` : '';
-    const toSummarize = `${base}${interactionText}`;
-    const newSummary = await summarize(toSummarize);
-    const nextTurnCount = (previousSummaryRow?.turn_count || 0) + 1;
-    await sqliteCacheManager.saveRollingSummary(
-        newSummary,
-        summarizationModel.identifier,
-        conversationId,
-        nextTurnCount
-    );
-    return { summary: newSummary, turnCount: nextTurnCount };
+
+async function pushSessionUpdate({ sessionId, turn }) {
+    if (!sessionId || !wss || wss.clients.size === 0) {
+        return;
+    }
+    try {
+        const summary = await sqliteCacheManager.getSessionSummary(sessionId);
+        const payload = {
+            session: summary || {
+                conversation_id: sessionId,
+                last_activity: turn?.createdAt || new Date().toISOString(),
+                turn_count: turn?.turnIndex || 0,
+                updates: turn?.turnIndex || 0,
+            },
+            turn: turn || null,
+        };
+        broadcastWsMessage({ type: 'session-update', payload });
+    } catch (err) {
+        console.warn('[WS] Failed to push session update:', err?.message || err);
+    }
+}
+async function recomputeRollingSummary(conversationId, keepRecentTurns) {
+    if (!isSummaryFeatureEnabled()) {
+        return null;
+    }
+    try {
+        const { eligibleTurns, totalTurns } = await sqliteCacheManager.getTurnsForSummary(conversationId, keepRecentTurns);
+        if (!eligibleTurns.length) {
+            await sqliteCacheManager.saveRollingSummary(
+                '',
+                summarizationModel.identifier,
+                conversationId,
+                0
+            );
+            return { summary: '', turnCount: 0, totalTurns };
+        }
+        const transcriptSections = eligibleTurns
+            .map((turn) => {
+                const user = sanitizeUserText(turn.userPrompt || '');
+                const assistant = sanitizeAssistantText(turn.assistantResponse || '');
+                const lines = [];
+                if (user) lines.push(`User: ${user}`);
+                if (assistant) lines.push(`Assistant: ${assistant}`);
+                return lines.join('\n').trim();
+            })
+            .filter(Boolean);
+
+        const transcript = transcriptSections.join('\n\n');
+
+        if (!transcript) {
+            await sqliteCacheManager.saveRollingSummary(
+                '',
+                summarizationModel.identifier,
+                conversationId,
+                eligibleTurns.length
+            );
+            return { summary: '', turnCount: eligibleTurns.length, totalTurns };
+        }
+
+        const newSummaryRaw = await summarize(transcript);
+        const cleanedSummary = sanitizeSummaryText(newSummaryRaw);
+        await sqliteCacheManager.saveRollingSummary(
+            cleanedSummary,
+            summarizationModel.identifier,
+            conversationId,
+            eligibleTurns.length
+        );
+        return { summary: cleanedSummary, turnCount: eligibleTurns.length, totalTurns };
+    } catch (err) {
+        console.error('[Server] Failed to recompute rolling summary:', err?.message || err);
+        throw err;
+    }
 }
 
 // Health endpoint removed (LM Studio backend logs unexpected /health); use /status instead.
@@ -538,8 +795,49 @@ app.patch('/config', async (req, res) => {
         // Do not allow setting api_key in plain response
         const merged = { ...current, ...updates };
         fs.writeFileSync(cfgPath, JSON.stringify(merged, null, 2));
+        refreshEngineStateFromConfig();
+        refreshProcessingStateFromConfig();
         res.json({ status: 'ok', note: 'Restart server to apply new config' });
     } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.patch('/engines/:engine', async (req, res) => {
+    const { engine } = req.params;
+    const supported = ['rag', 'summary'];
+    if (!supported.includes(engine)) {
+        return res.status(404).json({ error: `Unknown engine: ${engine}` });
+    }
+    const { enabled, clearOnDisable = false } = req.body || {};
+    if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ error: 'enabled boolean required' });
+    }
+
+    try {
+        if (engine === 'rag') {
+            if (!enabled) {
+                await stopActiveIndexer('rag disabled');
+                if (clearOnDisable) {
+                    await sqliteCacheManager.clearAll();
+                    await faissIndexManager.clear();
+                    resetInMemoryStats();
+                    appendLog('RAG disabled: cache + FAISS cleared', 'warn');
+                } else {
+                    appendLog('RAG disabled: cache preserved', 'warn');
+                }
+            }
+            updateEngineEnabled('rag', enabled, { persist: true });
+            appendLog(`RAG engine ${enabled ? 'enabled' : 'disabled'}`, enabled ? 'info' : 'warn');
+        } else if (engine === 'summary') {
+            updateEngineEnabled('summary', enabled, { persist: true });
+            appendLog(`Summary engine ${enabled ? 'enabled' : 'disabled'}`, enabled ? 'info' : 'warn');
+        }
+
+        refreshEngineStateFromConfig();
+        res.json({ status: 'ok', engines: getEnginesSnapshot() });
+    } catch (error) {
+        appendLog(`Engine toggle failed (${engine}): ${error.message}`, 'error');
         res.status(500).json({ error: error.message });
     }
 });
@@ -559,6 +857,43 @@ app.post('/telemetry', (req, res) => {
     res.json(buildTelemetryStatus());
 });
 
+app.patch('/processing/summary-keep', (req, res) => {
+    const { keepRecentTurns } = req.body || {};
+    const parsed = Number(keepRecentTurns);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return res.status(400).json({ error: 'keepRecentTurns must be a non-negative number' });
+    }
+    const updated = setSummaryKeepRecentTurns(parsed, { persist: true });
+    appendLog(`Summary keep-recent set to ${updated}`, 'info');
+    res.json({ status: 'ok', keepRecentTurns: updated });
+});
+
+app.post('/summary/reprocess', async (req, res) => {
+    try {
+        const { conversationId = null } = req.body || {};
+        const keepRecentTurns = getSummaryKeepRecentTurns();
+        const targets = conversationId ? [conversationId] : await sqliteCacheManager.getAllConversationIds();
+        const processed = [];
+        for (const targetId of targets) {
+            if (!targetId) continue;
+            try {
+                const summary = await recomputeRollingSummary(targetId, keepRecentTurns);
+                processed.push({
+                    conversationId: targetId,
+                    turnCount: summary?.turnCount || 0,
+                    summaryLength: summary?.summary ? summary.summary.length : 0,
+                });
+            } catch (err) {
+                appendLog(`Summary reprocess failed for ${targetId}: ${err?.message || err}`, 'error');
+            }
+        }
+        res.json({ status: 'ok', processed: processed.length, keepRecentTurns, details: processed });
+    } catch (error) {
+        console.error('[Server] /summary/reprocess error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/sessions/purge', async (req, res) => {
     try {
         const { conversationId = null, beforeTs = null } = req.body || {};
@@ -571,11 +906,31 @@ app.post('/sessions/purge', async (req, res) => {
     }
 });
 
+app.get('/sessions/:conversationId/turns', async (req, res) => {
+    const { conversationId } = req.params;
+    if (!conversationId) {
+        return res.status(400).json({ error: 'conversationId required' });
+    }
+    const limit = Math.min(parseInt(req.query.limit || '50', 10), 200);
+    const offset = Math.max(parseInt(req.query.offset || '0', 10), 0);
+    try {
+        const turns = await sqliteCacheManager.getConversationTurns(conversationId, { limit, offset });
+        res.json({
+            sessionId: conversationId,
+            turns,
+            pagination: { limit, offset },
+        });
+    } catch (error) {
+        console.error('[Server] /sessions/:id/turns error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.post('/search', async (req, res) => {
     try {
         const { query, topK = 5 } = req.body;
         if (!query) return res.status(400).json({ error: 'query required' });
-        if (!isRagEnabled()) {
+        if (!isRagFeatureEnabled()) {
             return res.json({ results: [], disabled: true, message: 'RAG is disabled in the current runtime mode.' });
         }
         const results = await ragSearch(query, topK);
@@ -593,24 +948,37 @@ app.post('/query', async (req, res) => {
     try {
         const { prompt, topK = 5, temperature = 0.2, conversationId: requestedConversationId } = req.body;
         if (!prompt) return res.status(400).json({ error: 'prompt required' });
-        const resolved = resolveConversationId(requestedConversationId);
+        const headerConversationId = extractConversationIdFromHeaders(req);
+        const resolved = resolveConversationId(requestedConversationId, {
+            headerId: headerConversationId,
+            fallbackId: DEFAULT_CONVERSATION_ID,
+        });
         sessionId = resolved.sessionId;
+        const summaryActive = isSummaryFeatureEnabled();
+        const summaryKeepRecentTurns = summaryActive ? getSummaryKeepRecentTurns() : 0;
 
         // Retrieve latest rolling summary (long-term memory)
-        const latestSummary = await sqliteCacheManager.getLatestRollingSummary(sessionId);
-        const rollingSummaryText = latestSummary ? latestSummary.summary : '';
+        let latestSummary = null;
+        let rollingSummaryText = '';
+        let formattedRecentTurns = [];
+        if (summaryActive) {
+            latestSummary = await sqliteCacheManager.getLatestRollingSummary(sessionId);
+            rollingSummaryText = latestSummary ? sanitizeSummaryText(latestSummary.summary) : '';
+            formattedRecentTurns = await getFormattedRecentTurns(sessionId, summaryKeepRecentTurns);
+        }
 
         // RAG search
         const ragResults = await ragSearch(prompt, topK);
 
-        // Build context with budgeting
-        const { contextText: composedPrompt, info } = buildContextWithBudget({
+        // Build context (compressed or raw pass-through)
+        const { contextText: composedPrompt, rawContextText, budgetInfo: composedBudget } = composeContextPayload({
+            summaryEnabled: summaryActive,
             rollingSummaryText,
+            recentTurns: formattedRecentTurns,
             ragResults,
             userPrompt: prompt,
-            budgetTokens: CONTEXT_BUDGET_TOKENS
         });
-        budgetInfo = info;
+        budgetInfo = composedBudget;
 
         // Capture context snapshot for UI
         const ragPreview = (ragResults || []).slice(0, 5).map(r => ({
@@ -631,23 +999,39 @@ app.post('/query', async (req, res) => {
         });
         const completionText = extractAssistantText(completion);
 
-        // Update rolling summary with interaction
-        const interactionText = `User: ${prompt}\nAssistant: ${completionText}`;
-        const newRollingSummary = await updateRollingSummary(latestSummary, interactionText, sessionId);
-        metrics.lastSummaryAction = {
-            ts: Date.now(),
+        let newRollingSummary = null;
+
+        const persistedTurn = await persistConversationTurn({
             sessionId,
-            turnCount: newRollingSummary?.turnCount || 0,
-            summaryText: (newRollingSummary?.summary || '').slice(0, 1200),
-            summaryLength: newRollingSummary?.summary ? newRollingSummary.summary.length : 0
-        };
+            userPrompt: prompt,
+            assistantResponse: completionText,
+            rawContextText,
+            composedContextText: composedPrompt,
+            budgetInfo,
+            ragResults,
+        });
+
+        void pushSessionUpdate({ sessionId, turn: persistedTurn });
+
+        if (summaryActive) {
+            newRollingSummary = await recomputeRollingSummary(sessionId, summaryKeepRecentTurns);
+            if (newRollingSummary) {
+                metrics.lastSummaryAction = {
+                    ts: Date.now(),
+                    sessionId,
+                    turnCount: newRollingSummary?.turnCount || 0,
+                    summaryText: (newRollingSummary?.summary || '').slice(0, 1200),
+                    summaryLength: newRollingSummary?.summary ? newRollingSummary.summary.length : 0
+                };
+            }
+        }
 
         res.json({
             sessionId,
             completion,
             rag: ragResults,
-            rollingSummary: newRollingSummary?.summary,
-            summaryMeta: { turnCount: newRollingSummary?.turnCount || 0 },
+            rollingSummary: summaryActive ? newRollingSummary?.summary : null,
+            summaryMeta: summaryActive ? { turnCount: newRollingSummary?.turnCount || 0 } : null,
             budget: budgetInfo
         });
 
@@ -684,7 +1068,7 @@ app.post('/query', async (req, res) => {
  * Reindex endpoint: runs the middleware indexing flow.
  */
 app.post('/reindex', async (req, res) => {
-    if (!isRagEnabled()) {
+    if (!isRagFeatureEnabled()) {
         return res.status(400).json({ error: 'RAG is disabled in the current runtime mode.' });
     }
     try {
@@ -710,13 +1094,13 @@ app.post('/reset', async (_req, res) => {
         await faissIndexManager.clear();
         resetInMemoryStats();
         appendLog('Reset requested: cache cleared, FAISS cleared, stats reset', 'info');
-        if (isRagEnabled()) {
+        if (isRagFeatureEnabled()) {
             appendLog('Reindex after reset scheduled', 'info');
             void startIndexer({ reason: 'reset', background: true });
         } else {
             appendLog('Reindex skipped: RAG disabled in current mode', 'info');
         }
-        res.json({ status: 'ok', message: isRagEnabled() ? 'Reset done; reindex started' : 'Reset done; RAG disabled so no reindex' });
+        res.json({ status: 'ok', message: isRagFeatureEnabled() ? 'Reset done; reindex started' : 'Reset done; RAG disabled so no reindex' });
     } catch (error) {
         appendLog(`Reset failed: ${error.message}`, 'error');
         console.error('[Server] /reset error:', error);
@@ -751,8 +1135,14 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         if (!Array.isArray(messages) || messages.length === 0) {
             return res.status(400).json({ error: 'messages array required' });
         }
-        const resolved = resolveConversationId(requestedConversationId);
+        const headerConversationId = extractConversationIdFromHeaders(req);
+        const resolved = resolveConversationId(requestedConversationId, {
+            headerId: headerConversationId,
+            fallbackId: DEFAULT_CONVERSATION_ID,
+        });
         sessionId = resolved.sessionId;
+        const summaryActive = isSummaryFeatureEnabled();
+        const summaryKeepRecentTurns = summaryActive ? getSummaryKeepRecentTurns() : 0;
 
         // Extract latest user message for RAG
         const latestUser = [...messages].reverse().find(m => m?.role === 'user');
@@ -767,18 +1157,23 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         
         // Retrieve latest rolling summary (long-term memory)
         let latestSummary = null;
-        try {
-                        latestSummary = await sqliteCacheManager.getLatestRollingSummary(sessionId);
-        } catch (sumErr) {
-            void logDebugEvent({
-                location: 'server.js:handleChatCompletions summary error',
-                message: 'latestSummary failed',
-                data: { error: sumErr?.message || String(sumErr) },
-                hypothesisId: 'H5'
-            });
-            throw sumErr;
+        let rollingSummaryText = '';
+        let formattedRecentTurns = [];
+        if (summaryActive) {
+            try {
+                latestSummary = await sqliteCacheManager.getLatestRollingSummary(sessionId);
+                rollingSummaryText = latestSummary ? sanitizeSummaryText(latestSummary.summary) : '';
+                formattedRecentTurns = await getFormattedRecentTurns(sessionId, summaryKeepRecentTurns);
+            } catch (sumErr) {
+                void logDebugEvent({
+                    location: 'server.js:handleChatCompletions summary error',
+                    message: 'latestSummary failed',
+                    data: { error: sumErr?.message || String(sumErr) },
+                    hypothesisId: 'H5'
+                });
+                throw sumErr;
+            }
         }
-        const rollingSummaryText = latestSummary ? latestSummary.summary : '';
         
         // RAG search
         try {
@@ -787,14 +1182,15 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                         throw ragErr;
         }
         
-        // Build context with budgeting
-        const { contextText: composedPrompt, info } = buildContextWithBudget({
+        // Build context (compressed or raw)
+        const { contextText: composedPrompt, rawContextText, budgetInfo: composedBudget } = composeContextPayload({
+            summaryEnabled: summaryActive,
             rollingSummaryText,
+            recentTurns: formattedRecentTurns,
             ragResults,
             userPrompt,
-            budgetTokens: CONTEXT_BUDGET_TOKENS
         });
-        budgetInfo = info;
+        budgetInfo = composedBudget;
         
         // Capture context snapshot for UI
         const ragPreview = (ragResults || []).slice(0, 5).map(r => ({
@@ -870,22 +1266,36 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             const lmDuration = Date.now() - lmStarted;
             const duration = Date.now() - started;
             console.log(`[RESP] ${pathLabel} STREAM 200 in ${duration}ms (LM ${lmDuration}ms) rag=${ragResults.length}`);
+
+            const persistedTurn = await persistConversationTurn({
+                sessionId,
+                userPrompt,
+                assistantResponse: streamedContent,
+                rawContextText,
+                composedContextText: composedPrompt,
+                budgetInfo,
+                ragResults,
+            });
+            void pushSessionUpdate({ sessionId, turn: persistedTurn });
             
             // Update rolling summary asynchronously
-            const interactionText = `User: ${userPrompt}\nAssistant: ${streamedContent}`;
-            updateRollingSummary(latestSummary, interactionText, sessionId)
-                .then(summary => {
-                    metrics.lastSummaryAction = {
-                        ts: Date.now(),
-                        sessionId,
-                        turnCount: summary?.turnCount || 0,
-                        summaryText: (summary?.summary || '').slice(0, 1200),
-                        summaryLength: summary?.summary ? summary.summary.length : 0
-                    };
-                })
-                .catch(err => 
-                    console.error('[Server] Failed to update rolling summary:', err)
-                );
+            if (summaryActive) {
+                recomputeRollingSummary(sessionId, summaryKeepRecentTurns)
+                    .then(summary => {
+                        if (summary) {
+                            metrics.lastSummaryAction = {
+                                ts: Date.now(),
+                                sessionId,
+                                turnCount: summary?.turnCount || 0,
+                                summaryText: (summary?.summary || '').slice(0, 1200),
+                                summaryLength: summary?.summary ? summary.summary.length : 0
+                            };
+                        }
+                    })
+                    .catch(err => 
+                        console.error('[Server] Failed to update rolling summary:', err)
+                    );
+            }
             
             updateMetrics(duration, budgetInfo, true);
             recordRequest({
@@ -911,16 +1321,30 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         // Extract content
         const content = extractAssistantText(completionResponse);
 
-        // Update rolling summary
-        const interactionText = `User: ${userPrompt}\nAssistant: ${content}`;
-        const newRollingSummary = await updateRollingSummary(latestSummary, interactionText, sessionId);
-        metrics.lastSummaryAction = {
-            ts: Date.now(),
+        const persistedTurn = await persistConversationTurn({
             sessionId,
-            turnCount: newRollingSummary?.turnCount || 0,
-            summaryText: (newRollingSummary?.summary || '').slice(0, 1200),
-            summaryLength: newRollingSummary?.summary ? newRollingSummary.summary.length : 0
-        };
+            userPrompt,
+            assistantResponse: content,
+            rawContextText,
+            composedContextText: composedPrompt,
+            budgetInfo,
+            ragResults,
+        });
+        void pushSessionUpdate({ sessionId, turn: persistedTurn });
+
+        // Update rolling summary
+        if (summaryActive) {
+            const newRollingSummary = await recomputeRollingSummary(sessionId, summaryKeepRecentTurns);
+            if (newRollingSummary) {
+                metrics.lastSummaryAction = {
+                    ts: Date.now(),
+                    sessionId,
+                    turnCount: newRollingSummary?.turnCount || 0,
+                    summaryText: (newRollingSummary?.summary || '').slice(0, 1200),
+                    summaryLength: newRollingSummary?.summary ? newRollingSummary.summary.length : 0
+                };
+            }
+        }
 
         // Return OpenAI-compatible format
         res.json({

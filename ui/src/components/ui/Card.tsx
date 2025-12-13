@@ -1,7 +1,7 @@
-import type { ReactNode } from "react";
+import type { HTMLAttributes, ReactNode } from "react";
 import clsx from "clsx";
 
-interface CardProps {
+interface CardProps extends HTMLAttributes<HTMLElement> {
   title?: string;
   subtitle?: string;
   action?: ReactNode;
@@ -9,9 +9,9 @@ interface CardProps {
   className?: string;
 }
 
-export function Card({ title, subtitle, action, children, className }: CardProps) {
+export function Card({ title, subtitle, action, children, className, ...rest }: CardProps) {
   return (
-    <section className={clsx("glass-card p-5 lg:p-6 space-y-4", className)}>
+    <section className={clsx("glass-card p-5 lg:p-6 space-y-4", className)} {...rest}>
       {(title || subtitle || action) && (
         <div className="flex items-start justify-between gap-4">
           <div>

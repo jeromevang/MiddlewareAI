@@ -5,6 +5,7 @@ import type {
   LogEntry,
   MetricsPayload,
   RequestHistory,
+  SessionMeta,
   StatusPayload,
 } from "../types/dashboard";
 
@@ -22,6 +23,7 @@ interface DashboardState {
   selectSession: (id: string | null) => void;
   setHistoryFilter: (filter: DashboardState["historyFilter"]) => void;
   setLogLevel: (level: DashboardState["logLevel"]) => void;
+  upsertSession: (session: SessionMeta) => void;
 }
 
 export const useDashboardStore = create<DashboardState>((set) => ({
@@ -44,4 +46,19 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   selectSession: (id) => set({ selectedSession: id }),
   setHistoryFilter: (historyFilter) => set({ historyFilter }),
   setLogLevel: (logLevel) => set({ logLevel }),
+  upsertSession: (session) =>
+    set((state) => {
+      if (!state.status) return state;
+      const existing = state.status.sessions ?? [];
+      const filtered = existing.filter((entry) => entry.conversation_id !== session.conversation_id);
+      const nextSessions = [session, ...filtered].sort(
+        (a, b) => new Date(b.last_activity).getTime() - new Date(a.last_activity).getTime()
+      );
+      return {
+        status: {
+          ...state.status,
+          sessions: nextSessions,
+        },
+      };
+    }),
 }));

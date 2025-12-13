@@ -1,4 +1,4 @@
-import type { DashboardSnapshot, TelemetryStatus } from "../types/dashboard";
+import type { DashboardSnapshot, EngineSnapshot, SessionTurnsResponse, TelemetryStatus } from "../types/dashboard";
 import { usePreferencesStore } from "../state/preferences-store";
 
 interface RequestOptions extends RequestInit {
@@ -80,4 +80,40 @@ export async function searchRag(payload: { query: string; topK?: number }) {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function updateEngine(
+  engine: "rag" | "summary",
+  payload: { enabled: boolean; clearOnDisable?: boolean }
+) {
+  return request<{ status: string; engines: EngineSnapshot }>(`/engines/${engine}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fetchSessionTurns(conversationId: string, params?: { limit?: number; offset?: number }) {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set("limit", params.limit.toString());
+  if (params?.offset) search.set("offset", params.offset.toString());
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  return request<SessionTurnsResponse>(`/sessions/${encodeURIComponent(conversationId)}/turns${suffix}`);
+}
+
+export async function updateSummaryKeepRecent(keepRecentTurns: number) {
+  return request<{ status: string; keepRecentTurns: number }>("/processing/summary-keep", {
+    method: "PATCH",
+    body: JSON.stringify({ keepRecentTurns }),
+  });
+}
+
+export async function reprocessSummaries(payload?: { conversationId?: string | null }) {
+  return request<{ status: string; processed: number; keepRecentTurns: number }>("/summary/reprocess", {
+    method: "POST",
+    body: JSON.stringify(payload ?? {}),
+  });
+}
+
+export async function deleteAllSessions() {
+  await triggerAction("reset");
 }

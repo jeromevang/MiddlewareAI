@@ -13,6 +13,21 @@ const CONFIG_PATH = path.join(__dirname, '../config.json');
 
 let configCache = null;
 
+function readConfigFromDisk() {
+    if (!fs.existsSync(CONFIG_PATH)) {
+        throw new Error(`Configuration file not found at: ${CONFIG_PATH}`);
+    }
+    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
+    return JSON.parse(raw);
+}
+
+function persistConfig(config) {
+    validateConfig(config);
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    configCache = config;
+    return configCache;
+}
+
 /**
  * Validate configuration structure.
  */
@@ -42,16 +57,19 @@ function validateConfig(config) {
  */
 function loadConfig() {
     if (configCache) return configCache;
-
-    if (!fs.existsSync(CONFIG_PATH)) {
-        throw new Error(`Configuration file not found at: ${CONFIG_PATH}`);
-    }
-
-    const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw);
+    const parsed = readConfigFromDisk();
     validateConfig(parsed);
     configCache = parsed;
     return configCache;
+}
+
+function updateConfigFile(mutator) {
+    const current = readConfigFromDisk();
+    const draft = typeof mutator === 'function' ? mutator({ ...current }) : current;
+    if (!draft) {
+        throw new Error('Configuration update function must return a config object');
+    }
+    return persistConfig(draft);
 }
 
 function getConfig() {
@@ -94,5 +112,6 @@ module.exports = {
     getStorageConfig,
     getRuntimeConfig,
     getSessionConfig,
+    updateConfigFile,
 };
 

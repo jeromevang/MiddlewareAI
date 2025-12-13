@@ -21,11 +21,17 @@ export interface ProcessingStats {
   concurrency_limit: number;
   context_budget_tokens: number;
   max_context_tokens: number;
+  summary_keep_recent_turns?: number;
 }
 
 export interface BudgetInfo {
-  budgetTokens?: number;
+  budgetTokens?: number | null;
   usedTokens?: number;
+  rawTokens?: number;
+  savedTokens?: number;
+  compressionPct?: number;
+  trimmed?: boolean;
+  mode?: string | null;
   trimmedSummaryTokens?: number;
   trimmedContextTokens?: number;
 }
@@ -51,6 +57,18 @@ export interface SummaryAction {
   summaryLength: number;
 }
 
+export interface EngineState {
+  enabled: boolean;
+  source?: string;
+  updatedAt?: number;
+  bypassedRequests?: number;
+}
+
+export interface EngineSnapshot {
+  rag: EngineState & { bypassedRequests: number };
+  summary: EngineState;
+}
+
 export interface MetricsPayload {
   totalRequests: number;
   totalErrors: number;
@@ -61,6 +79,7 @@ export interface MetricsPayload {
   lastContextTs: number | null;
   lastRagResults: RagPreview[];
   lastSummaryAction: SummaryAction | null;
+  engines?: EngineSnapshot;
   models: Record<string, ModelSummary | null>;
   storage: StorageStats;
   processing: ProcessingStats;
@@ -90,6 +109,11 @@ export interface SessionMeta {
   updates: number;
 }
 
+export interface SessionUpdatePayload {
+  session: SessionMeta;
+  turn?: ConversationTurn | null;
+}
+
 export interface StatusPayload {
   lmstudio: { url: string; healthy: boolean };
   server: { port: number };
@@ -104,7 +128,8 @@ export interface StatusPayload {
       cloud_main?: Record<string, unknown>;
     };
   };
-  runtime: { mode: string; rag_enabled: boolean; cloud: boolean };
+  runtime: { mode: string; rag_enabled: boolean; summary_enabled?: boolean; cloud: boolean };
+  engines: EngineSnapshot;
   processing: ProcessingStats;
   models: { embedding: ModelSummary | null; summarization: ModelSummary | null; main: ModelSummary | null };
   storage: StorageStats;
@@ -114,6 +139,32 @@ export interface StatusPayload {
   indexingInProgress: boolean;
   sessions: SessionMeta[];
   metrics: MetricsPayload;
+}
+
+export interface RagChunkLink {
+  filePath: string;
+  distance?: number;
+  summaryText?: string;
+}
+
+export interface ConversationTurn {
+  id: number;
+  conversationId: string;
+  turnIndex: number;
+  userPrompt: string;
+  assistantResponse: string;
+  rawContext: string;
+  composedContext: string;
+  budget: BudgetInfo | null;
+  ragChunks: RagChunkLink[];
+  compressionMode: string | null;
+  createdAt: string;
+}
+
+export interface SessionTurnsResponse {
+  sessionId: string;
+  turns: ConversationTurn[];
+  pagination: { limit: number; offset: number };
 }
 
 export interface DashboardSnapshot {

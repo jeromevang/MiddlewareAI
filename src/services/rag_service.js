@@ -9,6 +9,7 @@ function estimateTokens(text) {
 
 function buildContextWithBudget({
     rollingSummaryText,
+    recentTurns = [],
     ragResults = [],
     userPrompt,
     budgetTokens
@@ -40,6 +41,20 @@ function buildContextWithBudget({
             parts.push(`Rolling summary:\n${rollingSummaryText}`);
             used += rsTokens;
         }
+    }
+
+    for (const recent of recentTurns) {
+        if (!recent || !recent.text) continue;
+        const snippet = `${recent.label || 'Recent turn'}:
+${recent.text}`;
+        const t = estimateTokens(snippet);
+        rawTokens += t;
+        if (used + t > budgetTokens) {
+            info.trimmed = true;
+            break;
+        }
+        parts.push(snippet);
+        used += t;
     }
 
     for (const r of ragResults) {
@@ -108,13 +123,27 @@ function computeFreshChunkHash(cachedEntry) {
     return { hash: generateChunkHash(chunkContent), status: 'ok' };
 }
 
-function createRagService({ sqliteCacheManager, faissIndexManager, embedText, isRagEnabled, isIndexing }) {
+function createRagService({ sqliteCacheManager, faissIndexManager, embedText, isRagEnabled, isIndexing, onRagBypass = null }) {
     async function ragSearch(queryText, topK = 5) {
         if (!isRagEnabled()) {
+            if (typeof onRagBypass === 'function') {
+                try {
+                    onRagBypass('disabled');
+                } catch (err) {
+                    console.warn('[RAG] onRagBypass callback failed:', err?.message || err);
+                }
+            }
             return [];
         }
 
         if (isIndexing()) {
+            if (typeof onRagBypass === 'function') {
+                try {
+                    onRagBypass('indexing');
+                } catch (err) {
+                    console.warn('[RAG] onRagBypass callback failed:', err?.message || err);
+                }
+            }
             return [];
         }
 

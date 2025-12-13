@@ -23,12 +23,32 @@
 
   * {
     @apply border-white/10;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.15) transparent;
+  }
+
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
   }
 }
 
 @layer components {
   .glass-card {
-    @apply bg-white/5 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-[0_25px_45px_rgba(8,12,24,0.45)];
+    @apply bg-white/5 backdrop-blur-2xl border border-white/10 rounded-lg shadow-[0_25px_45px_rgba(8,12,24,0.45)];
   }
 
   .stat-label {

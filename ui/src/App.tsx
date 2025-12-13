@@ -1,19 +1,10 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { bootstrapSnapshot, getTelemetryStatus } from "./lib/api";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { bootstrapSnapshot } from "./lib/api";
 import { useDashboardSocket } from "./hooks/use-dashboard-socket";
 import { useDashboardStore } from "./state/dashboard-store";
-import HeaderBar from "./components/layout/HeaderBar";
-import HealthGrid from "./components/panels/HealthGrid";
-import ContextPanel from "./components/panels/ContextPanel";
-import SummaryPanel from "./components/panels/SummaryPanel";
-import LogsPanel from "./components/panels/LogsPanel";
-import HistoryPanel from "./components/panels/HistoryPanel";
-import SessionsPanel from "./components/panels/SessionsPanel";
-import ConfigPanel from "./components/panels/ConfigPanel";
-import ActionPanel from "./components/panels/ActionPanel";
-import TelemetryPanel from "./components/panels/TelemetryPanel";
-import QuickStatsPanel from "./components/panels/QuickStatsPanel";
+import EngineLanding from "./components/workspaces/EngineLanding";
+import SummaryWorkspace from "./components/workspaces/SummaryWorkspace";
 
 function App() {
   const setSnapshot = useDashboardStore((s) => s.setSnapshot);
@@ -21,12 +12,6 @@ function App() {
   const [bootstrapped, setBootstrapped] = useState(false);
 
   useDashboardSocket();
-
-  const telemetryQuery = useQuery({
-    queryKey: ["telemetry"],
-    queryFn: getTelemetryStatus,
-    staleTime: 60_000,
-  });
 
   useEffect(() => {
     let mounted = true;
@@ -72,33 +57,17 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-night-950 text-slate-50">
-      <HeaderBar telemetry={telemetryQuery.data ?? null} />
-      <main className="py-10">
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-8 px-6">
-          <HealthGrid />
-          <QuickStatsPanel />
-
-          <div className="grid gap-6 xl:grid-cols-3">
-            <ContextPanel className="xl:col-span-2" />
-            <SummaryPanel />
-          </div>
-
-          <div className="grid gap-6 xl:grid-cols-3">
-            <TelemetryPanel telemetry={telemetryQuery.data ?? null} isLoading={telemetryQuery.isLoading} />
-            <ActionPanel />
-            <SessionsPanel />
-          </div>
-
-          <div className="grid gap-6 lg:grid-cols-2">
-            <HistoryPanel />
-            <LogsPanel />
-          </div>
-
-          <ConfigPanel />
-        </div>
-      </main>
-    </div>
+    <BrowserRouter>
+      <div className="min-h-screen bg-night-950 text-slate-50">
+        <main className="py-10">
+          <Routes>
+            <Route path="/" element={<EngineLanding />} />
+            <Route path="/summary" element={<SummaryWorkspace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </main>
+      </div>
+    </BrowserRouter>
   );
 }
 

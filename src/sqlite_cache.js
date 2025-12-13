@@ -86,6 +86,22 @@ class SQLiteCacheManager {
                         )
                     `);
 
+                    this.db.run(`
+                        CREATE TABLE IF NOT EXISTS conversation_turns (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            conversation_id TEXT NOT NULL,
+                            turn_index INTEGER NOT NULL,
+                            user_prompt TEXT,
+                            assistant_response TEXT,
+                            raw_context TEXT,
+                            composed_context TEXT,
+                            budget_json TEXT,
+                            rag_chunks_json TEXT,
+                            compression_mode TEXT,
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        )
+                    `);
+
                     // Create indexes for faster queries
                     this.db.run(`
                         CREATE INDEX IF NOT EXISTS idx_file_path ON cached_chunks(file_path)
@@ -95,6 +111,9 @@ class SQLiteCacheManager {
                     `);
                     this.db.run(`
                         CREATE INDEX IF NOT EXISTS idx_rolling_conversation ON rolling_summaries(conversation_id, timestamp DESC)
+                    `);
+                    this.db.run(`
+                        CREATE INDEX IF NOT EXISTS idx_turns_conversation ON conversation_turns(conversation_id, turn_index DESC)
                     `);
                     resolve();
                 });
@@ -242,12 +261,15 @@ class SQLiteCacheManager {
                         if (err) return reject(err);
                         this.db.run('DELETE FROM rolling_summaries', (err2) => {
                             if (err2) return reject(err2);
-                            resolve();
+                            this.db.run('DELETE FROM conversation_turns', (err3) => {
+                                if (err3) return reject(err3);
+                                resolve();
+                            });
                         });
                     });
                 });
             });
-            logInfo('SQLite cache cleared (cached_chunks, rolling_summaries).');
+            logInfo('SQLite cache cleared (cached_chunks, rolling_summaries, conversation_turns).');
         } catch (error) {
             logError('Failed to clear SQLite cache:', error);
             throw error;
@@ -426,10 +448,10 @@ class SQLiteCacheManager {
             return new Promise((resolve, reject) => {
                 this.db.all(`
                     SELECT conversation_id,
-                           MAX(timestamp) as last_activity,
-                           MAX(turn_count) as turn_count,
+                           MAX(created_at) as last_activity,
+                           MAX(turn_index) as turn_count,
                            COUNT(*) as updates
-                    FROM rolling_summaries
+                    FROM conversation_turns
                     GROUP BY conversation_id
                     ORDER BY last_activity DESC
                     LIMIT ?
@@ -444,22 +466,68 @@ class SQLiteCacheManager {
         }
     }
 
+    async getSessionSummary(conversationId) {
+        if (!conversationId) return null;
+        try {
+            return new Promise((resolve, reject) => {
+                this.db.get(`
+                    SELECT conversation_id,
+                           MAX(created_at) as last_activity,
+                           MAX(turn_index) as turn_count,
+                           COUNT(*) as updates
+                    FROM conversation_turns
+                    WHERE conversation_id = ?
+                `, [conversationId], (err, row) => {
+                    if (err) return reject(err);
+                    if (!row) return resolve(null);
+                    resolve({
+                        conversation_id: row.conversation_id || conversationId,
+                        last_activity: row.last_activity || new Date().toISOString(),
+                        turn_count: row.turn_count || 0,
+                        updates: row.updates || 0,
+                    });
+                });
+            });
+        } catch (error) {
+            logError('Failed to load session summary:', error);
+            throw error;
+        }
+    }
+
     async purgeSessions({ conversationId = null, beforeTs = null } = {}) {
         try {
-            const clauses = [];
-            const params = [];
+            const summaryClauses = [];
+            const summaryParams = [];
             if (conversationId) {
-                clauses.push('conversation_id = ?');
-                params.push(conversationId);
+                summaryClauses.push('conversation_id = ?');
+                summaryParams.push(conversationId);
             }
             if (beforeTs) {
-                clauses.push('timestamp <= ?');
-                params.push(beforeTs);
+                summaryClauses.push('timestamp <= ?');
+                summaryParams.push(beforeTs);
             }
 
-            const whereClause = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+            const summaryWhere = summaryClauses.length ? `WHERE ${summaryClauses.join(' AND ')}` : '';
             await new Promise((resolve, reject) => {
-                this.db.run(`DELETE FROM rolling_summaries ${whereClause}`, params, (err) => {
+                this.db.run(`DELETE FROM rolling_summaries ${summaryWhere}`, summaryParams, (err) => {
+                    if (err) return reject(err);
+                    resolve();
+                });
+            });
+
+            const turnClauses = [];
+            const turnParams = [];
+            if (conversationId) {
+                turnClauses.push('conversation_id = ?');
+                turnParams.push(conversationId);
+            }
+            if (beforeTs) {
+                turnClauses.push('created_at <= ?');
+                turnParams.push(beforeTs);
+            }
+            const turnsWhere = turnClauses.length ? `WHERE ${turnClauses.join(' AND ')}` : '';
+            await new Promise((resolve, reject) => {
+                this.db.run(`DELETE FROM conversation_turns ${turnsWhere}`, turnParams, (err) => {
                     if (err) return reject(err);
                     resolve();
                 });
@@ -468,6 +536,171 @@ class SQLiteCacheManager {
             logError('Failed to purge sessions:', error);
             throw error;
         }
+    }
+
+    async saveConversationTurn({
+        conversationId = GLOBAL_CONVERSATION_ID,
+        userPrompt = null,
+        assistantResponse = null,
+        rawContext = null,
+        composedContext = null,
+        budgetInfo = null,
+        ragChunks = null,
+        compressionMode = null,
+    } = {}) {
+        const budgetJson = budgetInfo ? JSON.stringify(budgetInfo) : null;
+        const ragChunksJson = ragChunks ? JSON.stringify(ragChunks) : null;
+        return new Promise((resolve, reject) => {
+            this.db.run(`
+                INSERT INTO conversation_turns (
+                    conversation_id,
+                    turn_index,
+                    user_prompt,
+                    assistant_response,
+                    raw_context,
+                    composed_context,
+                    budget_json,
+                    rag_chunks_json,
+                    compression_mode,
+                    created_at
+                ) VALUES (
+                    ?,
+                    COALESCE((SELECT MAX(turn_index) + 1 FROM conversation_turns WHERE conversation_id = ?), 1),
+                    ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+                )
+            `, [
+                conversationId,
+                conversationId,
+                userPrompt,
+                assistantResponse,
+                rawContext,
+                composedContext,
+                budgetJson,
+                ragChunksJson,
+                compressionMode,
+            ], function (err) {
+                if (err) return reject(err);
+                resolve(this.lastID || null);
+            });
+        });
+    }
+
+    async getRecentTurns(conversationId, limit = 3) {
+        if (!conversationId || !limit) return [];
+        return new Promise((resolve, reject) => {
+            this.db.all(
+                `SELECT turn_index, user_prompt, assistant_response
+                 FROM conversation_turns
+                 WHERE conversation_id = ?
+                 ORDER BY turn_index DESC
+                 LIMIT ?`,
+                [conversationId, limit],
+                (err, rows) => {
+                    if (err) return reject(err);
+                    resolve((rows || []).reverse().map((row) => ({
+                        turnIndex: row.turn_index,
+                        userPrompt: row.user_prompt || '',
+                        assistantResponse: row.assistant_response || '',
+                    })));
+                }
+            );
+        });
+    }
+
+    async getTurnsForSummary(conversationId, excludeLatest = 0) {
+        if (!conversationId) {
+            return { eligibleTurns: [], totalTurns: 0 };
+        }
+        return new Promise((resolve, reject) => {
+            this.db.all(
+                `SELECT turn_index, user_prompt, assistant_response
+                 FROM conversation_turns
+                 WHERE conversation_id = ?
+                 ORDER BY turn_index ASC`,
+                [conversationId],
+                (err, rows) => {
+                    if (err) return reject(err);
+                    const allTurns = (rows || []).map((row) => ({
+                        turnIndex: row.turn_index,
+                        userPrompt: row.user_prompt || '',
+                        assistantResponse: row.assistant_response || '',
+                    }));
+                    const totalTurns = allTurns.length;
+                    const cutoff = Math.max(0, totalTurns - Math.max(0, excludeLatest));
+                    resolve({
+                        eligibleTurns: allTurns.slice(0, cutoff),
+                        totalTurns,
+                    });
+                }
+            );
+        });
+    }
+
+    async getAllConversationIds() {
+        return new Promise((resolve, reject) => {
+            this.db.all(
+                `SELECT DISTINCT conversation_id AS id FROM conversation_turns`,
+                [],
+                (err, rows) => {
+                    if (err) return reject(err);
+                    resolve((rows || []).map((row) => row.id));
+                }
+            );
+        });
+    }
+
+    async getConversationTurnById(turnId) {
+        if (!turnId) return null;
+        return new Promise((resolve, reject) => {
+            this.db.get(`
+                SELECT id,
+                       conversation_id,
+                       turn_index,
+                       user_prompt,
+                       assistant_response,
+                       raw_context,
+                       composed_context,
+                       budget_json,
+                       rag_chunks_json,
+                       compression_mode,
+                       created_at
+                FROM conversation_turns
+                WHERE id = ?
+            `, [turnId], (err, row) => {
+                if (err) return reject(err);
+                resolve(mapConversationTurnRow(row));
+            });
+        });
+    }
+
+    async getConversationTurns(conversationId, { limit = 50, offset = 0 } = {}) {
+        if (!conversationId) {
+            throw new Error('conversationId is required');
+        }
+        return new Promise((resolve, reject) => {
+            this.db.all(`
+                SELECT id,
+                       conversation_id,
+                       turn_index,
+                       user_prompt,
+                       assistant_response,
+                       raw_context,
+                       composed_context,
+                       budget_json,
+                       rag_chunks_json,
+                       compression_mode,
+                       created_at
+                FROM conversation_turns
+                WHERE conversation_id = ?
+                ORDER BY turn_index DESC
+                LIMIT ?
+                OFFSET ?
+            `, [conversationId, limit, offset], (err, rows) => {
+                if (err) return reject(err);
+                const mapped = (rows || []).map(mapConversationTurnRow).filter(Boolean);
+                resolve(mapped);
+            });
+        });
     }
 
     /**
@@ -484,6 +717,32 @@ class SQLiteCacheManager {
             throw error;
         }
     }
+}
+
+function mapConversationTurnRow(row) {
+    if (!row) return null;
+    const parseJson = (value) => {
+        if (!value) return null;
+        try {
+            return JSON.parse(value);
+        } catch (jsonErr) {
+            logWarning(`Failed to parse JSON payload for conversation turn: ${jsonErr?.message || jsonErr}`);
+            return null;
+        }
+    };
+    return {
+        id: row.id,
+        conversationId: row.conversation_id,
+        turnIndex: row.turn_index,
+        userPrompt: row.user_prompt || '',
+        assistantResponse: row.assistant_response || '',
+        rawContext: row.raw_context || '',
+        composedContext: row.composed_context || '',
+        budget: parseJson(row.budget_json),
+        ragChunks: parseJson(row.rag_chunks_json) || [],
+        compressionMode: row.compression_mode || null,
+        createdAt: row.created_at,
+    };
 }
 
 module.exports = { SQLiteCacheManager };

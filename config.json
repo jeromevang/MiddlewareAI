@@ -34,7 +34,8 @@
     "concurrency_limit": 2,
     "cache_invalidation_days": 7,
     "max_context_tokens": 40000,
-    "context_budget_ratio": 0.7
+    "context_budget_ratio": 0.7,
+    "summary_keep_recent_turns": 3
   },
   "storage": {
     "sqlite_db_path": "./data/summaries.db",
@@ -54,6 +55,14 @@
       "base_url": "https://api.openai.com/v1",
       "api_key": "",
       "model": "gpt-4o-mini"
+    }
+  },
+  "engines": {
+    "rag": {
+      "enabled": true
+    },
+    "summary": {
+      "enabled": true
     }
   },
   "sessions": {
