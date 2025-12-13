@@ -114,6 +114,7 @@ const DASHBOARD_HISTORY_LIMIT = 20;
 const DASHBOARD_LOG_LIMIT = 50;
 const DEFAULT_CONVERSATION_ID = 'global';
 const SESSION_METADATA_LIMIT = sessionConfig.list_limit || 100;
+const BASE_SYSTEM_PROMPT = 'You are a coding assistant. Use the provided context and summaries to answer.';
 let indexingInProgress = false;
 let activeIndexer = null;
 let wss = null;
@@ -581,6 +582,8 @@ async function persistConversationTurn({
     composedContextText,
     budgetInfo,
     ragResults,
+    llmPayloadKind = null,
+    llmPayload = null,
 }) {
     try {
         const turnId = await sqliteCacheManager.saveConversationTurn({
@@ -592,6 +595,8 @@ async function persistConversationTurn({
             budgetInfo,
             ragChunks: ragResults,
             compressionMode: budgetInfo?.mode || null,
+            llmPayloadKind,
+            llmPayload,
         });
         if (!turnId) {
             return null;
@@ -1192,11 +1197,17 @@ app.post('/query', async (req, res) => {
         metrics.lastRagResults = ragPreview;
 
         // Call main model
-        const completion = await generateCompletion({
+        const completionRequest = {
             prompt: composedPrompt,
-            systemPrompt: 'You are a coding assistant. Use the provided context and summaries to answer.',
-            temperature
-        });
+            systemPrompt: BASE_SYSTEM_PROMPT,
+            temperature,
+        };
+        const completion = await generateCompletion(completionRequest);
+        const llmPayloadKind = 'completion';
+        const llmPayload = {
+            ...completionRequest,
+            model: mainModelCfg.identifier,
+        };
         const completionText = extractAssistantText(completion);
 
         let newRollingSummary = null;
@@ -1209,6 +1220,8 @@ app.post('/query', async (req, res) => {
             composedContextText: composedPrompt,
             budgetInfo,
             ragResults,
+            llmPayloadKind,
+            llmPayload,
         });
 
         void pushSessionUpdate({ sessionId, turn: persistedTurn });
@@ -1435,6 +1448,13 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         
         if (stream) {
             const lmStarted = Date.now();
+            const chatRequestPayload = {
+                model: mainModel,
+                messages: enhancedMessages,
+                temperature,
+                stream: true,
+                ...rest,
+            };
             
             // Prepare SSE headers before streaming
             res.setHeader('Content-Type', 'text/event-stream');
@@ -1446,13 +1466,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
 
             let streamedContent = '';
             try {
-                streamedContent = await proxyChatCompletion({
-                    model: mainModel,
-                    messages: enhancedMessages,
-                    temperature,
-                    stream: true,
-                    ...rest,
-                }, res);
+                streamedContent = await proxyChatCompletion(chatRequestPayload, res);
             } catch (streamErr) {
                 console.error('[Server] Streaming completion failed:', streamErr);
                 if (!res.writableEnded) {
@@ -1489,6 +1503,8 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                 composedContextText: composedPrompt,
                 budgetInfo,
                 ragResults,
+                llmPayloadKind: 'chat',
+                llmPayload: chatRequestPayload,
             });
             void pushSessionUpdate({ sessionId, turn: persistedTurn });
             
@@ -1527,11 +1543,16 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
 
         
         // Non-streaming: get completion and return OpenAI format
-        const completionResponse = await generateCompletion({
+        const chatCompletionRequest = {
             prompt: composedPrompt,
-            systemPrompt: 'You are a coding assistant. Use the provided context and summaries to answer.',
-            temperature
-        });
+            systemPrompt: BASE_SYSTEM_PROMPT,
+            temperature,
+        };
+        const completionResponse = await generateCompletion(chatCompletionRequest);
+        const nonStreamPayload = {
+            ...chatCompletionRequest,
+            model: mainModel,
+        };
         
         // Extract content
         const content = extractAssistantText(completionResponse);
@@ -1544,6 +1565,8 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             composedContextText: composedPrompt,
             budgetInfo,
             ragResults,
+            llmPayloadKind: 'completion',
+            llmPayload: nonStreamPayload,
         });
         void pushSessionUpdate({ sessionId, turn: persistedTurn });
 

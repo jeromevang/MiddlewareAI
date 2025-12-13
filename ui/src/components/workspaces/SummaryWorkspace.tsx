@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+﻿import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import clsx from "clsx";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { deleteAllSessions, fetchSessionTurns, reprocessSummaries, updateSummaryKeepRecent } from "../../lib/api";
 import { useDashboardStore } from "../../state/dashboard-store";
-import type { BudgetInfo, ConversationTurn, SessionMeta } from "../../types/dashboard";
+import type { BudgetInfo, ConversationTurn, JsonValue, SessionMeta } from "../../types/dashboard";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { ToggleSwitch } from "../ui/ToggleSwitch";
+import { Badge } from "../ui/Badge";
 
 export default function SummaryWorkspace() {
   const sessions = useDashboardStore((s) => s.status?.sessions ?? []);
@@ -421,7 +422,7 @@ function ContextInspector({ turn, turns, isLoading, keepRecent }: ContextInspect
   if (isLoading && !turn) {
     return (
       <Card title="Context" subtitle="Inspect composition">
-        <p className="text-white/60">Loading the latest raw stream…</p>
+        <p className="text-white/60">Loading the latest raw streamÔÇª</p>
       </Card>
     );
   }
@@ -465,6 +466,8 @@ function ContextInspector({ turn, turns, isLoading, keepRecent }: ContextInspect
         compressedTokens={compressedTokens}
       />
 
+      <PayloadInspector payload={turn.llmPayload} payloadKind={turn.llmPayloadKind} />
+
       <div className="grid gap-6 xl:grid-cols-2">
         <BudgetSummary budget={turn.budget} />
         <RagPanel chunks={turn.ragChunks} />
@@ -493,6 +496,111 @@ function RagPanel({ chunks }: { chunks: ConversationTurn["ragChunks"] }) {
       )}
     </Card>
   );
+}
+
+interface PayloadInspectorProps {
+  payload: JsonValue | null;
+  payloadKind: string | null;
+}
+
+function PayloadInspector({ payload, payloadKind }: PayloadInspectorProps) {
+  const summaryRows = useMemo(() => buildPayloadPreviewRows(payload), [payload]);
+  const formattedPayload = useMemo(() => (payload ? JSON.stringify(payload, null, 2) : ""), [payload]);
+
+  const handleCopy = () => {
+    if (!formattedPayload) return;
+    copyToClipboard(formattedPayload);
+  };
+
+  return (
+    <Card
+      title="Payload inspector"
+      subtitle="LLM request body"
+      action={
+        <div className="flex flex-wrap items-center gap-2">
+          {payloadKind && <Badge tone="info">{payloadKind}</Badge>}
+          {payload && (
+            <Button variant="ghost" className="px-3 py-1 text-xs" onClick={handleCopy}>
+              Copy JSON
+            </Button>
+          )}
+        </div>
+      }
+    >
+      {payload ? (
+        <div className="space-y-4">
+          {summaryRows.length > 0 && (
+            <div className="grid gap-3 md:grid-cols-2">
+              {summaryRows.map((row) => (
+                <div key={row.key} className="rounded-xl border border-white/10 bg-night-950/40 p-3">
+                  <p className="stat-label mb-1">{row.key}</p>
+                  <p className="text-sm font-semibold text-white">{row.preview}</p>
+                  <p className="text-[0.65rem] uppercase tracking-[0.35em] text-white/40">{row.type}</p>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {summaryRows.length === 0 && (
+            <p className="text-xs text-white/60">
+              Top-level preview is available when the payload is an object. The raw JSON is still shown below.
+            </p>
+          )}
+
+          <div className="rounded-2xl border border-white/10 bg-night-950/60 p-4">
+            <pre className="max-h-[420px] overflow-auto text-xs text-white/80">{formattedPayload}</pre>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-white/60">No payload captured for this turn.</p>
+      )}
+    </Card>
+  );
+}
+
+type PayloadPreviewRow = {
+  key: string;
+  preview: string;
+  type: string;
+};
+
+function buildPayloadPreviewRows(payload: JsonValue | null): PayloadPreviewRow[] {
+  if (!isJsonObject(payload)) {
+    return [];
+  }
+  return Object.entries(payload)
+    .slice(0, 6)
+    .map(([key, value]) => ({
+      key,
+      preview: formatPreviewValue(value),
+      type: describeJsonValue(value),
+    }));
+}
+
+function describeJsonValue(value: JsonValue): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return `array (${value.length})`;
+  if (typeof value === "object") return `object (${Object.keys(value as Record<string, JsonValue>).length})`;
+  return typeof value;
+}
+
+function formatPreviewValue(value: JsonValue, maxLength = 80): string {
+  if (value === null) return "null";
+  if (typeof value === "string") {
+    return value.length > maxLength ? `${value.slice(0, maxLength)}...` : value;
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) {
+    return `${value.length} item${value.length === 1 ? "" : "s"}`;
+  }
+  const keys = Object.keys((value as Record<string, JsonValue>) ?? {});
+  return `${keys.length} key${keys.length === 1 ? "" : "s"}`;
+}
+
+function isJsonObject(value: JsonValue | null): value is { [key: string]: JsonValue } {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 interface SummaryColumnsProps {
@@ -677,7 +785,7 @@ function CompressionBoundary({ label }: { label: string }) {
 function TokenPill({ tokens }: { tokens: number | null }) {
   return (
     <span className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs uppercase tracking-[0.3em] text-white/70">
-      Total tokens {tokens ?? "—"}
+      Total tokens {tokens ?? "ÔÇö"}
     </span>
   );
 }
@@ -716,10 +824,10 @@ function buildTranscript(entries: ConversationTurn[]): TranscriptMessage[] {
 
 function buildChatLabel(role: TranscriptMessage["role"], turnIndex: number) {
   if (role === "systemReminder") {
-    return `System reminder · Turn ${turnIndex}`;
+    return `System reminder ┬À Turn ${turnIndex}`;
   }
   const title = role === "user" ? "User" : "Assistant";
-  return `${title} · Turn ${turnIndex}`;
+  return `${title} ┬À Turn ${turnIndex}`;
 }
 
 const SUMMARY_SECTION_HEADINGS = ["Rolling summary", "Recent turns", "RAG context", "User prompt"];

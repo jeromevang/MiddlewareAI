@@ -2,11 +2,13 @@ import { useNavigate } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import type { ReactNode } from "react";
+import { Settings } from "lucide-react";
 import { updateEngine } from "../../lib/api";
 import { useDashboardStore } from "../../state/dashboard-store";
 import type { EngineSnapshot } from "../../types/dashboard";
 import QuickStatsPanel from "../panels/QuickStatsPanel";
 import { ToggleSwitch } from "../ui/ToggleSwitch";
+import { Button } from "../ui/Button";
 
 interface TogglePayload {
   engine: "rag" | "summary";
@@ -75,6 +77,15 @@ export default function EngineLanding() {
         <p className="text-white/70">
           Toggle runtime features, inspect health, and jump into the summary workspace when deeper context work is needed.
         </p>
+        <div className="flex flex-wrap gap-3">
+          <Button
+            variant="danger"
+            icon={<Settings className="h-4 w-4" />}
+            onClick={() => navigate("/maintenance")}
+          >
+            Maintenance
+          </Button>
+        </div>
       </header>
 
       <section className="grid gap-6 lg:grid-cols-2">

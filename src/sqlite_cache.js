@@ -98,6 +98,8 @@ class SQLiteCacheManager {
                             budget_json TEXT,
                             rag_chunks_json TEXT,
                             compression_mode TEXT,
+                            llm_payload_kind TEXT,
+                            llm_payload_json TEXT,
                             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                         )
                     `);
@@ -133,6 +135,7 @@ class SQLiteCacheManager {
 
             await this.ensureRollingSummaryColumns();
             await this.ensureCachedChunkColumns();
+            await this.ensureConversationTurnColumns();
 
             logInfo('SQLite cache database initialized successfully.');
         } catch (error) {
@@ -166,6 +169,20 @@ class SQLiteCacheManager {
         });
 
         await ensureColumn('chunk_start_line', 'ALTER TABLE cached_chunks ADD COLUMN chunk_start_line INTEGER');
+    }
+
+    async ensureConversationTurnColumns() {
+        const columns = await this.getTableColumns('conversation_turns');
+        const ensureColumn = (name, ddl) => new Promise((resolve, reject) => {
+            if (columns.includes(name)) return resolve();
+            this.db.run(ddl, (err) => {
+                if (err) return reject(err);
+                resolve();
+            });
+        });
+
+        await ensureColumn('llm_payload_kind', 'ALTER TABLE conversation_turns ADD COLUMN llm_payload_kind TEXT');
+        await ensureColumn('llm_payload_json', 'ALTER TABLE conversation_turns ADD COLUMN llm_payload_json TEXT');
     }
 
     async getTableColumns(tableName) {
@@ -642,9 +659,12 @@ class SQLiteCacheManager {
         budgetInfo = null,
         ragChunks = null,
         compressionMode = null,
+        llmPayloadKind = null,
+        llmPayload = null,
     } = {}) {
         const budgetJson = budgetInfo ? JSON.stringify(budgetInfo) : null;
         const ragChunksJson = ragChunks ? JSON.stringify(ragChunks) : null;
+        const llmPayloadJson = llmPayload ? JSON.stringify(llmPayload) : null;
         return new Promise((resolve, reject) => {
             this.db.run(`
                 INSERT INTO conversation_turns (
@@ -657,11 +677,13 @@ class SQLiteCacheManager {
                     budget_json,
                     rag_chunks_json,
                     compression_mode,
+                    llm_payload_kind,
+                    llm_payload_json,
                     created_at
                 ) VALUES (
                     ?,
                     COALESCE((SELECT MAX(turn_index) + 1 FROM conversation_turns WHERE conversation_id = ?), 1),
-                    ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
                 )
             `, [
                 conversationId,
@@ -673,6 +695,8 @@ class SQLiteCacheManager {
                 budgetJson,
                 ragChunksJson,
                 compressionMode,
+                llmPayloadKind,
+                llmPayloadJson,
             ], function (err) {
                 if (err) return reject(err);
                 resolve(this.lastID || null);
@@ -757,7 +781,9 @@ class SQLiteCacheManager {
                        composed_context,
                        budget_json,
                        rag_chunks_json,
-                       compression_mode,
+                      compression_mode,
+                      llm_payload_kind,
+                      llm_payload_json,
                        created_at
                 FROM conversation_turns
                 WHERE id = ?
@@ -783,7 +809,9 @@ class SQLiteCacheManager {
                        composed_context,
                        budget_json,
                        rag_chunks_json,
-                       compression_mode,
+                      compression_mode,
+                      llm_payload_kind,
+                      llm_payload_json,
                        created_at
                 FROM conversation_turns
                 WHERE conversation_id = ?
@@ -836,6 +864,8 @@ function mapConversationTurnRow(row) {
         budget: parseJson(row.budget_json),
         ragChunks: parseJson(row.rag_chunks_json) || [],
         compressionMode: row.compression_mode || null,
+        llmPayloadKind: row.llm_payload_kind || null,
+        llmPayload: parseJson(row.llm_payload_json),
         createdAt: row.created_at,
     };
 }

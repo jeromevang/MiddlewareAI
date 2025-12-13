@@ -21,23 +21,27 @@ const proxiedRoutes = [
   "/chat",
 ];
 
-export default defineConfig({
-  plugins: [react()],
-  resolve: {
-    alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
-    },
-  },
-  server: {
-    port: 5173,
-    proxy: proxiedRoutes.reduce<Record<string, { target: string; changeOrigin: boolean; ws?: boolean }>>(
-      (acc, route) => {
-        acc[route] = { target: backend, changeOrigin: true, ws: route === "/v1" || route === "/chat" };
-        return acc;
+export default defineConfig(({ command }) => {
+  const base = command === "build" ? "/ui/" : "/";
+  return {
+    base,
+    plugins: [react()],
+    resolve: {
+      alias: {
+        "@": fileURLToPath(new URL("./src", import.meta.url)),
       },
-      {
-        "/ws": { target: backend.replace("http", "ws"), changeOrigin: true, ws: true },
-      }
-    ),
-  },
+    },
+    server: {
+      port: 5173,
+      proxy: proxiedRoutes.reduce<Record<string, { target: string; changeOrigin: boolean; ws?: boolean }>>(
+        (acc, route) => {
+          acc[route] = { target: backend, changeOrigin: true, ws: route === "/v1" || route === "/chat" };
+          return acc;
+        },
+        {
+          "/ws": { target: backend.replace("http", "ws"), changeOrigin: true, ws: true },
+        }
+      ),
+    },
+  };
 });

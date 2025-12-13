@@ -18,13 +18,11 @@ interface DashboardState {
   selectedSession: string | null;
   historyFilter: "all" | "query" | "search" | "system";
   logLevel: "all" | "info" | "warn" | "error";
-  sessionFilter: "all" | "raw" | "compressed";
   setSnapshot: (snapshot: DashboardSnapshot) => void;
   setConnection: (state: ConnectionState) => void;
   selectSession: (id: string | null) => void;
   setHistoryFilter: (filter: DashboardState["historyFilter"]) => void;
   setLogLevel: (level: DashboardState["logLevel"]) => void;
-  setSessionFilter: (filter: DashboardState["sessionFilter"]) => void;
   upsertSession: (session: SessionMeta) => void;
 }
 
@@ -37,7 +35,6 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   selectedSession: null,
   historyFilter: "all",
   logLevel: "all",
-  sessionFilter: "all",
   setSnapshot: (snapshot) =>
     set(() => ({
       status: snapshot.status,
@@ -49,7 +46,6 @@ export const useDashboardStore = create<DashboardState>((set) => ({
   selectSession: (id) => set({ selectedSession: id }),
   setHistoryFilter: (historyFilter) => set({ historyFilter }),
   setLogLevel: (logLevel) => set({ logLevel }),
-  setSessionFilter: (sessionFilter) => set({ sessionFilter }),
   upsertSession: (session) =>
     set((state) => {
       if (!state.status) return state;

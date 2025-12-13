@@ -5,6 +5,10 @@ import { useDashboardSocket } from "./hooks/use-dashboard-socket";
 import { useDashboardStore } from "./state/dashboard-store";
 import EngineLanding from "./components/workspaces/EngineLanding";
 import SummaryWorkspace from "./components/workspaces/SummaryWorkspace";
+import MaintenancePage from "./components/workspaces/MaintenancePage";
+
+const RAW_BASE = import.meta.env.BASE_URL || "/";
+const ROUTER_BASENAME = RAW_BASE === "/" ? undefined : RAW_BASE.replace(/\/$/, "");
 
 function App() {
   const setSnapshot = useDashboardStore((s) => s.setSnapshot);
@@ -57,12 +61,13 @@ function App() {
   }
 
   return (
-    <BrowserRouter>
+    <BrowserRouter basename={ROUTER_BASENAME}>
       <div className="min-h-screen bg-night-950 text-slate-50">
         <main className="py-10">
           <Routes>
             <Route path="/" element={<EngineLanding />} />
             <Route path="/summary" element={<SummaryWorkspace />} />
+            <Route path="/maintenance" element={<MaintenancePage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

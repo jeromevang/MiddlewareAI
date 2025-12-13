@@ -7,9 +7,10 @@ interface CardProps extends HTMLAttributes<HTMLElement> {
   action?: ReactNode;
   children: ReactNode;
   className?: string;
+  contentClassName?: string;
 }
 
-export function Card({ title, subtitle, action, children, className, ...rest }: CardProps) {
+export function Card({ title, subtitle, action, children, className, contentClassName, ...rest }: CardProps) {
   return (
     <section className={clsx("glass-card p-5 lg:p-6 space-y-4", className)} {...rest}>
       {(title || subtitle || action) && (
@@ -21,7 +22,7 @@ export function Card({ title, subtitle, action, children, className, ...rest }: 
           {action && <div className="shrink-0">{action}</div>}
         </div>
       )}
-      <div>{children}</div>
+      <div className={clsx(contentClassName)}>{children}</div>
     </section>
   );
 }

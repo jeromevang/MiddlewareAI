@@ -152,6 +152,8 @@ export interface RagChunkLink {
   summaryText?: string;
 }
 
+export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
 export interface ConversationTurn {
   id: number;
   conversationId: string;
@@ -163,6 +165,8 @@ export interface ConversationTurn {
   budget: BudgetInfo | null;
   ragChunks: RagChunkLink[];
   compressionMode: string | null;
+  llmPayloadKind: string | null;
+  llmPayload: JsonValue | null;
   createdAt: string;
 }
 
