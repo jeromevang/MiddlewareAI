@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { purgeSessions } from "../../lib/api";
+import { purgeSessions, updateSessionContextMode } from "../../lib/api";
 import { useDashboardStore } from "../../state/dashboard-store";
 import { Button } from "../ui/Button";
 import { Card } from "../ui/Card";
+import { Badge } from "../ui/Badge";
 import clsx from "clsx";
 
 interface SessionsPanelProps {
@@ -15,6 +16,9 @@ export default function SessionsPanel({ className }: SessionsPanelProps) {
   const history = useDashboardStore((s) => s.history);
   const selected = useDashboardStore((s) => s.selectedSession);
   const selectSession = useDashboardStore((s) => s.selectSession);
+  const sessionFilter = useDashboardStore((s) => s.sessionFilter);
+  const setSessionFilter = useDashboardStore((s) => s.setSessionFilter);
+  const upsertSession = useDashboardStore((s) => s.upsertSession);
   const [cutoff, setCutoff] = useState("");
   const [panelMessage, setPanelMessage] = useState("Rolling summaries stored in SQLite. Purge responsibly.");
 
@@ -62,6 +66,29 @@ export default function SessionsPanel({ className }: SessionsPanelProps) {
     }
     purgeMutation.mutate({ beforeTs: parsed.toISOString() });
   };
+  const filteredSessions = useMemo(() => {
+    if (sessionFilter === "all") return sessions;
+    return sessions.filter((session) => session.active_mode === sessionFilter);
+  }, [sessions, sessionFilter]);
+
+  const contextMutation = useMutation({
+    mutationFn: (payload: { conversationId: string; mode: "raw" | "compressed" | null }) =>
+      updateSessionContextMode(payload.conversationId, payload.mode),
+    onSuccess: (data, variables) => {
+      upsertSession(data.session);
+      setPanelMessage(
+        variables.mode ? `Session ${variables.conversationId} set to ${variables.mode}.` : "Session mode reset to default."
+      );
+    },
+    onError: (err: unknown) => {
+      setPanelMessage(err instanceof Error ? err.message : "Failed to update session mode.");
+    },
+  });
+
+  const handleModeChange = (conversationId: string, mode: "raw" | "compressed" | null) => {
+    contextMutation.mutate({ conversationId, mode });
+  };
+
   return (
     <Card title="Sessions" subtitle="Rolling memory" className={clsx("space-y-5", className)}>
       <div className="flex items-center justify-between rounded-2xl bg-white/5 px-4 py-3">
@@ -94,9 +121,25 @@ export default function SessionsPanel({ className }: SessionsPanelProps) {
         </div>
       </div>
 
-      <div className="space-y-2 max-h-52 overflow-auto pr-1">
-        {sessions.length === 0 && <p className="text-sm text-white/60">No session metadata yet.</p>}
-        {sessions.map((session) => (
+      <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3">
+        <p className="stat-label mb-2">Filter by context mode</p>
+        <div className="flex gap-2">
+          {["all", "raw", "compressed"].map((mode) => (
+            <Button
+              key={mode}
+              variant={sessionFilter === mode ? "secondary" : "ghost"}
+              className="flex-1"
+              onClick={() => setSessionFilter(mode as typeof sessionFilter)}
+            >
+              {mode === "all" ? "All" : mode === "raw" ? "Raw" : "Compressed"}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <div className="space-y-2 max-h-64 overflow-auto pr-1">
+        {filteredSessions.length === 0 && <p className="text-sm text-white/60">No session metadata yet.</p>}
+        {filteredSessions.map((session) => (
           <button
             key={session.conversation_id}
             onClick={() => selectSession(session.conversation_id)}
@@ -108,6 +151,49 @@ export default function SessionsPanel({ className }: SessionsPanelProps) {
             <p className="text-sm font-semibold text-white">{session.conversation_id}</p>
             <p className="text-xs text-white/60">{new Date(session.last_activity).toLocaleString()}</p>
             <p className="text-xs text-white/60 mt-1">{session.turn_count} turns · {session.updates} updates</p>
+            <div className="mt-2 flex items-center justify-between text-xs text-white/70">
+              <span className="flex items-center gap-2">
+                Mode
+                <Badge tone={session.active_mode === "compressed" ? "info" : "neutral"}>
+                  {session.active_mode === "compressed" ? "Compressed" : "Raw"}
+                </Badge>
+              </span>
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  className="px-3 py-1 text-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleModeChange(session.conversation_id, "raw");
+                  }}
+                  loading={contextMutation.isPending && contextMutation.variables?.conversationId === session.conversation_id}
+                >
+                  Raw
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="px-3 py-1 text-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleModeChange(session.conversation_id, "compressed");
+                  }}
+                  loading={contextMutation.isPending && contextMutation.variables?.conversationId === session.conversation_id}
+                >
+                  Comp
+                </Button>
+                <Button
+                  variant="ghost"
+                  className="px-3 py-1 text-xs"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleModeChange(session.conversation_id, null);
+                  }}
+                  loading={contextMutation.isPending && contextMutation.variables?.conversationId === session.conversation_id}
+                >
+                  Reset
+                </Button>
+              </div>
+            </div>
           </button>
         ))}
       </div>

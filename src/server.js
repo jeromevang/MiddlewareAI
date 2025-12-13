@@ -25,7 +25,15 @@ const { getRuntimeMode, isCloudMode, requireModeHealthCheck } = require('./runti
 const { main: runIndexer } = require('./middleware.js'); // to trigger reindex
 const { logDebugEvent, isTelemetryEnabled, setTelemetryOverride, getTelemetryOverride } = require('./debug_logger.js');
 const { createRagService } = require('./services/rag_service.js');
-const { getSummaryKeepRecentTurns, setSummaryKeepRecentTurns, refreshProcessingStateFromConfig } = require('./processing_state.js');
+const {
+    getSummaryKeepRecentTurns,
+    setSummaryKeepRecentTurns,
+    refreshProcessingStateFromConfig,
+    getContextModeDefault,
+    setContextModeDefault,
+    getRawContextMarginPct,
+    setRawContextMarginPct,
+} = require('./processing_state.js');
 const {
     getEnginesSnapshot,
     isRagEnabled: isRagEngineEnabled,
@@ -126,26 +134,25 @@ const metrics = {
     lastSummaryAction: null,
 };
 
-const THINK_BLOCK_REGEX = /<think>[\s\S]*?<\/think>/gi;
-const USER_QUERY_TAG_REGEX = /<\/?user_query>/gi;
-const ASSISTANT_RESPONSE_TAG_REGEX = /<\/?assistant_response>/gi;
-
 function sanitizeUserText(text = '') {
-    if (!text) return '';
-    return text.replace(USER_QUERY_TAG_REGEX, '').trim();
+    if (typeof text !== 'string') {
+        return '';
+    }
+    return text;
 }
 
 function sanitizeAssistantText(text = '') {
-    if (!text) return '';
-    return text
-        .replace(THINK_BLOCK_REGEX, '')
-        .replace(ASSISTANT_RESPONSE_TAG_REGEX, '')
-        .trim();
+    if (typeof text !== 'string') {
+        return '';
+    }
+    return text;
 }
 
 function sanitizeSummaryText(text = '') {
-    if (!text) return '';
-    return sanitizeAssistantText(sanitizeUserText(text));
+    if (typeof text !== 'string') {
+        return '';
+    }
+    return text;
 }
 
 function isRagFeatureEnabled() {
@@ -221,6 +228,89 @@ function buildTelemetryStatus() {
         source: override === null ? 'env' : 'override',
         envFlag: process.env.ENABLE_DEBUG_TELEMETRY || null
     };
+}
+
+function normalizeContextModeValue(mode) {
+    if (typeof mode !== 'string') {
+        return null;
+    }
+    const lowered = mode.trim().toLowerCase();
+    if (!lowered) {
+        return null;
+    }
+    const allowed = ['raw', 'compressed', 'raw-fallback'];
+    return allowed.includes(lowered) ? lowered : null;
+}
+
+function normalizePolicyModeValue(mode) {
+    const normalized = normalizeContextModeValue(mode);
+    if (!normalized) {
+        return null;
+    }
+    return normalized === 'raw-fallback' ? null : normalized;
+}
+
+function getRawFallbackThresholdTokens() {
+    const baseLimit = typeof mainModelCfg.context_length === 'number' && mainModelCfg.context_length > 0
+        ? mainModelCfg.context_length
+        : CONTEXT_MAX_TOKENS;
+    const marginPct = getRawContextMarginPct();
+    const clampedMargin = Math.min(Math.max(Number.isFinite(marginPct) ? marginPct : 0.1, 0.01), 0.5);
+    return Math.max(1, Math.floor(baseLimit * (1 - clampedMargin)));
+}
+
+async function resolveSessionContextMode(sessionId) {
+    try {
+        const override = await sqliteCacheManager.getSessionContextMode(sessionId);
+        const normalized = normalizePolicyModeValue(override);
+        return normalized || getContextModeDefault();
+    } catch (err) {
+        console.warn('[SessionMode] Failed to load override:', err?.message || err);
+        return getContextModeDefault();
+    }
+}
+
+function decorateSessionMetaRows(rows = []) {
+    const defaultMode = getContextModeDefault();
+    return rows.map((row) => {
+        const override = normalizePolicyModeValue(row?.context_mode_override);
+        const lastMode = normalizeContextModeValue(row?.last_context_mode);
+        const policyMode = override || defaultMode;
+        const activeMode = lastMode || policyMode;
+        return {
+            conversation_id: row?.conversation_id,
+            last_activity: row?.last_activity,
+            turn_count: row?.turn_count || 0,
+            updates: row?.updates || 0,
+            context_mode_override: override,
+            context_mode: policyMode,
+            active_mode: activeMode,
+        };
+    });
+}
+
+function buildFallbackSessionMeta(conversationId) {
+    const policyMode = getContextModeDefault();
+    return {
+        conversation_id: conversationId,
+        last_activity: new Date().toISOString(),
+        turn_count: 0,
+        updates: 0,
+        context_mode_override: null,
+        context_mode: policyMode,
+        active_mode: policyMode,
+    };
+}
+
+async function getSessionList({ limit = SESSION_METADATA_LIMIT, contextMode = null } = {}) {
+    const normalizedFilter = normalizeContextModeValue(contextMode);
+    const fetchLimit = normalizedFilter ? Math.max(limit * 2, SESSION_METADATA_LIMIT) : limit;
+    const rows = await sqliteCacheManager.getSessionSummaries(fetchLimit);
+    const decorated = decorateSessionMetaRows(rows);
+    const filtered = normalizedFilter
+        ? decorated.filter((entry) => entry.active_mode === normalizedFilter)
+        : decorated;
+    return filtered.slice(0, limit);
 }
 
 function resetInMemoryStats() {
@@ -421,9 +511,19 @@ function buildRawContext({ rollingSummaryText, recentTurns = [], ragResults = []
     return parts.join('\n\n');
 }
 
-function composeContextPayload({ summaryEnabled, rollingSummaryText, recentTurns, ragResults, userPrompt }) {
+function buildContextPayload({
+    sessionMode,
+    summaryEnabled,
+    rollingSummaryText,
+    recentTurns,
+    ragResults,
+    userPrompt,
+    fallbackThresholdTokens,
+}) {
     const rawContextText = buildRawContext({ rollingSummaryText, recentTurns, ragResults, userPrompt });
-    if (summaryEnabled) {
+    const rawTokens = estimateTokens(rawContextText);
+
+    if (sessionMode === 'compressed') {
         const { contextText, info } = buildContextWithBudget({
             rollingSummaryText,
             recentTurns,
@@ -434,22 +534,42 @@ function composeContextPayload({ summaryEnabled, rollingSummaryText, recentTurns
         return {
             contextText,
             rawContextText,
-            budgetInfo: { ...info, mode: 'compressed' }
+            budgetInfo: { ...info, mode: 'compressed' },
+            appliedMode: 'compressed'
         };
     }
-    const usedTokens = estimateTokens(rawContextText);
+
+    const rawBudget = {
+        budgetTokens: fallbackThresholdTokens || null,
+        usedTokens: rawTokens,
+        rawTokens,
+        savedTokens: 0,
+        compressionPct: 0,
+        trimmed: false,
+        mode: 'raw'
+    };
+
+    if (fallbackThresholdTokens && rawTokens > fallbackThresholdTokens) {
+        const { contextText, info } = buildContextWithBudget({
+            rollingSummaryText,
+            recentTurns,
+            ragResults,
+            userPrompt,
+            budgetTokens: CONTEXT_BUDGET_TOKENS
+        });
+        return {
+            contextText,
+            rawContextText,
+            budgetInfo: { ...info, mode: 'raw-fallback', fallbackReason: 'token-threshold' },
+            appliedMode: 'raw-fallback'
+        };
+    }
+
     return {
         contextText: rawContextText,
         rawContextText,
-        budgetInfo: {
-            budgetTokens: null,
-            usedTokens,
-            rawTokens: usedTokens,
-            savedTokens: 0,
-            compressionPct: 0,
-            trimmed: false,
-            mode: 'raw-pass-through'
-        }
+        budgetInfo: rawBudget,
+        appliedMode: 'raw'
     };
 }
 
@@ -567,7 +687,7 @@ async function buildStatusPayload() {
     const storageCfg = getStorageConfig();
     let sessionMeta = [];
     try {
-        sessionMeta = await sqliteCacheManager.getSessionSummaries(SESSION_METADATA_LIMIT);
+        sessionMeta = await getSessionList({ limit: SESSION_METADATA_LIMIT });
     } catch (err) {
         console.warn('[Status] Failed to load session metadata:', err?.message || err);
     }
@@ -588,6 +708,8 @@ async function buildStatusPayload() {
             context_budget_tokens: CONTEXT_BUDGET_TOKENS,
             max_context_tokens: CONTEXT_MAX_TOKENS,
             summary_keep_recent_turns: getSummaryKeepRecentTurns(),
+            context_mode_default: getContextModeDefault(),
+            raw_context_margin_pct: getRawContextMarginPct(),
         },
         models: {
             embedding: modelSummary(embeddingModelCfg, { embedding_dimension: storageCfg.embedding_dimension }),
@@ -638,6 +760,8 @@ function buildMetricsPayload() {
             context_budget_tokens: CONTEXT_BUDGET_TOKENS,
             max_context_tokens: CONTEXT_MAX_TOKENS,
             summary_keep_recent_turns: getSummaryKeepRecentTurns(),
+            context_mode_default: getContextModeDefault(),
+            raw_context_margin_pct: getRawContextMarginPct(),
         },
     };
 }
@@ -690,13 +814,11 @@ async function pushSessionUpdate({ sessionId, turn }) {
     }
     try {
         const summary = await sqliteCacheManager.getSessionSummary(sessionId);
+        const sessionMeta = summary
+            ? decorateSessionMetaRows([summary])[0]
+            : buildFallbackSessionMeta(sessionId);
         const payload = {
-            session: summary || {
-                conversation_id: sessionId,
-                last_activity: turn?.createdAt || new Date().toISOString(),
-                turn_count: turn?.turnIndex || 0,
-                updates: turn?.turnIndex || 0,
-            },
+            session: sessionMeta,
             turn: turn || null,
         };
         broadcastWsMessage({ type: 'session-update', payload });
@@ -868,6 +990,35 @@ app.patch('/processing/summary-keep', (req, res) => {
     res.json({ status: 'ok', keepRecentTurns: updated });
 });
 
+app.patch('/processing/context-mode', (req, res) => {
+    const { defaultMode = null, rawMarginPct = null } = req.body || {};
+    if (defaultMode === null && rawMarginPct === null) {
+        return res.status(400).json({ error: 'Provide defaultMode and/or rawMarginPct' });
+    }
+    let updatedMode = getContextModeDefault();
+    let updatedMargin = getRawContextMarginPct();
+
+    if (defaultMode !== null) {
+        const normalized = normalizePolicyModeValue(defaultMode);
+        if (!normalized) {
+            return res.status(400).json({ error: 'defaultMode must be "raw" or "compressed"' });
+        }
+        updatedMode = setContextModeDefault(normalized, { persist: true });
+        appendLog(`Global context mode set to ${updatedMode}`, 'info');
+    }
+
+    if (rawMarginPct !== null) {
+        const parsed = Number(rawMarginPct);
+        if (!Number.isFinite(parsed)) {
+            return res.status(400).json({ error: 'rawMarginPct must be numeric' });
+        }
+        updatedMargin = setRawContextMarginPct(parsed, { persist: true });
+        appendLog(`Raw context margin set to ${updatedMargin}`, 'info');
+    }
+
+    res.json({ status: 'ok', defaultMode: updatedMode, rawMarginPct: updatedMargin });
+});
+
 app.post('/summary/reprocess', async (req, res) => {
     try {
         const { conversationId = null } = req.body || {};
@@ -902,6 +1053,45 @@ app.post('/sessions/purge', async (req, res) => {
         res.json({ status: 'ok' });
     } catch (error) {
         console.error('[Server] /sessions/purge error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.patch('/sessions/:conversationId/context-mode', async (req, res) => {
+    const { conversationId } = req.params;
+    if (!conversationId) {
+        return res.status(400).json({ error: 'conversationId required' });
+    }
+    const { mode = null } = req.body || {};
+    const normalized = mode === null ? null : normalizePolicyModeValue(mode);
+    if (mode !== null && !normalized) {
+        return res.status(400).json({ error: 'mode must be "raw" or "compressed" (or null to reset)' });
+    }
+    try {
+        if (normalized) {
+            await sqliteCacheManager.setSessionContextMode(conversationId, normalized);
+        } else {
+            await sqliteCacheManager.clearSessionContextMode(conversationId);
+        }
+        const summary = await sqliteCacheManager.getSessionSummary(conversationId);
+        const decorated = summary ? decorateSessionMetaRows([summary])[0] : buildFallbackSessionMeta(conversationId);
+        void pushSessionUpdate({ sessionId: conversationId, turn: null });
+        res.json({ status: 'ok', session: decorated });
+    } catch (error) {
+        console.error('[Server] /sessions/:id/context-mode error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+app.get('/sessions', async (req, res) => {
+    const limitParam = parseInt(req.query.limit || `${SESSION_METADATA_LIMIT}`, 10);
+    const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 500) : SESSION_METADATA_LIMIT;
+    const requestedMode = req.query.contextMode || null;
+    try {
+        const sessions = await getSessionList({ limit, contextMode: requestedMode });
+        res.json({ sessions, limit, contextMode: normalizeContextModeValue(requestedMode) });
+    } catch (error) {
+        console.error('[Server] /sessions error:', error);
         res.status(500).json({ error: error.message });
     }
 });
@@ -970,13 +1160,23 @@ app.post('/query', async (req, res) => {
         // RAG search
         const ragResults = await ragSearch(prompt, topK);
 
-        // Build context (compressed or raw pass-through)
-        const { contextText: composedPrompt, rawContextText, budgetInfo: composedBudget } = composeContextPayload({
+        const sessionMode = await resolveSessionContextMode(sessionId);
+        const fallbackThresholdTokens = getRawFallbackThresholdTokens();
+
+        // Build context (compressed, raw, or fallback)
+        const {
+            contextText: composedPrompt,
+            rawContextText,
+            budgetInfo: composedBudget,
+            appliedMode: appliedContextMode
+        } = buildContextPayload({
+            sessionMode,
             summaryEnabled: summaryActive,
             rollingSummaryText,
             recentTurns: formattedRecentTurns,
             ragResults,
             userPrompt: prompt,
+            fallbackThresholdTokens,
         });
         budgetInfo = composedBudget;
 
@@ -1032,7 +1232,8 @@ app.post('/query', async (req, res) => {
             rag: ragResults,
             rollingSummary: summaryActive ? newRollingSummary?.summary : null,
             summaryMeta: summaryActive ? { turnCount: newRollingSummary?.turnCount || 0 } : null,
-            budget: budgetInfo
+            budget: budgetInfo,
+            contextMode: appliedContextMode || sessionMode
         });
 
         const duration = Date.now() - started;
@@ -1044,7 +1245,8 @@ app.post('/query', async (req, res) => {
             ragHits: ragResults.length,
             budget: budgetInfo,
             status: 200,
-            sessionId
+            sessionId,
+            contextMode: appliedContextMode || sessionMode
         });
     } catch (error) {
         const duration = Date.now() - started;
@@ -1057,7 +1259,8 @@ app.post('/query', async (req, res) => {
             budget: budgetInfo,
             status: 500,
             error: error.message,
-            sessionId
+            sessionId,
+            contextMode: budgetInfo?.mode || null
         });
         console.error('[Server] /query error:', error);
         res.status(500).json({ error: error.message, sessionId });
@@ -1182,13 +1385,23 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                         throw ragErr;
         }
         
-        // Build context (compressed or raw)
-        const { contextText: composedPrompt, rawContextText, budgetInfo: composedBudget } = composeContextPayload({
+        const sessionMode = await resolveSessionContextMode(sessionId);
+        const fallbackThresholdTokens = getRawFallbackThresholdTokens();
+
+        // Build context (compressed, raw, or fallback)
+        const {
+            contextText: composedPrompt,
+            rawContextText,
+            budgetInfo: composedBudget,
+            appliedMode: appliedContextMode
+        } = buildContextPayload({
+            sessionMode,
             summaryEnabled: summaryActive,
             rollingSummaryText,
             recentTurns: formattedRecentTurns,
             ragResults,
             userPrompt,
+            fallbackThresholdTokens,
         });
         budgetInfo = composedBudget;
         
@@ -1258,7 +1471,8 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                     budget: budgetInfo,
                     status: 500,
                     error: streamErr?.message || 'stream failed',
-                    sessionId
+                    sessionId,
+                    contextMode: budgetInfo?.mode || null
                 });
                 return;
             }
@@ -1305,7 +1519,8 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                 ragHits: ragResults.length,
                 budget: budgetInfo,
                 status: 200,
-                sessionId
+                sessionId,
+                contextMode: appliedContextMode || sessionMode
             });
             return;
         }
@@ -1365,7 +1580,8 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                 completion_tokens: Math.ceil(content.length / 4),
                 total_tokens: (budgetInfo?.usedTokens || 0) + Math.ceil(content.length / 4)
             },
-            session_id: sessionId
+            session_id: sessionId,
+            context_mode: appliedContextMode || sessionMode
         });
 
         const duration = Date.now() - started;
@@ -1380,7 +1596,8 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             ragHits: ragResults.length,
             budget: budgetInfo,
             status: 200,
-            sessionId
+            sessionId,
+            contextMode: appliedContextMode || sessionMode
         });
     } catch (error) {
         const duration = Date.now() - started;
@@ -1393,7 +1610,8 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             budget: budgetInfo,
             status: 500,
             error: error.message,
-            sessionId
+            sessionId,
+            contextMode: budgetInfo?.mode || null
         });
         if (error.response) {
             console.error(`[Server] ${pathLabel} error ${error.response.status}:`, error.message, 'payload:', error.response.data);

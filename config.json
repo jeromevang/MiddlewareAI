@@ -35,7 +35,9 @@
     "cache_invalidation_days": 7,
     "max_context_tokens": 40000,
     "context_budget_ratio": 0.7,
-    "summary_keep_recent_turns": 3
+    "summary_keep_recent_turns": 3,
+    "context_mode_default": "compressed",
+    "raw_context_margin_pct": 0.1
   },
   "storage": {
     "sqlite_db_path": "./data/summaries.db",

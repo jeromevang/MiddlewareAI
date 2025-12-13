@@ -357,24 +357,26 @@ function SessionSidebar({
         }
       >
         <div className="max-h-[420px] space-y-2 overflow-auto pr-1">
-          {turns.map((turn) => (
-            <button
-              key={turn.id}
-              onClick={() => onSelectTurn(turn.id)}
-              className={`w-full rounded-lg border px-4 py-3 text-left transition ${
-                turn.id === selectedTurnId ? "border-accent-secondary/60 bg-accent-secondary/10" : "border-white/10 bg-white/5"
-              }`}
-            >
-              <p className="text-sm font-semibold text-white">Turn {turn.turnIndex}</p>
-              <p className="text-xs text-white/60">{new Date(turn.createdAt).toLocaleTimeString()}</p>
-              <p className="text-xs text-white/60 mt-1">
-                Tokens {turn.budget?.usedTokens ?? "-"}/{turn.budget?.budgetTokens ?? "-"}
-              </p>
-              <p className="text-xs text-white/60 truncate">
-                Prompt: {cleanUserPromptBubble(turn.userPrompt || "").slice(0, 80) || "(empty)"}
-              </p>
-            </button>
-          ))}
+          {turns.map((turn) => {
+            const previewSegment = formatSegmentFromRaw(turn.userPrompt || "", "user");
+            const previewText = ensureSegmentDisplay(previewSegment);
+            return (
+              <button
+                key={turn.id}
+                onClick={() => onSelectTurn(turn.id)}
+                className={`w-full rounded-lg border px-4 py-3 text-left transition ${
+                  turn.id === selectedTurnId ? "border-accent-secondary/60 bg-accent-secondary/10" : "border-white/10 bg-white/5"
+                }`}
+              >
+                <p className="text-sm font-semibold text-white">Turn {turn.turnIndex}</p>
+                <p className="text-xs text-white/60">{new Date(turn.createdAt).toLocaleTimeString()}</p>
+                <p className="text-xs text-white/60 mt-1">
+                  Tokens {turn.budget?.usedTokens ?? "-"}/{turn.budget?.budgetTokens ?? "-"}
+                </p>
+                <p className="text-xs text-white/60 truncate">Prompt: {previewText.slice(0, 80) || "(empty)"}</p>
+              </button>
+            );
+          })}
           {!turns.length && <p className="text-sm text-white/60">No turns recorded for this session yet.</p>}
         </div>
       </Card>
@@ -432,7 +434,8 @@ function ContextInspector({ turn, turns, isLoading, keepRecent }: ContextInspect
     );
   }
 
-  const rawSummary = cleanSummaryText(extractSection(turn.rawContext, "Rolling summary"));
+  const rawSummarySection = extractSection(turn.rawContext, "Rolling summary");
+  const rawSummary = rawSummarySection ? rawSummarySection.trim() : "";
   const rawTokens = turn.budget?.rawTokens ?? null;
   const compressedTokens = turn.budget?.usedTokens ?? null;
   const timestamp = new Date(turn.createdAt).toLocaleString();
@@ -539,11 +542,15 @@ function SummaryColumns({
   );
 }
 
+type TranscriptRole = "user" | "assistant" | "systemReminder";
+
 type TranscriptMessage = {
   id: string;
   turnIndex: number;
-  role: "user" | "assistant" | "systemReminder";
+  role: TranscriptRole;
   text: string;
+  rawText: string;
+  tags: string[];
 };
 
 interface ChatColumnProps {
@@ -589,7 +596,8 @@ function ChatColumn({
               key={entry.id}
               variant={entry.role === "systemReminder" ? "systemReminder" : entry.role}
               label={buildChatLabel(entry.role, entry.turnIndex)}
-              copyValue={entry.text}
+              copyValue={entry.rawText || entry.text}
+              tags={entry.tags}
               className="whitespace-pre-wrap"
             >
               {highlightText(entry.text, highlightMap)}
@@ -608,9 +616,10 @@ interface ChatBubbleProps {
   copyable?: boolean;
   className?: string;
   children?: ReactNode;
+  tags?: string[];
 }
 
-function ChatBubble({ variant, label, copyValue, copyable = true, className, children }: ChatBubbleProps) {
+function ChatBubble({ variant, label, copyValue, copyable = true, className, children, tags = [] }: ChatBubbleProps) {
   const isSystemwide = variant === "system" || variant === "systemReminder";
   const alignment = variant === "user" ? "items-end text-right" : "items-start text-left";
   const offsets = variant === "user" ? "ml-10" : isSystemwide ? "" : "mr-10";
@@ -639,6 +648,15 @@ function ChatBubble({ variant, label, copyValue, copyable = true, className, chi
         role={copyable ? "button" : undefined}
         tabIndex={copyable ? 0 : -1}
       >
+        {tags.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-2 text-[0.55rem] uppercase tracking-[0.3em] text-white/60">
+            {tags.map((tag, idx) => (
+              <span key={`${tag}-${idx}`} className="rounded-full border border-white/15 bg-white/5 px-2 py-0.5">
+                {tag.replace(/_/g, " ")}
+              </span>
+            ))}
+          </div>
+        )}
         {children}
       </div>
       {copyable && copyValue && <span className="text-[0.55rem] text-white/35">Click to copy</span>}
@@ -669,25 +687,27 @@ function buildTranscript(entries: ConversationTurn[]): TranscriptMessage[] {
   entries.forEach((entry) => {
     const userSegments = splitSystemReminderSegments(entry.userPrompt || "", "user");
     userSegments.forEach((segment, idx) => {
-      const text = sanitizeSegmentText(segment.text, segment.role);
-      if (!text) return;
+      const parsed = formatSegmentFromRaw(segment.text, segment.role);
       messages.push({
-        id: `${entry.id}-u-${idx}-${segment.role}`,
+        id: `${entry.id}-u-${idx}-${parsed.role}`,
         turnIndex: entry.turnIndex,
-        role: segment.role === "systemReminder" ? "systemReminder" : "user",
-        text,
+        role: parsed.role,
+        text: ensureSegmentDisplay(parsed),
+        rawText: parsed.rawText,
+        tags: parsed.tags,
       });
     });
 
     const assistantSegments = splitSystemReminderSegments(entry.assistantResponse || "", "assistant");
     assistantSegments.forEach((segment, idx) => {
-      const text = sanitizeSegmentText(segment.text, segment.role);
-      if (!text) return;
+      const parsed = formatSegmentFromRaw(segment.text, segment.role);
       messages.push({
-        id: `${entry.id}-a-${idx}-${segment.role}`,
+        id: `${entry.id}-a-${idx}-${parsed.role}`,
         turnIndex: entry.turnIndex,
-        role: segment.role === "systemReminder" ? "systemReminder" : "assistant",
-        text,
+        role: parsed.role,
+        text: ensureSegmentDisplay(parsed),
+        rawText: parsed.rawText,
+        tags: parsed.tags,
       });
     });
   });
@@ -780,33 +800,82 @@ function extractSection(text: string, heading: string) {
   return remainder.slice(0, end).trim();
 }
 
-function cleanUserPromptBubble(text?: string) {
-  if (!text) return "";
-  return text.replace(/<\/?user_query>/gi, "").trim();
+const WRAPPED_SEGMENT_PATTERNS: Array<{ tag: string; role: TranscriptRole; regex: RegExp }> = [
+  { tag: "user_query", role: "user", regex: /<user_query>([\s\S]*?)<\/user_query>/i },
+  { tag: "assistant_response", role: "assistant", regex: /<assistant_response>([\s\S]*?)<\/assistant_response>/i },
+  { tag: "system_reminder", role: "systemReminder", regex: /<system_reminder>([\s\S]*?)<\/system_reminder>/i },
+];
+
+const THINK_SEGMENT_REGEX = /<think>([\s\S]*?)<\/think>/gi;
+
+type ParsedSegment = {
+  role: TranscriptRole;
+  text: string;
+  rawText: string;
+  tags: string[];
+};
+
+function formatSegmentFromRaw(source: string, defaultRole: TranscriptRole): ParsedSegment {
+  const rawText = typeof source === "string" ? source : "";
+  if (!rawText) {
+    return { role: defaultRole, text: "", rawText: "", tags: [] };
+  }
+
+  const tags: string[] = [];
+  let resolvedRole: TranscriptRole = defaultRole;
+  let working = rawText;
+
+  for (const pattern of WRAPPED_SEGMENT_PATTERNS) {
+    const match = pattern.regex.exec(rawText);
+    if (match) {
+      resolvedRole = pattern.role;
+      tags.push(pattern.tag);
+      working = match[1] ?? "";
+      break;
+    }
+  }
+
+  const thinkBlocks: string[] = [];
+  working = working.replace(THINK_SEGMENT_REGEX, (_, content) => {
+    tags.push("think");
+    thinkBlocks.push((content || "").trim());
+    return "";
+  });
+
+  const visible = working.trim();
+  const sections: string[] = [];
+  if (visible) {
+    sections.push(visible);
+  }
+  thinkBlocks.forEach((content, idx) => {
+    const label = thinkBlocks.length > 1 ? `Thought ${idx + 1}` : "Thought";
+    sections.push(`${label}:\n${content || "(empty)"}`);
+  });
+
+  return {
+    role: resolvedRole,
+    text: sections.join("\n\n"),
+    rawText,
+    tags,
+  };
 }
 
-function cleanAssistantBubble(text?: string) {
-  if (!text) return "";
-  const withoutThink = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
-  return withoutThink.replace(/<\/?assistant_response>/gi, "").trim();
-}
-
-function cleanSummaryText(text?: string) {
-  if (!text) return "";
-  return cleanAssistantBubble(cleanUserPromptBubble(text));
-}
-
-function cleanSystemReminderBubble(text?: string) {
-  if (!text) return "";
-  return cleanAssistantBubble(text);
+function ensureSegmentDisplay(segment: ParsedSegment): string {
+  if (segment.text.trim()) {
+    return segment.text;
+  }
+  if (segment.tags.length) {
+    return `(empty ${segment.tags.join(", ")})`;
+  }
+  return "(empty)";
 }
 
 function splitSystemReminderSegments(
   source: string,
-  defaultRole: "user" | "assistant"
-): Array<{ role: "user" | "assistant" | "systemReminder"; text: string }> {
+  defaultRole: TranscriptRole
+): Array<{ role: TranscriptRole; text: string }> {
   if (!source) return [];
-  const segments: Array<{ role: "user" | "assistant" | "systemReminder"; text: string }> = [];
+  const segments: Array<{ role: TranscriptRole; text: string }> = [];
   const regex = /<system_reminder>([\s\S]*?)<\/system_reminder>/gi;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
@@ -815,7 +884,7 @@ function splitSystemReminderSegments(
     if (preceding.trim()) {
       segments.push({ role: defaultRole, text: preceding });
     }
-    segments.push({ role: "systemReminder", text: match[1] || "" });
+    segments.push({ role: "systemReminder", text: match[0] || match[1] || "" });
     lastIndex = regex.lastIndex;
   }
   const trailing = source.slice(lastIndex);
@@ -823,20 +892,6 @@ function splitSystemReminderSegments(
     segments.push({ role: defaultRole, text: trailing });
   }
   return segments;
-}
-
-function sanitizeSegmentText(
-  text: string,
-  role: "user" | "assistant" | "systemReminder"
-): string {
-  if (!text) return "";
-  if (role === "assistant") {
-    return cleanAssistantBubble(text);
-  }
-  if (role === "systemReminder") {
-    return cleanSystemReminderBubble(text);
-  }
-  return cleanUserPromptBubble(text);
 }
 
 function BudgetSummary({ budget }: { budget: BudgetInfo | null | undefined }) {

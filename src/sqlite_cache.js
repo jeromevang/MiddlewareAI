@@ -102,6 +102,18 @@ class SQLiteCacheManager {
                         )
                     `);
 
+                    this.db.run(`
+                        CREATE TABLE IF NOT EXISTS session_context_modes (
+                            conversation_id TEXT PRIMARY KEY,
+                            mode TEXT NOT NULL,
+                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        )
+                    `);
+
+                    this.db.run(`
+                        CREATE INDEX IF NOT EXISTS idx_session_modes_mode ON session_context_modes(mode)
+                    `);
+
                     // Create indexes for faster queries
                     this.db.run(`
                         CREATE INDEX IF NOT EXISTS idx_file_path ON cached_chunks(file_path)
@@ -447,12 +459,23 @@ class SQLiteCacheManager {
         try {
             return new Promise((resolve, reject) => {
                 this.db.all(`
-                    SELECT conversation_id,
-                           MAX(created_at) as last_activity,
-                           MAX(turn_index) as turn_count,
-                           COUNT(*) as updates
-                    FROM conversation_turns
-                    GROUP BY conversation_id
+                    SELECT ct.conversation_id,
+                           MAX(ct.created_at) as last_activity,
+                           MAX(ct.turn_index) as turn_count,
+                           COUNT(*) as updates,
+                           (
+                               SELECT mode FROM session_context_modes scm
+                               WHERE scm.conversation_id = ct.conversation_id
+                           ) as context_mode_override,
+                           (
+                               SELECT recent.compression_mode
+                               FROM conversation_turns recent
+                               WHERE recent.conversation_id = ct.conversation_id
+                               ORDER BY recent.turn_index DESC
+                               LIMIT 1
+                           ) as last_context_mode
+                    FROM conversation_turns ct
+                    GROUP BY ct.conversation_id
                     ORDER BY last_activity DESC
                     LIMIT ?
                 `, [limit], (err, rows) => {
@@ -471,12 +494,23 @@ class SQLiteCacheManager {
         try {
             return new Promise((resolve, reject) => {
                 this.db.get(`
-                    SELECT conversation_id,
-                           MAX(created_at) as last_activity,
-                           MAX(turn_index) as turn_count,
-                           COUNT(*) as updates
-                    FROM conversation_turns
-                    WHERE conversation_id = ?
+                    SELECT ct.conversation_id,
+                           MAX(ct.created_at) as last_activity,
+                           MAX(ct.turn_index) as turn_count,
+                           COUNT(*) as updates,
+                           (
+                               SELECT mode FROM session_context_modes scm
+                               WHERE scm.conversation_id = ct.conversation_id
+                           ) as context_mode_override,
+                           (
+                               SELECT recent.compression_mode
+                               FROM conversation_turns recent
+                               WHERE recent.conversation_id = ct.conversation_id
+                               ORDER BY recent.turn_index DESC
+                               LIMIT 1
+                           ) as last_context_mode
+                    FROM conversation_turns ct
+                    WHERE ct.conversation_id = ?
                 `, [conversationId], (err, row) => {
                     if (err) return reject(err);
                     if (!row) return resolve(null);
@@ -485,6 +519,8 @@ class SQLiteCacheManager {
                         last_activity: row.last_activity || new Date().toISOString(),
                         turn_count: row.turn_count || 0,
                         updates: row.updates || 0,
+                        context_mode_override: row.context_mode_override || null,
+                        last_context_mode: row.last_context_mode || null,
                     });
                 });
             });
@@ -526,16 +562,75 @@ class SQLiteCacheManager {
                 turnParams.push(beforeTs);
             }
             const turnsWhere = turnClauses.length ? `WHERE ${turnClauses.join(' AND ')}` : '';
+
+            const affectedConversationIds = await new Promise((resolve, reject) => {
+                this.db.all(`
+                    SELECT DISTINCT conversation_id
+                    FROM conversation_turns
+                    ${turnsWhere}
+                `, turnParams, (err, rows) => {
+                    if (err) return reject(err);
+                    resolve(rows || []);
+                });
+            });
+
             await new Promise((resolve, reject) => {
                 this.db.run(`DELETE FROM conversation_turns ${turnsWhere}`, turnParams, (err) => {
                     if (err) return reject(err);
                     resolve();
                 });
             });
+
+            for (const row of affectedConversationIds) {
+                const targetId = row?.conversation_id;
+                if (targetId) {
+                    await this.clearSessionContextMode(targetId);
+                }
+            }
         } catch (error) {
             logError('Failed to purge sessions:', error);
             throw error;
         }
+    }
+
+    async setSessionContextMode(conversationId, mode) {
+        if (!conversationId) {
+            throw new Error('conversationId is required');
+        }
+        if (!mode) {
+            return this.clearSessionContextMode(conversationId);
+        }
+        return new Promise((resolve, reject) => {
+            this.db.run(`
+                INSERT INTO session_context_modes (conversation_id, mode, updated_at)
+                VALUES (?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(conversation_id)
+                DO UPDATE SET mode = excluded.mode, updated_at = CURRENT_TIMESTAMP
+            `, [conversationId, mode], (err) => {
+                if (err) return reject(err);
+                resolve();
+            });
+        });
+    }
+
+    async clearSessionContextMode(conversationId) {
+        if (!conversationId) return Promise.resolve();
+        return new Promise((resolve, reject) => {
+            this.db.run('DELETE FROM session_context_modes WHERE conversation_id = ?', [conversationId], (err) => {
+                if (err) return reject(err);
+                resolve();
+            });
+        });
+    }
+
+    async getSessionContextMode(conversationId) {
+        if (!conversationId) return null;
+        return new Promise((resolve, reject) => {
+            this.db.get('SELECT mode FROM session_context_modes WHERE conversation_id = ?', [conversationId], (err, row) => {
+                if (err) return reject(err);
+                resolve(row ? row.mode : null);
+            });
+        });
     }
 
     async saveConversationTurn({

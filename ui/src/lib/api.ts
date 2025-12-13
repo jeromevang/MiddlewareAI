@@ -1,4 +1,4 @@
-import type { DashboardSnapshot, EngineSnapshot, SessionTurnsResponse, TelemetryStatus } from "../types/dashboard";
+import type { DashboardSnapshot, EngineSnapshot, SessionMeta, SessionTurnsResponse, TelemetryStatus } from "../types/dashboard";
 import { usePreferencesStore } from "../state/preferences-store";
 
 interface RequestOptions extends RequestInit {
@@ -116,4 +116,17 @@ export async function reprocessSummaries(payload?: { conversationId?: string | n
 
 export async function deleteAllSessions() {
   await triggerAction("reset");
+}
+
+export async function updateSessionContextMode(
+  conversationId: string,
+  mode: "raw" | "compressed" | null
+): Promise<{ status: string; session: SessionMeta }> {
+  return request<{ status: string; session: SessionMeta }>(
+    `/sessions/${encodeURIComponent(conversationId)}/context-mode`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ mode }),
+    }
+  );
 }

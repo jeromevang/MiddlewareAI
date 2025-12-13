@@ -22,6 +22,8 @@ export interface ProcessingStats {
   context_budget_tokens: number;
   max_context_tokens: number;
   summary_keep_recent_turns?: number;
+  context_mode_default?: string;
+  raw_context_margin_pct?: number;
 }
 
 export interface BudgetInfo {
@@ -107,6 +109,9 @@ export interface SessionMeta {
   last_activity: string;
   turn_count: number;
   updates: number;
+  context_mode_override?: string | null;
+  context_mode?: string | null;
+  active_mode?: string | null;
 }
 
 export interface SessionUpdatePayload {
