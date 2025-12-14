@@ -2,7 +2,7 @@
 
 const { embedText: embedTextLMStudio } = require('./lmstudio/embeddings.js');
 const { summarize, generateCompletion, proxyChatCompletion } = require('./lmstudio/chat.js');
-const { warmModel, warmEmbeddingModel, waitForModelsLoaded, openModel } = require('./lmstudio/model_manager.js');
+const { warmModel, warmEmbeddingModel, waitForModelsLoaded, openModel, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, waitForServerReady } = require('./lmstudio/model_manager.js');
 const { embedTextLocal, embedTextCloud } = require('./embedder_local.js');
 const { getModelConfig } = require('./config.js');
 const { isCloudMode } = require('./runtime.js');
@@ -33,4 +33,12 @@ module.exports = {
     warmEmbeddingModel,
     waitForModelsLoaded,
     openModel,
+    unloadModel,
+    unloadAllModels,
+    listLoadedModels,
+    getServerStatus,
+    startLMStudioServer,
+    stopLMStudioServer,
+    checkLMStudioHealth,
+    waitForServerReady,
 };

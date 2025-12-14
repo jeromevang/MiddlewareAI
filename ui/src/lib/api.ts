@@ -130,3 +130,97 @@ export async function updateSessionContextMode(
     }
   );
 }
+
+// LM Studio Model Management APIs
+export async function listLoadedModels(): Promise<{ status: string; models: any[] }> {
+  return request<{ status: string; models: any[] }>("/lmstudio/models");
+}
+
+export async function unloadModel(modelId: string): Promise<{ status: string; success: boolean; output: string }> {
+  return request<{ status: string; success: boolean; output: string }>("/lmstudio/models/unload", {
+    method: "POST",
+    body: JSON.stringify({ modelId }),
+  });
+}
+
+export async function unloadAllModels(): Promise<{ status: string; success: boolean; output: string }> {
+  return request<{ status: string; success: boolean; output: string }>("/lmstudio/models/unload-all", {
+    method: "POST",
+  });
+}
+
+export async function getServerStatus(): Promise<{ status: string; server: { status: string; output: string } }> {
+  return request<{ status: string; server: { status: string; output: string } }>("/lmstudio/server/status");
+}
+
+export async function checkLMStudioHealth(): Promise<{
+  status: string;
+  ready: boolean;
+  server?: { status: string; output: string };
+  models_loaded?: number;
+  models?: any[];
+  error?: string;
+  timestamp: number;
+}> {
+  return request<{
+    status: string;
+    ready: boolean;
+    server?: { status: string; output: string };
+    models_loaded?: number;
+    models?: any[];
+    error?: string;
+    timestamp: number;
+  }>("/lmstudio/health");
+}
+
+export async function startLMStudioServer(): Promise<{
+  status: string;
+  success: boolean;
+  server_status: string;
+  output: string;
+}> {
+  return request<{
+    status: string;
+    success: boolean;
+    server_status: string;
+    output: string;
+  }>("/lmstudio/server/start", {
+    method: "POST",
+  });
+}
+
+export async function stopLMStudioServer(): Promise<{
+  status: string;
+  success: boolean;
+  server_status: string;
+  output: string;
+}> {
+  return request<{
+    status: string;
+    success: boolean;
+    server_status: string;
+    output: string;
+  }>("/lmstudio/server/stop", {
+    method: "POST",
+  });
+}
+
+export async function refreshModelContext(): Promise<{
+  status: string;
+  context: {
+    model_context_length: number;
+    max_context_tokens: number;
+    context_budget_tokens: number;
+  }
+}> {
+  return request<{
+    status: string;
+    context: {
+      model_context_length: number;
+      max_context_tokens: number;
+      context_budget_tokens: number;
+    }
+  }>("/lmstudio/context/refresh", {
+    method: "POST",
+  });
+}

@@ -7,6 +7,14 @@
  *  - GET /health
  *  - POST /search { query, topK? }              -> RAG search results
  *  - POST /query  { prompt, topK?, temperature? } -> Executes RAG + rolling summary + main LLM
+ *  - GET /lmstudio/models                       -> List loaded models
+ *  - POST /lmstudio/models/unload {modelId}     -> Unload specific model
+ *  - POST /lmstudio/models/unload-all           -> Unload all models
+ *  - GET /lmstudio/server/status                -> Get LM Studio server status
+ *  - GET /lmstudio/health                        -> Comprehensive health check
+ *  - POST /lmstudio/server/start                 -> Start LM Studio server
+ *  - POST /lmstudio/server/stop                  -> Stop LM Studio server
+ *  - POST /lmstudio/context/refresh              -> Refresh context limits from loaded models
  */
 
 const express = require('express');
@@ -16,7 +24,7 @@ const http = require('http');
 const crypto = require('crypto');
 const WebSocketLib = require('ws');
 const { WebSocketServer } = WebSocketLib;
-const { embedText, summarize, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded } = require('./lmstudio_client.js');
+const { embedText, summarize, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth } = require('./lmstudio_client.js');
 const { SQLiteCacheManager } = require('./sqlite_cache.js');
 const { FAISSIndexManager } = require('./faiss_storage.js');
 const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js');
@@ -87,7 +95,63 @@ const cloudMode = isCloudMode();
 const sessionConfig = getSessionConfig();
 refreshProcessingStateFromConfig();
 const SERVER_API_KEY = serverConfig.api_key;
-const CONTEXT_MAX_TOKENS = processingConfig.max_context_tokens || 40000;
+// Get model's context length - first try from loaded LM Studio models, then config
+async function getModelContextLength() {
+    try {
+        // Try to get context length from actually loaded models in LM Studio
+        const loadedModels = await listLoadedModels();
+        const mainModelId = mainModelCfg.identifier || mainModelCfg.model_name;
+
+        // Find the loaded main model
+        const loadedMainModel = loadedModels.find(model =>
+            model.id && mainModelId &&
+            (model.id.includes(mainModelId) || mainModelId.includes(model.id))
+        );
+
+        if (loadedMainModel && loadedMainModel.context_length) {
+            console.log(`[Context] Using context length from loaded model: ${loadedMainModel.context_length} tokens`);
+            return loadedMainModel.context_length;
+        }
+    } catch (error) {
+        console.warn('[Context] Could not get context length from LM Studio:', error.message);
+    }
+
+    // Fallback to config
+    const configContext = typeof mainModelCfg.context_length === 'number' && mainModelCfg.context_length > 0
+        ? mainModelCfg.context_length
+        : 40000;
+
+    console.log(`[Context] Using context length from config: ${configContext} tokens`);
+    return configContext;
+}
+
+// Initialize context length asynchronously
+let MODEL_CONTEXT_LENGTH = 40000; // initial fallback
+let CONTEXT_MAX_TOKENS = 40000;
+let CONTEXT_BUDGET_TOKENS = Math.floor(40000 * 0.7);
+
+// Update context values when we have the real model info
+getModelContextLength().then(contextLength => {
+    MODEL_CONTEXT_LENGTH = contextLength;
+    CONTEXT_MAX_TOKENS = Math.min(processingConfig.max_context_tokens || MODEL_CONTEXT_LENGTH, MODEL_CONTEXT_LENGTH);
+    CONTEXT_BUDGET_TOKENS = Math.floor(CONTEXT_MAX_TOKENS * CONTEXT_BUDGET_RATIO);
+    console.log(`[Context] Updated context budget: ${CONTEXT_BUDGET_TOKENS} tokens (${CONTEXT_BUDGET_RATIO * 100}% of ${CONTEXT_MAX_TOKENS})`);
+}).catch(error => {
+    console.error('[Context] Failed to initialize model context length:', error);
+});
+
+// Function to refresh context values when models change
+async function refreshModelContext() {
+    try {
+        const contextLength = await getModelContextLength();
+        MODEL_CONTEXT_LENGTH = contextLength;
+        CONTEXT_MAX_TOKENS = Math.min(processingConfig.max_context_tokens || MODEL_CONTEXT_LENGTH, MODEL_CONTEXT_LENGTH);
+        CONTEXT_BUDGET_TOKENS = Math.floor(CONTEXT_MAX_TOKENS * CONTEXT_BUDGET_RATIO);
+        console.log(`[Context] Refreshed context budget: ${CONTEXT_BUDGET_TOKENS} tokens (${CONTEXT_BUDGET_RATIO * 100}% of ${CONTEXT_MAX_TOKENS})`);
+    } catch (error) {
+        console.warn('[Context] Failed to refresh model context:', error);
+    }
+}
 const CONTEXT_BUDGET_RATIO = processingConfig.context_budget_ratio || 0.7;
 const CONTEXT_BUDGET_TOKENS = Math.floor(CONTEXT_MAX_TOKENS * CONTEXT_BUDGET_RATIO);
 const REQUEST_BUFFER_LIMIT = 100;
@@ -241,9 +305,7 @@ function normalizePolicyModeValue(mode) {
 }
 
 function getRawFallbackThresholdTokens() {
-    const baseLimit = typeof mainModelCfg.context_length === 'number' && mainModelCfg.context_length > 0
-        ? mainModelCfg.context_length
-        : CONTEXT_MAX_TOKENS;
+    const baseLimit = MODEL_CONTEXT_LENGTH; // Use the dynamically determined context length
     const marginPct = getRawContextMarginPct();
     const clampedMargin = Math.min(Math.max(Number.isFinite(marginPct) ? marginPct : 0.1, 0.01), 0.5);
     return Math.max(1, Math.floor(baseLimit * (1 - clampedMargin)));
@@ -982,6 +1044,112 @@ app.post('/telemetry', (req, res) => {
     setTelemetryOverride(enabled);
     appendLog(`Telemetry ${enabled ? 'enabled' : 'disabled'} via UI override`, 'info');
     res.json(buildTelemetryStatus());
+});
+
+// LM Studio Model Management Endpoints
+app.get('/lmstudio/models', async (req, res) => {
+    try {
+        const models = await listLoadedModels();
+        res.json({ status: 'ok', models });
+    } catch (error) {
+        console.error('[API] Failed to list models:', error.message);
+        res.status(500).json({ error: 'Failed to list loaded models', details: error.message });
+    }
+});
+
+app.post('/lmstudio/models/unload', async (req, res) => {
+    try {
+        const { modelId } = req.body || {};
+        if (!modelId) {
+            return res.status(400).json({ error: 'modelId is required' });
+        }
+
+        const result = await unloadModel(modelId);
+        appendLog(`Model unloaded: ${modelId}`, 'info');
+
+        // Refresh context in case the unloaded model was the main model
+        await refreshModelContext();
+
+        res.json({ status: 'ok', ...result });
+    } catch (error) {
+        console.error('[API] Failed to unload model:', error.message);
+        res.status(500).json({ error: 'Failed to unload model', details: error.message });
+    }
+});
+
+app.post('/lmstudio/models/unload-all', async (req, res) => {
+    try {
+        const result = await unloadAllModels();
+        appendLog('All models unloaded', 'info');
+
+        // Refresh context since all models are unloaded
+        await refreshModelContext();
+
+        res.json({ status: 'ok', ...result });
+    } catch (error) {
+        console.error('[API] Failed to unload all models:', error.message);
+        res.status(500).json({ error: 'Failed to unload all models', details: error.message });
+    }
+});
+
+app.get('/lmstudio/server/status', async (req, res) => {
+    try {
+        const status = await getServerStatus();
+        res.json({ status: 'ok', server: status });
+    } catch (error) {
+        console.error('[API] Failed to get server status:', error.message);
+        res.status(500).json({ error: 'Failed to get server status', details: error.message });
+    }
+});
+
+app.post('/lmstudio/context/refresh', async (req, res) => {
+    try {
+        await refreshModelContext();
+        res.json({
+            status: 'ok',
+            context: {
+                model_context_length: MODEL_CONTEXT_LENGTH,
+                max_context_tokens: CONTEXT_MAX_TOKENS,
+                context_budget_tokens: CONTEXT_BUDGET_TOKENS
+            }
+        });
+    } catch (error) {
+        console.error('[API] Failed to refresh context:', error.message);
+        res.status(500).json({ error: 'Failed to refresh context', details: error.message });
+    }
+});
+
+// LM Studio Server Management Endpoints
+app.get('/lmstudio/health', async (req, res) => {
+    try {
+        const health = await checkLMStudioHealth();
+        res.json({ status: 'ok', ...health });
+    } catch (error) {
+        console.error('[API] Health check failed:', error.message);
+        res.status(503).json({ error: 'LM Studio health check failed', details: error.message });
+    }
+});
+
+app.post('/lmstudio/server/start', async (req, res) => {
+    try {
+        const result = await startLMStudioServer();
+        appendLog('LM Studio server started via API', 'info');
+        res.json({ status: 'ok', ...result });
+    } catch (error) {
+        console.error('[API] Failed to start LM Studio server:', error.message);
+        res.status(500).json({ error: 'Failed to start LM Studio server', details: error.message });
+    }
+});
+
+app.post('/lmstudio/server/stop', async (req, res) => {
+    try {
+        const result = await stopLMStudioServer();
+        appendLog('LM Studio server stopped via API', 'info');
+        res.json({ status: 'ok', ...result });
+    } catch (error) {
+        console.error('[API] Failed to stop LM Studio server:', error.message);
+        res.status(500).json({ error: 'Failed to stop LM Studio server', details: error.message });
+    }
 });
 
 app.patch('/processing/summary-keep', (req, res) => {

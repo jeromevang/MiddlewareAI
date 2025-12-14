@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent } from "../../lib/api";
+import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, listLoadedModels, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer } from "../../lib/api";
 import { useDashboardStore } from "../../state/dashboard-store";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
@@ -108,6 +108,25 @@ export default function ModelConfigPanel() {
   const [confirmConfig, setConfirmConfig] = useState<ConfirmConfig | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
 
+  // LM Studio state
+  const [loadedModels, setLoadedModels] = useState<any[]>([]);
+  const [lmStudioHealth, setLMStudioHealth] = useState<{
+    ready: boolean;
+    server?: { status: string; output: string };
+    models_loaded?: number;
+    models?: any[];
+    error?: string;
+    timestamp?: number;
+    lastChecked?: number;
+  }>({ ready: false });
+  const [lmStudioError, setLMStudioError] = useState<{
+    title: string;
+    description: string;
+    action?: string;
+    retryable?: boolean;
+  } | null>(null);
+  const [autoStarting, setAutoStarting] = useState(false);
+
   // Update models when quality changes
   useEffect(() => {
     const preset = QUALITY_PRESETS[quality];
@@ -142,6 +161,105 @@ export default function ModelConfigPanel() {
   useEffect(() => {
     setDraftKeepRecent(keepRecentConfigured);
   }, [keepRecentConfigured]);
+
+  // Auto-start and health monitoring for LM Studio
+  useEffect(() => {
+    let mounted = true;
+    let interval: ReturnType<typeof setInterval>;
+
+    const checkHealth = async () => {
+      if (!mounted) return;
+      try {
+        await healthCheckMutation.mutateAsync();
+      } catch (error) {
+        // Error is handled by the mutation
+      }
+    };
+
+    const autoStartIfNeeded = async () => {
+      if (!mounted) return;
+
+      // Only attempt auto-start if we're not already trying and server is not ready
+      if (!lmStudioHealth.ready && !autoStarting && !startServerMutation.isPending) {
+        console.log("LM Studio not ready, attempting auto-start...");
+        setAutoStarting(true);
+
+        try {
+          await startServerMutation.mutateAsync();
+          // Wait a bit for server to fully start
+          setTimeout(() => {
+            if (mounted) checkHealth();
+          }, 3000);
+        } catch (error) {
+          // Error popup is handled by the mutation
+          console.warn("Auto-start failed:", error);
+        } finally {
+          if (mounted) setAutoStarting(false);
+        }
+      }
+    };
+
+    // Initial health check
+    checkHealth();
+
+    // Auto-start check after initial health check
+    const autoStartTimer = setTimeout(() => {
+      autoStartIfNeeded();
+    }, 2000);
+
+    // Periodic health monitoring
+    interval = setInterval(() => {
+      checkHealth();
+    }, 15000); // Check every 15 seconds
+
+    return () => {
+      mounted = false;
+      clearTimeout(autoStartTimer);
+      clearInterval(interval);
+    };
+  }, []); // Empty dependency array - only run once on mount
+
+  // Show error popup when LM Studio is not available and we haven't shown it recently
+  useEffect(() => {
+    if (!lmStudioHealth.ready && lmStudioHealth.error && !lmStudioError) {
+      setLMStudioError({
+        title: "LM Studio Connection Issue",
+        description: `Cannot connect to LM Studio: ${lmStudioHealth.error}`,
+        action: "Ensure LM Studio is installed and running",
+        retryable: true
+      });
+    } else if (lmStudioHealth.ready && lmStudioError) {
+      // Clear error when connection is restored
+      setLMStudioError(null);
+    }
+  }, [lmStudioHealth.ready, lmStudioHealth.error, lmStudioError]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyPress = (event: KeyboardEvent) => {
+      // Only handle shortcuts when not typing in inputs
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) {
+        return;
+      }
+
+      // Ctrl+R or Cmd+R to refresh LM Studio status
+      if ((event.ctrlKey || event.metaKey) && event.key === 'r') {
+        event.preventDefault();
+        healthCheckMutation.mutate();
+        setMessage("🔄 Refreshing LM Studio status...");
+        setTimeout(() => setMessage(""), 2000);
+      }
+
+      // Ctrl+S or Cmd+S to save configuration
+      if ((event.ctrlKey || event.metaKey) && event.key === 's') {
+        event.preventDefault();
+        handleSave();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, []);
 
   const mutation = useMutation({
     mutationFn: saveConfig,
@@ -213,6 +331,132 @@ export default function ModelConfigPanel() {
     onError: (err: unknown) => {
       const detail = err instanceof Error ? err.message : "Delete request failed.";
       setMessage(`❌ ${detail}`);
+    },
+  });
+
+  const deleteAllDataMutation = useMutation({
+    mutationFn: () => triggerAction("reset"),
+    onSuccess: () => {
+      setMessage("✅ All data deleted and system reset. Please restart the middleware server.");
+      selectSession(null);
+      queryClient.removeQueries({ queryKey: ["session-turns"] });
+      useDashboardStore.setState((prev) => {
+        if (!prev.status) return prev;
+        return {
+          ...prev,
+          status: {
+            ...prev.status,
+            sessions: [],
+          },
+        };
+      });
+      setTimeout(() => setMessage(""), 5000);
+    },
+    onError: (err: unknown) => {
+      const detail = err instanceof Error ? err.message : "Delete data request failed.";
+      setMessage(`❌ ${detail}`);
+    },
+  });
+
+  const listModelsMutation = useMutation({
+    mutationFn: () => listLoadedModels(),
+    onSuccess: (data: { status: string; models: any[] }) => {
+      setLoadedModels(data.models || []);
+      setMessage(`✅ Found ${data.models?.length || 0} loaded models`);
+      setTimeout(() => setMessage(""), 3000);
+    },
+    onError: (err: unknown) => {
+      const detail = err instanceof Error ? err.message : "Failed to list models.";
+      setMessage(`❌ ${detail}`);
+    },
+  });
+
+  const unloadModelMutation = useMutation({
+    mutationFn: (modelId: string) => unloadModel(modelId),
+    onSuccess: () => {
+      setMessage("✅ Model unloaded successfully");
+      // Refresh the model list
+      listModelsMutation.mutate();
+      setTimeout(() => setMessage(""), 3000);
+    },
+    onError: (err: unknown) => {
+      const detail = err instanceof Error ? err.message : "Failed to unload model.";
+      setMessage(`❌ ${detail}`);
+    },
+  });
+
+  const unloadAllModelsMutation = useMutation({
+    mutationFn: () => unloadAllModels(),
+    onSuccess: () => {
+      setMessage("✅ All models unloaded successfully");
+      setLoadedModels([]);
+      setTimeout(() => setMessage(""), 3000);
+    },
+    onError: (err: unknown) => {
+      const detail = err instanceof Error ? err.message : "Failed to unload all models.";
+      setMessage(`❌ ${detail}`);
+    },
+  });
+
+
+  const refreshContextMutation = useMutation({
+    mutationFn: () => refreshModelContext(),
+    onSuccess: (data: { status: string; context: { model_context_length: number; max_context_tokens: number; context_budget_tokens: number } }) => {
+      setMessage(`✅ Context refreshed: ${data.context.context_budget_tokens} token budget (${Math.round(data.context.context_budget_tokens / data.context.max_context_tokens * 100)}% of ${data.context.max_context_tokens})`);
+      setTimeout(() => setMessage(""), 5000);
+    },
+    onError: (err: unknown) => {
+      const detail = err instanceof Error ? err.message : "Failed to refresh context.";
+      setMessage(`❌ ${detail}`);
+    },
+  });
+
+  const healthCheckMutation = useMutation({
+    mutationFn: () => checkLMStudioHealth(),
+    onSuccess: (data) => {
+      setLMStudioHealth({ ...data, lastChecked: Date.now() });
+      setLMStudioError(null); // Clear any previous errors
+    },
+    onError: (error: any) => {
+      setLMStudioHealth({
+        ready: false,
+        error: error.message || "Connection failed",
+        lastChecked: Date.now()
+      });
+    },
+  });
+
+  const startServerMutation = useMutation({
+    mutationFn: () => startLMStudioServer(),
+    onSuccess: () => {
+      setMessage("✅ LM Studio server started successfully");
+      // Refresh health status after starting
+      setTimeout(() => healthCheckMutation.mutate(), 2000);
+      setTimeout(() => setMessage(""), 3000);
+    },
+    onError: (error: any) => {
+      setLMStudioError({
+        title: "Failed to Start LM Studio Server",
+        description: `Could not start LM Studio server: ${error.message || error}`,
+        action: "Check that LM Studio is installed and try again",
+        retryable: true
+      });
+      setMessage(`❌ Failed to start LM Studio server`);
+      setTimeout(() => setMessage(""), 5000);
+    },
+  });
+
+  const stopServerMutation = useMutation({
+    mutationFn: () => stopLMStudioServer(),
+    onSuccess: () => {
+      setMessage("✅ LM Studio server stopped successfully");
+      // Refresh health status after stopping
+      setTimeout(() => healthCheckMutation.mutate(), 1000);
+      setTimeout(() => setMessage(""), 3000);
+    },
+    onError: (error: any) => {
+      setMessage(`❌ Failed to stop LM Studio server: ${error.message || error}`);
+      setTimeout(() => setMessage(""), 5000);
     },
   });
 
@@ -590,10 +834,210 @@ export default function ModelConfigPanel() {
           >
             Delete all sessions
           </Button>
+          <Button
+            variant="danger"
+            onClick={() =>
+              openConfirm({
+                title: "Delete ALL stored data?",
+                description: "This completely wipes all data including vector indexes, summaries, sessions, and triggers a full system reset. This cannot be undone and will require a server restart.",
+                tone: "danger",
+                confirmLabel: "Delete all data",
+                onConfirm: () => deleteAllDataMutation.mutateAsync(),
+              })
+            }
+            loading={deleteAllDataMutation.isPending}
+          >
+            Delete all data
+          </Button>
         </div>
         <p className="mt-3 text-xs text-white/60">
           Sessions present: {sessions.length}. Deleting clears SQLite, FAISS, and triggers a full reindex.
         </p>
+      </Card>
+
+      {/* LM Studio Server Management */}
+      <Card title="LM Studio Server Management" subtitle="Monitor and control LM Studio server • Ctrl+R to refresh status">
+        <div className="space-y-4">
+          <div className="flex justify-between items-start">
+            <p className="text-sm text-white/70">
+              LM Studio server status and controls. The system automatically attempts to start LM Studio when needed.
+            </p>
+            <div className="text-xs text-white/50 bg-white/5 px-2 py-1 rounded">
+              <div className="font-semibold mb-1">Keyboard Shortcuts:</div>
+              <div>Ctrl+R: Refresh status</div>
+              <div>Ctrl+S: Save config</div>
+            </div>
+          </div>
+
+          {/* Server Status Indicator */}
+          <div className={`relative p-4 rounded-lg border transition-all overflow-hidden ${
+            lmStudioHealth.ready
+              ? 'border-green-500/30 bg-green-500/10 shadow-[0_0_20px_rgba(34,197,94,0.1)]'
+              : lmStudioHealth.error
+              ? 'border-red-500/30 bg-red-500/10'
+              : 'border-yellow-500/30 bg-yellow-500/10'
+          }`}>
+            {/* Loading overlay */}
+            {(autoStarting || startServerMutation.isPending || stopServerMutation.isPending) && (
+              <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                <div className="flex items-center gap-3 text-white">
+                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span className="text-sm font-medium">
+                    {autoStarting ? 'Auto-starting LM Studio...' :
+                     startServerMutation.isPending ? 'Starting LM Studio server...' :
+                     'Stopping LM Studio server...'}
+                  </span>
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className={`w-3 h-3 rounded-full transition-colors ${
+                  lmStudioHealth.ready ? 'bg-green-400 shadow-[0_0_10px_rgba(34,197,94,0.5)]' :
+                  autoStarting || startServerMutation.isPending ? 'bg-yellow-400 animate-pulse' :
+                  healthCheckMutation.isPending ? 'bg-blue-400 animate-pulse' :
+                  lmStudioHealth.error ? 'bg-red-400' :
+                  'bg-gray-400'
+                }`} />
+                <div>
+                  <div className="text-sm font-medium text-white">
+                    {lmStudioHealth.ready ? '🟢 Server Running' :
+                     autoStarting ? '🟡 Auto-starting...' :
+                     startServerMutation.isPending ? '🟡 Starting server...' :
+                     stopServerMutation.isPending ? '🟡 Stopping server...' :
+                     healthCheckMutation.isPending ? '🔵 Checking...' :
+                     lmStudioHealth.error ? '🔴 Connection Failed' :
+                     '⚪ Unknown Status'}
+                  </div>
+                  {lmStudioHealth.models_loaded !== undefined && lmStudioHealth.ready && (
+                    <div className="text-xs text-white/70">
+                      {lmStudioHealth.models_loaded} model{ lmStudioHealth.models_loaded !== 1 ? 's' : ''} loaded
+                    </div>
+                  )}
+                  {lmStudioHealth.lastChecked && (
+                    <div className="text-xs text-white/50">
+                      Updated {new Date(lmStudioHealth.lastChecked).toLocaleTimeString()}
+                    </div>
+                  )}
+                  {lmStudioHealth.error && (
+                    <div className="text-xs text-red-400 mt-1 max-w-md">
+                      {lmStudioHealth.error}
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  onClick={() => healthCheckMutation.mutate()}
+                  loading={healthCheckMutation.isPending}
+                  disabled={autoStarting}
+                >
+                  Refresh
+                </Button>
+                {!lmStudioHealth.ready && !autoStarting && (
+                  <Button
+                    variant="primary"
+                    onClick={() => startServerMutation.mutate()}
+                    loading={startServerMutation.isPending}
+                  >
+                    Start Server
+                  </Button>
+                )}
+                {lmStudioHealth.ready && (
+                  <Button
+                    variant="danger"
+                    onClick={() => {
+                      openConfirm({
+                        title: "Stop LM Studio Server?",
+                        description: "This will stop the LM Studio server. Models will be unloaded and API calls will fail until restarted.",
+                        confirmLabel: "Stop Server",
+                        onConfirm: () => stopServerMutation.mutate(),
+                      });
+                    }}
+                    loading={stopServerMutation.isPending}
+                  >
+                    Stop Server
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Model Management */}
+          <div className="border-t border-white/10 pt-4">
+            <h4 className="text-sm font-semibold text-white mb-3">Model Management</h4>
+            <div className="flex flex-wrap gap-3">
+              <Button
+                onClick={() => listModelsMutation.mutate()}
+                loading={listModelsMutation.isPending}
+                variant="secondary"
+                disabled={!lmStudioHealth.ready}
+              >
+                List Loaded Models
+              </Button>
+              <Button
+                onClick={() => refreshContextMutation.mutate()}
+                loading={refreshContextMutation.isPending}
+                variant="secondary"
+                disabled={!lmStudioHealth.ready}
+              >
+                Refresh Context Limits
+              </Button>
+            </div>
+
+          {loadedModels.length > 0 && (
+            <div className="space-y-3">
+              <h4 className="text-sm font-semibold text-white">Loaded Models ({loadedModels.length})</h4>
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {loadedModels.map((model) => (
+                  <div key={model.id} className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-white truncate">{model.id}</div>
+                      <div className="text-xs text-white/60">
+                        Size: {model.size || 'Unknown'} • Context: {model.context_length || 'Unknown'}
+                      </div>
+                    </div>
+                    <Button
+                      variant="danger"
+                      onClick={() => {
+                        openConfirm({
+                          title: `Unload Model: ${model.id}?`,
+                          description: `This will unload the model "${model.id}" from LM Studio memory.`,
+                          confirmLabel: "Unload",
+                          onConfirm: () => unloadModelMutation.mutate(model.id),
+                        });
+                      }}
+                      loading={unloadModelMutation.isPending}
+                    >
+                      Unload
+                    </Button>
+                  </div>
+                ))}
+              </div>
+
+              <Button
+                onClick={() => {
+                  openConfirm({
+                    title: "Unload ALL Models?",
+                    description: "This will unload ALL currently loaded models from LM Studio memory.",
+                    tone: "danger",
+                    confirmLabel: "Unload All",
+                    onConfirm: () => unloadAllModelsMutation.mutate(),
+                  });
+                }}
+                loading={unloadAllModelsMutation.isPending}
+                variant="danger"
+                className="w-full"
+              >
+                Unload All Models
+              </Button>
+            </div>
+          )}
+
+          </div>
+        </div>
       </Card>
 
       <div className="flex flex-col gap-4">
@@ -623,6 +1067,34 @@ export default function ModelConfigPanel() {
         onConfirm={runConfirm}
         onCancel={closeConfirm}
       />
+
+      {/* LM Studio Error Modal */}
+      {lmStudioError && (
+        <ConfirmModal
+          open={true}
+          title={lmStudioError.title}
+          description={
+            <div className="space-y-2">
+              <p>{lmStudioError.description}</p>
+              {lmStudioError.action && (
+                <p className="text-sm text-blue-400">{lmStudioError.action}</p>
+              )}
+            </div>
+          }
+          confirmLabel={lmStudioError.retryable ? "Retry" : "OK"}
+          cancelLabel={lmStudioError.retryable ? "Dismiss" : undefined}
+          tone="default"
+          onConfirm={() => {
+            if (lmStudioError.retryable) {
+              setLMStudioError(null);
+              healthCheckMutation.mutate();
+            } else {
+              setLMStudioError(null);
+            }
+          }}
+          onCancel={lmStudioError.retryable ? () => setLMStudioError(null) : () => setLMStudioError(null)}
+        />
+      )}
     </div>
   );
 }

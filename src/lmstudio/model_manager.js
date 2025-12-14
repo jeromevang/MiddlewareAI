@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 const axios = require('axios');
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const execAsync = promisify(exec);
 const { LM_STUDIO_URL, LM_STUDIO_TIMEOUT_MS, MAX_RETRIES, loadedModels, loadingModels, withLMStudioLock, generateRequestId, setLastLoadedSnapshot, getLastLoadedSnapshot } = require('./state.js');
 
 function normalizeModelId(id) {
@@ -197,6 +200,161 @@ async function openModel(modelOrId) {
     }
 }
 
+async function unloadModel(modelOrId) {
+    const { identifier } = resolveModelNames(modelOrId);
+    if (!identifier) {
+        throw new Error('Model identifier is required for unloading');
+    }
+
+    try {
+        console.log(`[LM Studio Unload] Unloading model: ${identifier}`);
+        const { stdout, stderr } = await execAsync(`lms unload "${identifier}"`);
+
+        // Remove from our tracking
+        loadedModels.delete(identifier);
+        loadingModels.delete(identifier);
+
+        console.log(`[LM Studio Unload] Successfully unloaded model: ${identifier}`);
+        console.log(`[LM Studio Unload] CLI output: ${stdout.trim()}`);
+
+        return { success: true, output: stdout.trim() };
+    } catch (error) {
+        console.error(`[LM Studio Unload] Failed to unload model ${identifier}:`, error.message);
+        throw new Error(`Failed to unload model ${identifier}: ${error.message}`);
+    }
+}
+
+async function unloadAllModels() {
+    try {
+        console.log(`[LM Studio Unload] Unloading all models`);
+        const { stdout, stderr } = await execAsync('lms unload --all');
+
+        // Clear our tracking
+        loadedModels.clear();
+        loadingModels.clear();
+
+        console.log(`[LM Studio Unload] Successfully unloaded all models`);
+        console.log(`[LM Studio Unload] CLI output: ${stdout.trim()}`);
+
+        return { success: true, output: stdout.trim() };
+    } catch (error) {
+        console.error(`[LM Studio Unload] Failed to unload all models:`, error.message);
+        throw new Error(`Failed to unload all models: ${error.message}`);
+    }
+}
+
+async function listLoadedModels() {
+    try {
+        const res = await axios.get(`${LM_STUDIO_URL}/api/v0/models`, { timeout: LM_STUDIO_TIMEOUT_MS });
+        const models = res.data?.data || [];
+        const loaded = models.filter(m => m.state === 'loaded').map(m => ({
+            id: m.id,
+            name: m.name,
+            state: m.state,
+            size: m.size,
+            context_length: m.context_length
+        }));
+
+        console.log(`[LM Studio Models] Found ${loaded.length} loaded models:`, loaded.map(m => m.id).join(', '));
+        return loaded;
+    } catch (error) {
+        console.error(`[LM Studio Models] Failed to list models:`, error.message);
+        throw error;
+    }
+}
+
+async function getServerStatus() {
+    try {
+        const { stdout } = await execAsync('lms server status');
+        return { status: 'running', output: stdout.trim() };
+    } catch (error) {
+        if (error.code === 1) {
+            return { status: 'stopped', output: error.stdout?.trim() || '' };
+        }
+        throw error;
+    }
+}
+
+async function startLMStudioServer() {
+    try {
+        console.log('[LM Studio Server] Starting LM Studio server...');
+        const { stdout } = await execAsync('lms server start');
+        console.log('[LM Studio Server] Server start command executed');
+
+        // Wait a bit for server to initialize
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Verify server is actually running
+        const status = await getServerStatus();
+        if (status.status !== 'running') {
+            throw new Error('Server failed to start properly');
+        }
+
+        return { success: true, status: 'running', output: stdout.trim() };
+    } catch (error) {
+        console.error('[LM Studio Server] Failed to start server:', error.message);
+        throw new Error(`Failed to start LM Studio server: ${error.message}`);
+    }
+}
+
+async function stopLMStudioServer() {
+    try {
+        console.log('[LM Studio Server] Stopping LM Studio server...');
+        const { stdout } = await execAsync('lms server stop');
+        console.log('[LM Studio Server] Server stop command executed');
+
+        // Wait a bit for server to shut down
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        return { success: true, status: 'stopped', output: stdout.trim() };
+    } catch (error) {
+        console.error('[LM Studio Server] Failed to stop server:', error.message);
+        throw new Error(`Failed to stop LM Studio server: ${error.message}`);
+    }
+}
+
+async function checkLMStudioHealth() {
+    try {
+        const serverStatus = await getServerStatus();
+        const models = await listLoadedModels();
+
+        return {
+            ready: serverStatus.status === 'running',
+            server: serverStatus,
+            models_loaded: models.length,
+            models: models,
+            timestamp: Date.now()
+        };
+    } catch (error) {
+        return {
+            ready: false,
+            error: error.message,
+            timestamp: Date.now()
+        };
+    }
+}
+
+async function waitForServerReady(timeoutMs = 30000) {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < timeoutMs) {
+        try {
+            const health = await checkLMStudioHealth();
+            if (health.ready) {
+                console.log('[LM Studio Server] Server is ready');
+                return health;
+            }
+            console.log('[LM Studio Server] Server not ready yet, waiting...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        } catch (error) {
+            console.log('[LM Studio Server] Health check failed:', error.message);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+    }
+
+    throw new Error(`LM Studio server did not become ready within ${timeoutMs}ms`);
+}
+
 module.exports = {
     normalizeModelId,
     resolveModelNames,
@@ -207,4 +365,12 @@ module.exports = {
     waitForModelsLoaded,
     isModelLoadedRemote,
     openModel,
+    unloadModel,
+    unloadAllModels,
+    listLoadedModels,
+    getServerStatus,
+    startLMStudioServer,
+    stopLMStudioServer,
+    checkLMStudioHealth,
+    waitForServerReady,
 };
