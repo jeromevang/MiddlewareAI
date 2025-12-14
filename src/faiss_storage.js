@@ -224,7 +224,7 @@ class FAISSIndexManager {
                     await this.initialize();
                 }
 
-                
+
                 logInfo(`Searching for ${topK} most similar chunks...`);
 
                 // Convert vector to Float32Array
@@ -233,10 +233,11 @@ class FAISSIndexManager {
                     await this.resetIndex('query dimension alignment');
                 }
 
-                const ntotal = this.index.ntotal || 0;
+                const ntotal = (typeof this.index.ntotal === 'function' ? this.index.ntotal() : this.index.ntotal) || 0;
                 if (ntotal === 0 || this.idMap.length === 0 || ntotal !== this.idMap.length) {
                                         return [];
                 }
+
                 const k = Math.min(topK, ntotal);
                 // faiss-node expects a flat array for a single query
                 const searchResult = this.index.search(Array.from(faissVector), k);
@@ -250,7 +251,7 @@ class FAISSIndexManager {
                     results.push({ chunkId, distance: distances[i] });
                 }
 
-                
+
                 return results;
             } catch (error) {
                 logError('Failed to search FAISS index, returning empty array:', error);
@@ -271,7 +272,8 @@ class FAISSIndexManager {
             logInfo('Retrieving all embeddings from FAISS index...');
 
             // Iterate through all vectors in the index
-            for (let i = 0; i < this.index.ntotal; i++) {
+            const totalCount = (typeof this.index.ntotal === 'function' ? this.index.ntotal() : this.index.ntotal) || 0;
+            for (let i = 0; i < totalCount; i++) {
                 const vector = new Float32Array(this.index.reconstructN(i, 1));
                 const chunkId = this.idMap[i] || crypto.randomBytes(4).toString('hex');
 

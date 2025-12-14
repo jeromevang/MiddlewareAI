@@ -130,7 +130,12 @@ function sanitizeAssistantText(text = '') {
     if (typeof text !== 'string') {
         return '';
     }
-    return text;
+    // Remove unwanted structured tags (e.g., <AskQuestion>, <plan>)
+    text = text.replace(/<\/?AskQuestion[^>]*>/gi, '');
+    text = text.replace(/<\/?plan[^>]*>/gi, '');
+    // Remove any remaining XML-like tags if present
+    text = text.replace(/<[^>]+>/g, '');
+    return text.trim();
 }
 
 function sanitizeSummaryText(text = '') {
@@ -508,8 +513,10 @@ function buildContextPayload({
     ragResults,
     userPrompt,
     fallbackThresholdTokens,
+    excludeUserPrompt = false,
 }) {
-    const rawContextText = buildRawContext({ rollingSummaryText, recentTurns, ragResults, userPrompt });
+    const effectiveUserPrompt = excludeUserPrompt ? null : userPrompt;
+    const rawContextText = buildRawContext({ rollingSummaryText, recentTurns, ragResults, userPrompt: effectiveUserPrompt });
     const rawTokens = estimateTokens(rawContextText);
 
     if (sessionMode === 'compressed') {
@@ -517,7 +524,7 @@ function buildContextPayload({
             rollingSummaryText,
             recentTurns,
             ragResults,
-            userPrompt,
+            userPrompt: effectiveUserPrompt,
             budgetTokens: CONTEXT_BUDGET_TOKENS
         });
         return {
@@ -543,7 +550,7 @@ function buildContextPayload({
             rollingSummaryText,
             recentTurns,
             ragResults,
-            userPrompt,
+            userPrompt: effectiveUserPrompt,
             budgetTokens: CONTEXT_BUDGET_TOKENS
         });
         return {
@@ -1175,10 +1182,14 @@ app.post('/query', async (req, res) => {
             rollingSummaryText,
             recentTurns: formattedRecentTurns,
             ragResults,
-            userPrompt: prompt,
+            userPrompt: null,
             fallbackThresholdTokens,
+            excludeUserPrompt: true,
         });
         budgetInfo = composedBudget;
+
+        // Append user prompt to avoid duplication
+        const fullPrompt = composedPrompt + '\n\nUser: ' + prompt;
 
         // Capture context snapshot for UI
         const ragPreview = (ragResults || []).slice(0, 5).map(r => ({
@@ -1193,7 +1204,7 @@ app.post('/query', async (req, res) => {
 
         // Call main model
         const completionRequest = {
-            prompt: composedPrompt,
+            prompt: fullPrompt,
             systemPrompt: BASE_SYSTEM_PROMPT,
             temperature,
         };
@@ -1203,7 +1214,7 @@ app.post('/query', async (req, res) => {
             ...completionRequest,
             model: mainModelCfg.identifier,
         };
-        const completionText = extractAssistantText(completion);
+        const completionText = sanitizeAssistantText(extractAssistantText(completion));
 
         let newRollingSummary = null;
 
@@ -1408,8 +1419,9 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             rollingSummaryText,
             recentTurns: formattedRecentTurns,
             ragResults,
-            userPrompt,
+            userPrompt: null,
             fallbackThresholdTokens,
+            excludeUserPrompt: true,
         });
         budgetInfo = composedBudget;
         
@@ -1463,6 +1475,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             let streamedContent = '';
             try {
                 streamedContent = await proxyChatCompletion(chatRequestPayload, res);
+                streamedContent = sanitizeAssistantText(streamedContent);
             } catch (streamErr) {
                 console.error('[Server] Streaming completion failed:', streamErr);
                 if (!res.writableEnded) {
@@ -1551,7 +1564,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         };
         
         // Extract content
-        const content = extractAssistantText(completionResponse);
+        const content = sanitizeAssistantText(extractAssistantText(completionResponse));
 
         const persistedTurn = await persistConversationTurn({
             sessionId,
