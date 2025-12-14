@@ -24,8 +24,8 @@
       "context_length": 8192
     },
     "main": {
-      "model_name": "MaziyarPanahi/NVIDIA-Nemotron-Nano-12B-v2-GGUF",
-      "identifier": "nvidia-nemotron-nano-12b-v2",
+      "model_name": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
+      "identifier": "unsloth/qwen3-coder-30b-a3b-instruct",
       "context_length": 15055
     }
   },

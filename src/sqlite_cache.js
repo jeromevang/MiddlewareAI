@@ -665,8 +665,28 @@ class SQLiteCacheManager {
         const budgetJson = budgetInfo ? JSON.stringify(budgetInfo) : null;
         const ragChunksJson = ragChunks ? JSON.stringify(ragChunks) : null;
         const llmPayloadJson = llmPayload ? JSON.stringify(llmPayload) : null;
+
+        // Calculate the next turn_index separately to avoid subquery in INSERT
+        let nextTurnIndex;
+        try {
+            nextTurnIndex = await new Promise((resolve, reject) => {
+                this.db.get(
+                    `SELECT COALESCE(MAX(turn_index) + 1, 1) AS next FROM conversation_turns WHERE conversation_id = ?`,
+                    [conversationId],
+                    (err, row) => {
+                        if (err) return reject(err);
+                        resolve(row ? row.next : 1);
+                    }
+                );
+            });
+        } catch (err) {
+            logError('Failed to calculate next turn_index:', err);
+            throw err;
+        }
+
         return new Promise((resolve, reject) => {
-            this.db.run(`
+            this.db.run(
+                `
                 INSERT INTO conversation_turns (
                     conversation_id,
                     turn_index,
@@ -680,27 +700,26 @@ class SQLiteCacheManager {
                     llm_payload_kind,
                     llm_payload_json,
                     created_at
-                ) VALUES (
-                    ?,
-                    COALESCE((SELECT MAX(turn_index) + 1 FROM conversation_turns WHERE conversation_id = ?), 1),
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP
-                )
-            `, [
-                conversationId,
-                conversationId,
-                userPrompt,
-                assistantResponse,
-                rawContext,
-                composedContext,
-                budgetJson,
-                ragChunksJson,
-                compressionMode,
-                llmPayloadKind,
-                llmPayloadJson,
-            ], function (err) {
-                if (err) return reject(err);
-                resolve(this.lastID || null);
-            });
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                `,
+                [
+                    conversationId,
+                    nextTurnIndex,
+                    userPrompt,
+                    assistantResponse,
+                    rawContext,
+                    composedContext,
+                    budgetJson,
+                    ragChunksJson,
+                    compressionMode,
+                    llmPayloadKind,
+                    llmPayloadJson,
+                ],
+                function (err) {
+                    if (err) return reject(err);
+                    resolve(this.lastID || null);
+                }
+            );
         });
     }
 
