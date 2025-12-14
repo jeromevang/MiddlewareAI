@@ -255,11 +255,13 @@ async function runIndexer({ modelVersion = summarizationModel.identifier, signal
                 }
 
                 if (needsRecompute) {
+                    const currentStartLine = startLine;
+                    const currentEndLine = endLine;
                     workers.push(
                         new Promise((resolve, reject) => {
                             setImmediate(() => {
-                                const chunkSize = endLine - startLine;
-                                const chunkStartLine = startLine;
+                                const chunkSize = currentEndLine - currentStartLine;
+                                const chunkStartLine = currentStartLine;
                                 processChunk(chunkId, chunkContent, filePath, resolvedVersion, language, chunkSize, chunkStartLine, signal)
                                     .then(resolve)
                                     .catch(err => {

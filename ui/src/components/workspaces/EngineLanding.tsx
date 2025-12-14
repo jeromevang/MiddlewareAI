@@ -94,7 +94,7 @@ export default function EngineLanding() {
           subtitle="RAG control"
           description="Manages chunk indexing, FAISS search, and context stitching. Disable to run middleware without retrieval."
           state={ragState}
-          disabled={!status?.runtime?.rag_enabled && !ragState?.enabled}
+          disabled={status?.runtime?.cloud}
           onToggle={(next) => handleToggle("rag", next)}
           onNavigate={() => navigate("/summary")}
           busy={pendingEngine === "rag" && toggleMutation.isPending}

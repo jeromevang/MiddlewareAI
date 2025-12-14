@@ -11,7 +11,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { Index, writeIndex, writeIndexSync, readIndex } = require('faiss-node');
+const faiss = require('faiss-node');
+const { Index, writeIndex, writeIndexSync } = faiss;
+const readIndex = Index.read;
 const crypto = require('crypto');
 const { getStorageConfig } = require('./config.js');
 
@@ -76,27 +78,32 @@ class FAISSIndexManager {
             ensureDirectoryFor(FAISS_INDEX_PATH);
             logInfo('Initializing FAISS index...');
 
-            const loadedIndex = readIndex(FAISS_INDEX_PATH);
-            this.index = loadedIndex;
-            this.loaded = true;
-            this.dim = this.index?.d || EMBEDDING_DIMENSION;
+            if (typeof readIndex === 'function' && fs.existsSync(FAISS_INDEX_PATH)) {
+                const loadedIndex = readIndex(FAISS_INDEX_PATH);
+                this.index = loadedIndex;
+                this.loaded = true;
+                this.dim = this.index?.d || EMBEDDING_DIMENSION;
 
-            if (this.dim !== EMBEDDING_DIMENSION) {
-                logWarning(`FAISS index dimension ${this.dim} disagrees with configured ${EMBEDDING_DIMENSION}; rebuilding.`);
-                await this.resetIndex('dimension mismatch');
-                return;
-            }
+                if (this.dim !== EMBEDDING_DIMENSION) {
+                    logWarning(`FAISS index dimension ${this.dim} disagrees with configured ${EMBEDDING_DIMENSION}; rebuilding.`);
+                    await this.resetIndex('dimension mismatch');
+                    return;
+                }
 
-            if (fs.existsSync(FAISS_IDS_PATH)) {
-                const rawIds = fs.readFileSync(FAISS_IDS_PATH, 'utf8');
-                this.idMap = JSON.parse(rawIds);
-                logInfo(`Successfully loaded FAISS index and id map (${this.idMap.length} entries).`);
+                if (fs.existsSync(FAISS_IDS_PATH)) {
+                    const rawIds = fs.readFileSync(FAISS_IDS_PATH, 'utf8');
+                    this.idMap = JSON.parse(rawIds);
+                    logInfo(`Successfully loaded FAISS index and id map (${this.idMap.length} entries).`);
+                } else {
+                    this.idMap = [];
+                    logWarning('FAISS id map not found; searches may return numeric indices.');
+                }
+
+                logInfo(`Successfully loaded FAISS index from ${FAISS_INDEX_PATH}`);
             } else {
-                this.idMap = [];
-                logWarning('FAISS id map not found; searches may return numeric indices.');
+                logWarning('FAISS readIndex not available or index file missing; creating new index.');
+                await this.resetIndex('readIndex unavailable or no file');
             }
-
-            logInfo(`Successfully loaded FAISS index from ${FAISS_INDEX_PATH}`);
         } catch (error) {
             logWarning(`FAISS load failed (${error?.message || error}); creating new index.`);
             await this.resetIndex('load failure');

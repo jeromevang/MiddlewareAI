@@ -306,6 +306,24 @@ class SQLiteCacheManager {
     }
 
     /**
+     * Clear all rolling summaries.
+     */
+    async clearRollingSummaries() {
+        try {
+            await new Promise((resolve, reject) => {
+                this.db.run('DELETE FROM rolling_summaries', (err) => {
+                    if (err) return reject(err);
+                    resolve();
+                });
+            });
+            logInfo('Rolling summaries cleared.');
+        } catch (error) {
+            logError('Failed to clear rolling summaries:', error);
+            throw error;
+        }
+    }
+
+    /**
      * Validate a cached entry based on chunk_hash, model_version, and timestamp.
      */
     async validate(chunkId, chunkHash, modelVersion) {

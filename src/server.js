@@ -75,22 +75,6 @@ process.on('exit', (code) => {
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
-// Log incoming requests (method, path, trimmed body) for debugging
-app.use((req, _res, next) => {
-    let bodyPreview = '';
-    if (req.body && typeof req.body === 'object') {
-        try {
-            bodyPreview = JSON.stringify(req.body);
-        } catch {
-            bodyPreview = '[unserializable body]';
-        }
-    }
-    console.log(`[REQ] ${req.method} ${req.url} body=${bodyPreview}`);
-    next();
-});
-
-app.use(express.json({ limit: '2mb' }));
-
 const sqliteCacheManager = new SQLiteCacheManager();
 const faissIndexManager = new FAISSIndexManager();
 const processingConfig = getProcessingConfig();
@@ -342,59 +326,63 @@ function modelSummary(cfg, extras = {}) {
 
 async function ensureReady() {
     // Initialize LM Studio (start server + load models if configured)
-    await initializeLMStudio();
+    // await initializeLMStudio();
     await sqliteCacheManager.initialize();
     await faissIndexManager.initialize();
 
     // Warm models once via chat to avoid repeated open calls
-    try {
-        const embeddingCfg = getModelConfig('embedding');
-        const summarizationCfg = getModelConfig('summarization');
-        const mainCfg = getModelConfig('main');
-        const lmTargets = [
-            summarizationCfg.identifier,
-            cloudMode ? null : mainCfg.identifier,
-            embeddingCfg.engine === 'local' ? null : embeddingCfg.identifier,
-        ].filter(Boolean);
+    // try {
+    //     const embeddingCfg = getModelConfig('embedding');
+    //     const summarizationCfg = getModelConfig('summarization');
+    //     const mainCfg = getModelConfig('main');
+    //     const lmTargets = [
+    //         summarizationCfg.identifier,
+    //         cloudMode ? null : mainCfg.identifier,
+    //         embeddingCfg.engine === 'local' ? null : embeddingCfg.identifier,
+    //     ].filter(Boolean);
 
-        const warmers = [
-            warmEmbeddingModel(embeddingCfg),
-        ];
+    //     const warmers = [
+    //         // Only warm LM Studio embedding model if not using local engine
+    //     ];
 
-        if (isSummaryFeatureEnabled()) {
-            warmers.push(warmModel(summarizationCfg));
-        }
-        if (!cloudMode) {
-            warmers.push(warmModel(mainCfg));
-        }
-        await Promise.allSettled(warmers);
+    //     if (embeddingCfg.engine !== 'local') {
+    //         warmers.push(warmEmbeddingModel(embeddingCfg));
+    //     }
 
-        if (lmTargets.length) {
-            await waitForModelsLoaded(lmTargets, 30000, 5000);
-        }
+    //     if (isSummaryFeatureEnabled()) {
+    //         warmers.push(warmModel(summarizationCfg));
+    //     }
+    //     if (!cloudMode) {
+    //         warmers.push(warmModel(mainCfg));
+    //     }
+    //     await Promise.allSettled(warmers);
 
-        console.log('[LM Studio Warm] All required models are loaded.');
-    } catch (err) {
-        console.error('[LM Studio Warm] Warm-up failed:', err?.message || err);
-        // Continue startup; LM Studio may already be loaded even if warm failed.
-    }
+    //     if (lmTargets.length) {
+    //         await waitForModelsLoaded(lmTargets, 30000, 5000);
+    //     }
 
-    if (cloudMode && requireModeHealthCheck()) {
-        try {
-            await generateCompletion({
-                prompt: 'Ping',
-                systemPrompt: 'You are a health check. Respond with OK.',
-                temperature: 0
-            });
-            console.log('[Cloud] Main model health check succeeded.');
-        } catch (err) {
-            console.error('[Cloud] Main model health check failed:', err?.message || err);
-        }
-    }
+    //     console.log('[LM Studio Warm] All required models are loaded.');
+    // } catch (err) {
+    //     console.error('[LM Studio Warm] Warm-up failed:', err?.message || err);
+    //     // Continue startup; LM Studio may already be loaded even if warm failed.
+    // }
+
+    // if (cloudMode && requireModeHealthCheck()) {
+    //     try {
+    //         await generateCompletion({
+    //             prompt: 'Ping',
+    //             systemPrompt: 'You are a health check. Respond with OK.',
+    //             temperature: 0
+    //         });
+    //         console.log('[Cloud] Main model health check succeeded.');
+    //     } catch (err) {
+    //         console.error('[Cloud] Main model health check failed:', err?.message || err);
+    //     }
+    // }
 
     if (isRagFeatureEnabled()) {
-        console.log('[Server] Starting automatic file scan and RAG indexing in background...');
-        void startIndexer({ reason: 'startup', background: true });
+        console.log('[Server] Skipping automatic file scan and RAG indexing in background...');
+        // void startIndexer({ reason: 'startup', background: true });
     } else {
         console.log('[Server] Skipping auto-index; RAG disabled in current mode.');
     }
@@ -957,12 +945,17 @@ app.patch('/engines/:engine', async (req, res) => {
             updateEngineEnabled('rag', enabled, { persist: true });
             appendLog(`RAG engine ${enabled ? 'enabled' : 'disabled'}`, enabled ? 'info' : 'warn');
         } else if (engine === 'summary') {
+            if (!enabled) {
+                await sqliteCacheManager.clearRollingSummaries();
+                appendLog('Summary disabled: rolling summaries cleared', 'warn');
+            }
             updateEngineEnabled('summary', enabled, { persist: true });
             appendLog(`Summary engine ${enabled ? 'enabled' : 'disabled'}`, enabled ? 'info' : 'warn');
         }
 
         refreshEngineStateFromConfig();
         res.json({ status: 'ok', engines: getEnginesSnapshot() });
+        void broadcastDashboardSnapshot();
     } catch (error) {
         appendLog(`Engine toggle failed (${engine}): ${error.message}`, 'error');
         res.status(500).json({ error: error.message });
@@ -1128,7 +1121,9 @@ app.post('/search', async (req, res) => {
         if (!isRagFeatureEnabled()) {
             return res.json({ results: [], disabled: true, message: 'RAG is disabled in the current runtime mode.' });
         }
+        console.log(`[Search] Starting RAG search for query: ${query}`);
         const results = await ragSearch(query, topK);
+        console.log(`[Search] RAG search returned ${results.length} results`);
         res.json({ results });
     } catch (error) {
         console.error('[Server] /search error:', error);
@@ -1347,7 +1342,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
     let ragResults = [];
     let sessionId = DEFAULT_CONVERSATION_ID;
         try {
-        const { messages = [], temperature = 0.2, /* model ignored intentionally */ stream = false, topK = 5, conversationId: requestedConversationId, ...rest } = req.body || {};
+        const { messages = [], temperature = 0.2, model: requestedModel, stream = false, topK = 5, conversationId: requestedConversationId, ...rest } = req.body || {};
         if (!Array.isArray(messages) || messages.length === 0) {
             return res.status(400).json({ error: 'messages array required' });
         }
@@ -1443,13 +1438,14 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         enhancedMessages.push({ role: 'user', content: userPrompt });
 
         // Call main model with enhanced context
-        // Always use configured main model; ignore client-supplied model to avoid loading unintended models
         const mainModel = getModelConfig('main').identifier;
+        const forceModel = getConfig().models?.force_model ?? false;
+        const modelToUse = forceModel ? mainModel : (requestedModel || mainModel);
         
         if (stream) {
             const lmStarted = Date.now();
             const chatRequestPayload = {
-                model: mainModel,
+                model: modelToUse,
                 messages: enhancedMessages,
                 temperature,
                 stream: true,
@@ -1551,7 +1547,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         const completionResponse = await generateCompletion(chatCompletionRequest);
         const nonStreamPayload = {
             ...chatCompletionRequest,
-            model: mainModel,
+            model: modelToUse,
         };
         
         // Extract content
@@ -1589,7 +1585,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             id: `chatcmpl-${Date.now()}`,
             object: 'chat.completion',
             created: Math.floor(Date.now() / 1000),
-            model: mainModel,
+            model: modelToUse,
             choices: [{
                 index: 0,
                 message: {

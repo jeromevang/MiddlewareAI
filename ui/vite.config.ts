@@ -12,6 +12,7 @@ const proxiedRoutes = [
   "/config",
   "/telemetry",
   "/sessions",
+  "/engines",
   "/reindex",
   "/reset",
   "/lmstudio",

@@ -12,11 +12,12 @@
     }
   },
   "models": {
+    "force_model": false,
     "embedding": {
       "engine": "local",
-      "model_name": "Xenova/bge-small-en-v1.5",
-      "identifier": "bge-small-en-v1.5",
-      "context_length": 2048
+      "model_name": "Xenova/all-MiniLM-L6-v2",
+      "identifier": "all-MiniLM-L6-v2",
+      "context_length": 512
     },
     "summarization": {
       "model_name": "TheBloke/OpenHermes-2.5-Mistral-7B-GGUF",
@@ -24,8 +25,8 @@
       "context_length": 8192
     },
     "main": {
-      "model_name": "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF",
-      "identifier": "unsloth/qwen3-coder-30b-a3b-instruct",
+      "model_name": "osmosis-ai/osmosis-mcp-4b",
+      "identifier": "osmosis-mcp-4b@q4_k_s",
       "context_length": 15055
     }
   },
@@ -64,11 +65,10 @@
       "enabled": true
     },
     "summary": {
-      "enabled": true
+      "enabled": false
     }
   },
   "sessions": {
     "default_retention_days": 30
   }
 }
-
