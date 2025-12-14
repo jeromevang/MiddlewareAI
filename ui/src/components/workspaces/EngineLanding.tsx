@@ -2,13 +2,14 @@ import { useNavigate } from "react-router-dom";
 import { useMutation } from "@tanstack/react-query";
 import clsx from "clsx";
 import type { ReactNode } from "react";
-import { Settings } from "lucide-react";
-import { updateEngine } from "../../lib/api";
+import { Settings, Play, RefreshCw, Zap } from "lucide-react";
+import { updateEngine, triggerAction } from "../../lib/api";
 import { useDashboardStore } from "../../state/dashboard-store";
 import type { EngineSnapshot } from "../../types/dashboard";
 import QuickStatsPanel from "../panels/QuickStatsPanel";
 import { ToggleSwitch } from "../ui/ToggleSwitch";
 import { Button } from "../ui/Button";
+import { SystemStatusBanner } from "../ui/SystemStatusBanner";
 
 interface TogglePayload {
   engine: "rag" | "summary";
@@ -53,6 +54,14 @@ export default function EngineLanding() {
     { label: "Pending", value: formatNumber(metricsSnapshot?.totalErrors) },
   ];
 
+  // Quick actions mutations
+  const reindexMutation = useMutation({
+    mutationFn: () => triggerAction("reindex"),
+    onSuccess: () => {
+      // Handle success
+    }
+  });
+
   const handleToggle = (engine: "rag" | "summary", enabled: boolean) => {
     if (!engines) return;
     if (!enabled && engine === "rag") {
@@ -70,56 +79,115 @@ export default function EngineLanding() {
   const pendingEngine = toggleMutation.variables?.engine;
 
   return (
-    <div className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-6">
-      <header className="space-y-2">
-        <p className="stat-label">Control deck</p>
-        <h1 className="text-3xl font-semibold text-white">Middleware Engines</h1>
-        <p className="text-white/70">
-          Toggle runtime features, inspect health, and jump into the summary workspace when deeper context work is needed.
-        </p>
-        <div className="flex flex-wrap gap-3">
-          <Button
-            variant="secondary"
-            icon={<Settings className="h-4 w-4" />}
-            onClick={() => navigate("/config")}
-          >
-            Model Config
-          </Button>
-        </div>
-      </header>
+    <div className="min-h-screen">
+      {/* System Status Banner */}
+      <SystemStatusBanner />
 
-      <section className="grid gap-6 lg:grid-cols-2">
-        <EngineCard
-          title="Retrieval Engine"
-          subtitle="RAG control"
-          description="Manages chunk indexing, FAISS search, and context stitching. Disable to run middleware without retrieval."
-          state={ragState}
-          disabled={status?.runtime?.cloud}
-          onToggle={(next) => handleToggle("rag", next)}
-          onNavigate={() => navigate("/summary")}
-          busy={pendingEngine === "rag" && toggleMutation.isPending}
-          stats={ragStats}
-          icon={<RagIcon />}
-          accent="cyan"
-        />
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-8 px-6 pb-10">
+        {/* Header Section */}
+        <header className="space-y-4" role="banner">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <p className="stat-label" id="page-subtitle">Control Center</p>
+              <h1 className="text-2xl sm:text-3xl font-semibold text-white" id="page-title">AI Middleware Dashboard</h1>
+              <p className="text-white/70 mt-2 text-sm sm:text-base" aria-describedby="page-title">
+                Monitor system health, control AI engines, and manage your RAG infrastructure.
+              </p>
+            </div>
 
-        <EngineCard
-          title="Rolling Summary"
-          subtitle="Compressor"
-          description="Maintains per-session memory and compresses context to fit long prompts. Use the workspace to inspect raw vs compressed prompts."
-          state={summaryState}
-          onToggle={(next) => handleToggle("summary", next)}
-          onNavigate={() => navigate("/summary")}
-          busy={pendingEngine === "summary" && toggleMutation.isPending}
-          stats={summaryStats}
-          icon={<SummaryIcon />}
-          accent="emerald"
-        />
-      </section>
+            {/* Quick Actions */}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                variant="primary"
+                size="sm"
+                icon={<Play className="h-4 w-4" />}
+                onClick={() => navigate("/config")}
+                className="touch-manipulation min-h-[44px]"
+              >
+                <span className="hidden sm:inline">Quick Setup</span>
+                <span className="sm:hidden">Setup</span>
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<Settings className="h-4 w-4" />}
+                onClick={() => navigate("/config")}
+                className="touch-manipulation min-h-[44px]"
+              >
+                <span className="hidden sm:inline">Full Config</span>
+                <span className="sm:hidden">Config</span>
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={<RefreshCw className="h-4 w-4" />}
+                onClick={() => window.location.reload()}
+                className="touch-manipulation min-h-[44px]"
+              >
+                Refresh
+              </Button>
+            </div>
+          </div>
+        </header>
 
-      <QuickStatsPanel />
+        {/* Engine Control Grid */}
+        <section className="grid gap-6 lg:grid-cols-2" aria-labelledby="engines-section" role="main">
+          <h2 id="engines-section" className="sr-only">Engine Controls</h2>
+          <EngineCard
+            title="Retrieval Engine"
+            subtitle="RAG System"
+            description="Manages semantic search, vector indexing, and context retrieval. Powers your AI's knowledge base."
+            state={ragState}
+            disabled={status?.runtime?.cloud}
+            onToggle={(next) => handleToggle("rag", next)}
+            onNavigate={() => navigate("/summary")}
+            busy={pendingEngine === "rag" && toggleMutation.isPending}
+            stats={ragStats}
+            icon={<RagIcon />}
+            accent="cyan"
+            actions={[
+              {
+                label: "Reindex",
+                icon: <RefreshCw className="h-3 w-3" />,
+                onClick: () => reindexMutation.mutate(),
+                loading: reindexMutation.isPending
+              }
+            ]}
+          />
+
+          <EngineCard
+            title="Rolling Summary"
+            subtitle="Memory System"
+            description="Maintains conversation context and compresses long chat histories for efficient AI responses."
+            state={summaryState}
+            onToggle={(next) => handleToggle("summary", next)}
+            onNavigate={() => navigate("/summary")}
+            busy={pendingEngine === "summary" && toggleMutation.isPending}
+            stats={summaryStats}
+            icon={<SummaryIcon />}
+            accent="emerald"
+          />
+        </section>
+
+        {/* Performance Overview */}
+        <section className="space-y-4">
+          <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+            <Zap className="h-5 w-5 text-accent-secondary" />
+            Performance Overview
+          </h2>
+          <QuickStatsPanel />
+        </section>
+      </div>
     </div>
   );
+}
+
+interface ActionButton {
+  label: string;
+  icon: ReactNode;
+  onClick: () => void;
+  loading?: boolean;
+  variant?: "primary" | "secondary" | "ghost" | "danger";
 }
 
 interface EngineCardProps {
@@ -134,6 +202,7 @@ interface EngineCardProps {
   stats: StatTile[];
   icon: ReactNode;
   accent?: "cyan" | "emerald";
+  actions?: ActionButton[];
 }
 
 interface StatTile {
@@ -153,6 +222,7 @@ function EngineCard({
   stats,
   icon,
   accent = "cyan",
+  actions = [],
 }: EngineCardProps) {
   const enabled = state?.enabled ?? false;
   const borderClass = accent === "emerald" ? "border-emerald-400/40" : "border-cyan-400/40";
@@ -161,11 +231,20 @@ function EngineCard({
   return (
     <article
       className={clsx(
-        "glass-card relative flex h-full cursor-pointer flex-col gap-6 overflow-hidden border bg-night-900/80 p-6 transition hover:border-white/40",
+        "glass-card relative flex h-full cursor-pointer flex-col gap-6 overflow-hidden border bg-night-900/80 p-6 transition hover:border-white/40 focus-within:ring-2 focus-within:ring-accent-secondary focus-within:ring-offset-2 focus-within:ring-offset-night-950",
         borderClass,
         glowClass
       )}
       onClick={onNavigate}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onNavigate();
+        }
+      }}
+      tabIndex={0}
+      role="button"
+      aria-label={`${title} - ${enabled ? 'Enabled' : 'Disabled'}. ${description}`}
     >
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-4">
@@ -187,12 +266,34 @@ function EngineCard({
             onCheckedChange={(next) => onToggle?.(next)}
             disabled={disabled}
             loading={busy}
-            label={enabled ? "Online" : "Standby"}
+            label={`${title} ${enabled ? "Online" : "Standby"}`}
+            aria-describedby={`${title.toLowerCase().replace(/\s+/g, '-')}-description`}
           />
         </div>
       </div>
 
-      <p className="text-white/70">{description}</p>
+      <p className="text-white/70" id={`${title.toLowerCase().replace(/\s+/g, '-')}-description`}>{description}</p>
+
+      {/* Quick Actions */}
+      {actions.length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {actions.map((action, index) => (
+            <Button
+              key={index}
+              variant={action.variant || "secondary"}
+              size="sm"
+              icon={action.icon}
+              onClick={(e) => {
+                e.stopPropagation();
+                action.onClick();
+              }}
+              loading={action.loading}
+            >
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2">
         {stats.map((tile) => (

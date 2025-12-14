@@ -24,7 +24,7 @@ const http = require('http');
 const crypto = require('crypto');
 const WebSocketLib = require('ws');
 const { WebSocketServer } = WebSocketLib;
-const { embedText, summarize, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth } = require('./lmstudio_client.js');
+const { embedText, summarize, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, initializeLMStudioWithModels } = require('./lmstudio_client.js');
 const { SQLiteCacheManager } = require('./sqlite_cache.js');
 const { FAISSIndexManager } = require('./faiss_storage.js');
 const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js');
@@ -134,8 +134,9 @@ let CONTEXT_BUDGET_TOKENS = Math.floor(40000 * 0.7);
 getModelContextLength().then(contextLength => {
     MODEL_CONTEXT_LENGTH = contextLength;
     CONTEXT_MAX_TOKENS = Math.min(processingConfig.max_context_tokens || MODEL_CONTEXT_LENGTH, MODEL_CONTEXT_LENGTH);
-    CONTEXT_BUDGET_TOKENS = Math.floor(CONTEXT_MAX_TOKENS * CONTEXT_BUDGET_RATIO);
-    console.log(`[Context] Updated context budget: ${CONTEXT_BUDGET_TOKENS} tokens (${CONTEXT_BUDGET_RATIO * 100}% of ${CONTEXT_MAX_TOKENS})`);
+    const budgetRatio = processingConfig.context_budget_ratio || 0.7;
+    CONTEXT_BUDGET_TOKENS = Math.floor(CONTEXT_MAX_TOKENS * budgetRatio);
+    console.log(`[Context] Updated context budget: ${CONTEXT_BUDGET_TOKENS} tokens (${budgetRatio * 100}% of ${CONTEXT_MAX_TOKENS})`);
 }).catch(error => {
     console.error('[Context] Failed to initialize model context length:', error);
 });
@@ -152,8 +153,6 @@ async function refreshModelContext() {
         console.warn('[Context] Failed to refresh model context:', error);
     }
 }
-const CONTEXT_BUDGET_RATIO = processingConfig.context_budget_ratio || 0.7;
-const CONTEXT_BUDGET_TOKENS = Math.floor(CONTEXT_MAX_TOKENS * CONTEXT_BUDGET_RATIO);
 const REQUEST_BUFFER_LIMIT = 100;
 const LOG_BUFFER_LIMIT = 200;
 const DASHBOARD_PUSH_INTERVAL_MS = Number(process.env.DASHBOARD_PUSH_INTERVAL_MS || 4000);
@@ -1152,6 +1151,17 @@ app.post('/lmstudio/server/stop', async (req, res) => {
     }
 });
 
+app.post('/lmstudio/models/load-required', async (req, res) => {
+    try {
+        const result = await ensureRequiredModelsLoaded();
+        appendLog('Required models loaded via API', 'info');
+        res.json({ status: 'ok', message: 'Required models loaded successfully' });
+    } catch (error) {
+        console.error('[API] Failed to load required models:', error.message);
+        res.status(500).json({ error: 'Failed to load required models', details: error.message });
+    }
+});
+
 app.patch('/processing/summary-keep', (req, res) => {
     const { keepRecentTurns } = req.body || {};
     const parsed = Number(keepRecentTurns);
@@ -1931,6 +1941,17 @@ function setupWebsocketServer(httpServer) {
 async function start() {
     try {
         await ensureReady();
+
+        // Initialize LM Studio and load required models
+        console.log('[Server] Initializing LM Studio...');
+        try {
+            await initializeLMStudioWithModels();
+            console.log('[Server] LM Studio initialization successful');
+        } catch (error) {
+            console.warn('[Server] LM Studio initialization failed, continuing without models:', error.message);
+            console.warn('[Server] You may need to start LM Studio manually and load models');
+        }
+
         const config = getConfig();
         const port = (config.server && config.server.port) || 3001;
         const httpServer = http.createServer(app);

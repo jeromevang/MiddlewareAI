@@ -205,6 +205,18 @@ export async function stopLMStudioServer(): Promise<{
   });
 }
 
+export async function loadRequiredModels(): Promise<{
+  status: string;
+  message: string;
+}> {
+  return request<{
+    status: string;
+    message: string;
+  }>("/lmstudio/models/load-required", {
+    method: "POST",
+  });
+}
+
 export async function refreshModelContext(): Promise<{
   status: string;
   context: {

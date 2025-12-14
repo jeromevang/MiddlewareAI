@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, listLoadedModels, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer } from "../../lib/api";
+import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, listLoadedModels, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels } from "../../lib/api";
 import { useDashboardStore } from "../../state/dashboard-store";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
@@ -186,9 +186,20 @@ export default function ModelConfigPanel() {
 
         try {
           await startServerMutation.mutateAsync();
-          // Wait a bit for server to fully start
-          setTimeout(() => {
-            if (mounted) checkHealth();
+          // Wait for server to start
+          setTimeout(async () => {
+            if (!mounted) return;
+            await checkHealth();
+
+            // If server is now ready but no models are loaded, try to load them
+            if (lmStudioHealth.ready && lmStudioHealth.models_loaded === 0) {
+              console.log("Server ready but no models loaded, attempting to load models...");
+              try {
+                await loadModelsMutation.mutateAsync();
+              } catch (error) {
+                console.warn("Auto model loading failed:", error);
+              }
+            }
           }, 3000);
         } catch (error) {
           // Error popup is handled by the mutation
@@ -456,6 +467,24 @@ export default function ModelConfigPanel() {
     },
     onError: (error: any) => {
       setMessage(`❌ Failed to stop LM Studio server: ${error.message || error}`);
+      setTimeout(() => setMessage(""), 5000);
+    },
+  });
+
+  const loadModelsMutation = useMutation({
+    mutationFn: () => loadRequiredModels(),
+    onSuccess: () => {
+      setMessage("✅ Required models loaded successfully");
+      // Refresh health status and model list after loading
+      setTimeout(() => {
+        healthCheckMutation.mutate();
+        listModelsMutation.mutate();
+        refreshContextMutation.mutate();
+      }, 2000);
+      setTimeout(() => setMessage(""), 3000);
+    },
+    onError: (error: any) => {
+      setMessage(`❌ Failed to load required models: ${error.message || error}`);
       setTimeout(() => setMessage(""), 5000);
     },
   });
@@ -976,6 +1005,14 @@ export default function ModelConfigPanel() {
                 disabled={!lmStudioHealth.ready}
               >
                 List Loaded Models
+              </Button>
+              <Button
+                onClick={() => loadModelsMutation.mutate()}
+                loading={loadModelsMutation.isPending}
+                variant="primary"
+                disabled={!lmStudioHealth.ready}
+              >
+                Load Required Models
               </Button>
               <Button
                 onClick={() => refreshContextMutation.mutate()}

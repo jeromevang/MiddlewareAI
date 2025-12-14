@@ -334,6 +334,53 @@ async function checkLMStudioHealth() {
     }
 }
 
+async function ensureRequiredModelsLoaded() {
+    const { getModelConfig } = require('../config.js');
+
+    const requiredModels = [
+        getModelConfig('main'),
+        getModelConfig('summarization')
+    ].filter(model => model && model.identifier);
+
+    console.log('[LM Studio] Ensuring required models are loaded:', requiredModels.map(m => m.identifier));
+
+    for (const model of requiredModels) {
+        try {
+            console.log(`[LM Studio] Loading model: ${model.identifier}`);
+            await ensureModelLoaded(model);
+            console.log(`[LM Studio] Successfully loaded model: ${model.identifier}`);
+        } catch (error) {
+            console.error(`[LM Studio] Failed to load model ${model.identifier}:`, error.message);
+            throw error;
+        }
+    }
+
+    console.log('[LM Studio] All required models loaded successfully');
+}
+
+async function initializeLMStudioWithModels() {
+    try {
+        console.log('[LM Studio] Initializing LM Studio and loading models...');
+
+        // First, ensure server is running
+        const health = await checkLMStudioHealth();
+        if (!health.ready) {
+            console.log('[LM Studio] Server not ready, starting...');
+            await startLMStudioServer();
+            await waitForServerReady();
+        }
+
+        // Then load required models
+        await ensureRequiredModelsLoaded();
+
+        console.log('[LM Studio] Initialization complete');
+        return { success: true };
+    } catch (error) {
+        console.error('[LM Studio] Initialization failed:', error.message);
+        throw error;
+    }
+}
+
 async function waitForServerReady(timeoutMs = 30000) {
     const startTime = Date.now();
 
@@ -373,4 +420,6 @@ module.exports = {
     stopLMStudioServer,
     checkLMStudioHealth,
     waitForServerReady,
+    ensureRequiredModelsLoaded,
+    initializeLMStudioWithModels,
 };

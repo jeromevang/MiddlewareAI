@@ -6,6 +6,7 @@ import { useDashboardStore } from "./state/dashboard-store";
 import EngineLanding from "./components/workspaces/EngineLanding";
 import SummaryWorkspace from "./components/workspaces/SummaryWorkspace";
 import ConfigWorkspace from "./components/workspaces/ConfigWorkspace";
+import { CommandPalette } from "./components/ui/CommandPalette";
 
 const RAW_BASE = import.meta.env.BASE_URL || "/";
 const ROUTER_BASENAME = RAW_BASE === "/" ? undefined : RAW_BASE.replace(/\/$/, "");
@@ -14,8 +15,28 @@ function App() {
   const setSnapshot = useDashboardStore((s) => s.setSnapshot);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [bootstrapped, setBootstrapped] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
 
   useDashboardSocket();
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Command palette (Ctrl+K or Cmd+K)
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        setCommandPaletteOpen(true);
+      }
+
+      // Close command palette with Escape
+      if (e.key === 'Escape' && commandPaletteOpen) {
+        setCommandPaletteOpen(false);
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [commandPaletteOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -71,6 +92,12 @@ function App() {
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
+
+        {/* Global Command Palette */}
+        <CommandPalette
+          isOpen={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+        />
       </div>
     </BrowserRouter>
   );
