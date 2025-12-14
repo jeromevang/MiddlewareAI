@@ -3,8 +3,9 @@
 const { embedText: embedTextLMStudio } = require('./lmstudio/embeddings.js');
 const { summarize, generateCompletion, proxyChatCompletion } = require('./lmstudio/chat.js');
 const { warmModel, warmEmbeddingModel, waitForModelsLoaded, openModel } = require('./lmstudio/model_manager.js');
-const { embedTextLocal } = require('./embedder_local.js');
+const { embedTextLocal, embedTextCloud } = require('./embedder_local.js');
 const { getModelConfig } = require('./config.js');
+const { isCloudMode } = require('./runtime.js');
 
 async function embedText(text) {
     const embeddingCfg = getModelConfig('embedding');
@@ -16,6 +17,8 @@ async function embedText(text) {
             console.error(`[Local Embedder] Failed to generate embedding:`, error.message || error);
             return { embeddingVector: null, failed: true, error: error.message || String(error) };
         }
+    } else if (embeddingCfg.engine === 'cloud') {
+        return embedTextCloud(text);
     } else {
         return embedTextLMStudio(text);
     }

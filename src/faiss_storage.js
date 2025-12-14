@@ -15,13 +15,23 @@ const faiss = require('faiss-node');
 const { Index, writeIndex, writeIndexSync } = faiss;
 const readIndex = Index.read;
 const crypto = require('crypto');
-const { getStorageConfig } = require('./config.js');
+const { getStorageConfig, getModelConfig } = require('./config.js');
 
 // Configuration
 const storageConfig = getStorageConfig();
 const FAISS_INDEX_PATH = storageConfig.faiss_index_path || './vector_db/embeddings.faiss';
 const FAISS_IDS_PATH = `${FAISS_INDEX_PATH}.ids.json`;
-const EMBEDDING_DIMENSION = storageConfig.embedding_dimension || 384;
+
+// Dynamic embedding dimension based on model
+function getEmbeddingDimension() {
+    const embeddingCfg = getModelConfig('embedding');
+    // Google AI Studio text-embedding-004 uses 768 dimensions
+    if (embeddingCfg.engine === 'cloud' && embeddingCfg.model_name?.includes('text-embedding-004')) {
+        return 768;
+    }
+    // Default to configured dimension or 384 for local models
+    return storageConfig.embedding_dimension || 384;
+}
 
 function ensureDirectoryFor(filePath) {
     const targetDir = path.dirname(filePath);
@@ -82,10 +92,11 @@ class FAISSIndexManager {
                 const loadedIndex = readIndex(FAISS_INDEX_PATH);
                 this.index = loadedIndex;
                 this.loaded = true;
-                this.dim = this.index?.d || EMBEDDING_DIMENSION;
+                const expectedDim = getEmbeddingDimension();
+                this.dim = this.index?.d || expectedDim;
 
-                if (this.dim !== EMBEDDING_DIMENSION) {
-                    logWarning(`FAISS index dimension ${this.dim} disagrees with configured ${EMBEDDING_DIMENSION}; rebuilding.`);
+                if (this.dim !== expectedDim) {
+                    logWarning(`FAISS index dimension ${this.dim} disagrees with configured ${expectedDim}; rebuilding.`);
                     await this.resetIndex('dimension mismatch');
                     return;
                 }
@@ -146,7 +157,7 @@ class FAISSIndexManager {
                 let faissVector = FAISSIndexManager.normalizeEmbeddingVector(embeddingVector);
                 normalizedLen = faissVector.length;
 
-                const targetDim = EMBEDDING_DIMENSION;
+                const targetDim = getEmbeddingDimension();
                 faissVector = this.alignVectorToDim(faissVector, targetDim);
 
                 if (!this.index || this.dim !== targetDim) {
@@ -168,7 +179,7 @@ class FAISSIndexManager {
                 logInfo(`Embedding for chunk ${chunkId} added successfully.`);
             } catch (error) {
                 logError(
-                    `Failed to add embedding to FAISS index (origLen=${inputLen}, normalizedLen=${normalizedLen}, targetDim=${this.dim || EMBEDDING_DIMENSION}):`,
+                    `Failed to add embedding to FAISS index (origLen=${inputLen}, normalizedLen=${normalizedLen}, targetDim=${this.dim || getEmbeddingDimension()}):`,
                     error
                 );
                 // Swallow the error to avoid crashing indexing; caller can choose to continue.
@@ -184,7 +195,7 @@ class FAISSIndexManager {
     async rebuild(entries) {
         try {
             ensureDirectoryFor(FAISS_INDEX_PATH);
-            const dim = EMBEDDING_DIMENSION;
+            const dim = getEmbeddingDimension();
             this.index = new Index(dim, 'float');
             this.dim = dim;
             this.idMap = [];
@@ -228,8 +239,9 @@ class FAISSIndexManager {
                 logInfo(`Searching for ${topK} most similar chunks...`);
 
                 // Convert vector to Float32Array
-                const faissVector = this.alignVectorToDim(embeddingVector, EMBEDDING_DIMENSION);
-                if (this.dim !== EMBEDDING_DIMENSION) {
+                const expectedDim = getEmbeddingDimension();
+                const faissVector = this.alignVectorToDim(embeddingVector, expectedDim);
+                if (this.dim !== expectedDim) {
                     await this.resetIndex('query dimension alignment');
                 }
 
@@ -303,9 +315,10 @@ class FAISSIndexManager {
 
     async resetIndex(reason = 'reset') {
         ensureDirectoryFor(FAISS_INDEX_PATH);
-        this.index = new Index(EMBEDDING_DIMENSION, 'float');
+        const dim = getEmbeddingDimension();
+        this.index = new Index(dim, 'float');
         this.idMap = [];
-        this.dim = EMBEDDING_DIMENSION;
+        this.dim = dim;
         await this.persistIndex();
         logInfo(`FAISS index reset (${reason}).`);
     }

@@ -79,11 +79,11 @@ export default function EngineLanding() {
         </p>
         <div className="flex flex-wrap gap-3">
           <Button
-            variant="danger"
+            variant="secondary"
             icon={<Settings className="h-4 w-4" />}
-            onClick={() => navigate("/maintenance")}
+            onClick={() => navigate("/config")}
           >
-            Maintenance
+            Model Config
           </Button>
         </div>
       </header>

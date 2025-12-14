@@ -7,6 +7,8 @@
 
 const { pipeline } = require('@xenova/transformers');
 const { getModelConfig } = require('./config.js');
+const { getCloudConfig } = require('./runtime.js');
+const axios = require('axios');
 
 let embedderPromise = null;
 
@@ -59,5 +61,54 @@ async function embedTextLocal(text, modelName) {
     return vector;
 }
 
-module.exports = { embedTextLocal };
+/**
+ * Generate an embedding vector using Google AI Studio (cloud).
+ * Returns a Float32Array.
+ */
+async function embedTextCloud(text) {
+    if (!text) return [];
+
+    const cloudCfg = getCloudConfig();
+    const embeddingCfg = getModelConfig('embedding');
+
+    if (!embeddingCfg.api_key) {
+        throw new Error('Google AI Studio API key not configured');
+    }
+
+    try {
+        const response = await axios.post(
+            'https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent',
+            {
+                content: {
+                    parts: [{ text: text }]
+                }
+            },
+            {
+                params: {
+                    key: embeddingCfg.api_key
+                },
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+
+        const embedding = response.data.embedding?.values;
+        if (!embedding || !Array.isArray(embedding)) {
+            throw new Error('Invalid embedding response from Google AI Studio');
+        }
+
+        // Validate the vector for non-finite values
+        if (embedding.some(v => !Number.isFinite(v))) {
+            throw new Error('Embedding vector contains non-finite values');
+        }
+
+        return embedding;
+    } catch (error) {
+        console.error(`[Cloud Embedder] Failed to generate embedding:`, error.message || error);
+        throw error;
+    }
+}
+
+module.exports = { embedTextLocal, embedTextCloud };
 

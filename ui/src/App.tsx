@@ -5,7 +5,7 @@ import { useDashboardSocket } from "./hooks/use-dashboard-socket";
 import { useDashboardStore } from "./state/dashboard-store";
 import EngineLanding from "./components/workspaces/EngineLanding";
 import SummaryWorkspace from "./components/workspaces/SummaryWorkspace";
-import MaintenancePage from "./components/workspaces/MaintenancePage";
+import ConfigWorkspace from "./components/workspaces/ConfigWorkspace";
 
 const RAW_BASE = import.meta.env.BASE_URL || "/";
 const ROUTER_BASENAME = RAW_BASE === "/" ? undefined : RAW_BASE.replace(/\/$/, "");
@@ -67,7 +67,7 @@ function App() {
           <Routes>
             <Route path="/" element={<EngineLanding />} />
             <Route path="/summary" element={<SummaryWorkspace />} />
-            <Route path="/maintenance" element={<MaintenancePage />} />
+            <Route path="/config" element={<ConfigWorkspace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
