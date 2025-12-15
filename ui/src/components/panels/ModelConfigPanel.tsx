@@ -44,12 +44,14 @@ export default function ModelConfigPanel() {
   const { data: availableModelsData } = useQuery({
     queryKey: ['availableModels'],
     queryFn: async () => {
+      console.log('[ModelConfigPanel] Fetching available models');
       const response = await fetch('/models/available');
       if (!response.ok) throw new Error('Failed to fetch available models');
-      return response.json();
+      const data = await response.json();
+      console.log('[ModelConfigPanel] Available models fetched:', data.models?.length || 0, 'models');
+      return data;
     },
     staleTime: 30000, // 30 seconds
-    enabled: quality === 'custom', // Only fetch when custom preset is selected
   });
 
   // Fetch current config

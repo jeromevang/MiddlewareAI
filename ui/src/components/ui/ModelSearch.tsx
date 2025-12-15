@@ -38,16 +38,21 @@ export function ModelSearch({
   // Search mutation
   const searchMutation = useMutation({
     mutationFn: async (q: string) => {
+      console.log('[ModelSearch] Searching with source:', source, 'query:', q);
       if (source === 'huggingface') {
         return await searchHuggingFace(q, { role, limit: 15 });
       } else {
         return await discoverLMStudioModels(q, 15);
       }
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log('[ModelSearch] Search successful, data:', data);
       setSelectedHFModel(null);
       setSelectedLMModel(null);
       setSelectedQuant(null);
+    },
+    onError: (error) => {
+      console.log('[ModelSearch] Search failed:', error);
     },
   });
 
@@ -82,8 +87,15 @@ export function ModelSearch({
   });
 
   const handleSearch = () => {
+    console.log('[ModelSearch] handleSearch called, query:', query.trim(), 'source:', source);
     if (query.trim()) {
       searchMutation.mutate(query.trim());
+    } else {
+      // For LM Studio, allow empty search to get all models
+      if (source === 'lmstudio') {
+        console.log('[ModelSearch] Empty query for LM Studio, searching anyway');
+        searchMutation.mutate('');
+      }
     }
   };
 
@@ -133,7 +145,7 @@ export function ModelSearch({
         />
         <button
           onClick={handleSearch}
-          disabled={searchMutation.isPending || !query.trim()}
+          disabled={searchMutation.isPending || (source === 'huggingface' && !query.trim())}
           className={clsx(
             "px-4 py-2 rounded-lg font-medium text-sm transition-all",
             "bg-accent-primary/20 text-accent-primary border border-accent-primary/40",

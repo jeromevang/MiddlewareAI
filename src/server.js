@@ -1916,9 +1916,11 @@ app.post('/models/validate', async (req, res) => {
  * GET /models/available - Get all downloaded/synced models for dropdowns
  */
 app.get('/models/available', async (req, res) => {
+    console.log('[API] /models/available called');
     try {
         const { syncModels } = require('./lmstudio/model_sync.js');
         const { models } = await syncModels();
+        console.log('[API] /models/available returning', models.length, 'models');
         
         // Format for frontend consumption
         const formatted = models.map(m => ({
@@ -2322,12 +2324,14 @@ const lmRegistryService = require('./lmstudio_registry_service.js');
  * Query params: q (search query), limit
  */
 app.get('/models/lmstudio/discover', async (req, res) => {
+    console.log('[API] /models/lmstudio/discover called with query:', req.query);
     try {
         const { q: query, limit = 20 } = req.query;
         const models = await lmRegistryService.discoverModels({
             query: query || '',
             limit: parseInt(limit, 10)
         });
+        console.log('[API] LM Studio discovery returned', models.length, 'models');
 
         res.json({
             status: 'ok',

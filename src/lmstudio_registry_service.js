@@ -55,7 +55,7 @@ async function discoverModels(options = {}) {
   } = options;
 
   try {
-    console.log('[LMStudio Registry] Discovering models...');
+    console.log('[LMStudio Registry] Discovering models with options:', options);
 
     const cliPath = getLMStudioCLIPath();
     const args = [];

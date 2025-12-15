@@ -1007,11 +1007,14 @@ export async function checkHFModelDownloaded(modelId: string): Promise<{
  * Discover models from LM Studio's built-in registry
  */
 export async function discoverLMStudioModels(query?: string, limit?: number): Promise<LMStudioDiscoverResponse> {
+  console.log('[API] discoverLMStudioModels called with:', { query, limit });
   const params = new URLSearchParams();
   if (query) params.set('q', query);
   if (limit) params.set('limit', limit.toString());
 
-  return request<LMStudioDiscoverResponse>(`/models/lmstudio/discover?${params.toString()}`);
+  const result = await request<LMStudioDiscoverResponse>(`/models/lmstudio/discover?${params.toString()}`);
+  console.log('[API] discoverLMStudioModels result:', result);
+  return result;
 }
 
 /**
