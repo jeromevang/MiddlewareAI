@@ -121,51 +121,47 @@ async function unloadBootstrapModel(modelId) {
 }
 
 /**
- * Get list of downloaded models from LM Studio
+ * Get list of downloaded models from LM Studio using model_sync
+ * This ensures we use exact modelKeys for consistency
  */
 async function getDownloadedModels() {
     try {
-        // Try CLI first
-        const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" ls`, { timeout: 30000 });
-        const lines = stdout.trim().split('\n').filter(line => line.trim());
+        // Use model_sync service for canonical modelKey format
+        const { syncModels } = require('./lmstudio/model_sync.js');
+        const { models } = await syncModels(true); // Force refresh
         
-        // Parse the lms ls output properly
-        // Skip header lines like "You have X models..." and "LLM  PARAMS  ARCH  SIZE"
-        const models = [];
-        for (const line of lines) {
-            const trimmed = line.trim();
-            
-            // Skip summary/header lines
-            if (trimmed.startsWith('You have') || 
-                trimmed.startsWith('LLM') ||
-                trimmed.startsWith('EMBEDDING') ||
-                trimmed.includes('taking up') ||
-                trimmed.includes('PARAMS') ||
-                trimmed.length < 5) {
-                continue;
-            }
-            
-            // Extract model name (first column, before the spaces that separate params)
-            // Format: "model-name    7B    Llama    4.08 GB"
-            const modelName = trimmed.split(/\s{2,}/)[0].trim();
-            
-            if (modelName && modelName.length > 0) {
-                models.push({
-                    id: modelName,
-                    path: modelName,
-                    name: modelName
-                });
-            }
-        }
-        
-        return models;
+        // Return in expected format for bootstrap processing
+        return models.map(m => ({
+            id: m.modelKey,            // Use exact modelKey
+            path: m.modelKey,
+            name: m.displayName || m.modelKey,
+            // Include additional metadata from sync
+            sizeGB: m.sizeGB,
+            paramsString: m.paramsString,
+            trainedForToolUse: m.trainedForToolUse,
+            function: m.function,      // 'main', 'summarizer', or 'embedder'
+            tiers: m.tiers,            // Pre-computed tiers from model_sync
+            architecture: m.architecture,
+            maxContextLength: m.maxContextLength
+        }));
     } catch (error) {
-        // Fallback to API
+        console.error('[Bootstrap] Failed to get models via model_sync:', error.message);
+        
+        // Fallback to CLI if model_sync fails
         try {
-            const response = await axios.get(`${LM_STUDIO_URL}/api/v0/models`, { timeout: 10000 });
-            return response.data?.data || response.data || [];
-        } catch (apiError) {
-            console.error('[Bootstrap] Failed to get models:', apiError.message);
+            const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" ls --json`, { timeout: 30000 });
+            const rawModels = JSON.parse(stdout);
+            return rawModels.map(m => ({
+                id: m.modelKey,
+                path: m.modelKey,
+                name: m.displayName || m.modelKey,
+                sizeGB: m.sizeBytes / (1024 * 1024 * 1024),
+                paramsString: m.paramsString,
+                trainedForToolUse: m.trainedForToolUse,
+                architecture: m.architecture
+            }));
+        } catch (fallbackError) {
+            console.error('[Bootstrap] Fallback also failed:', fallbackError.message);
             return [];
         }
     }
@@ -215,17 +211,44 @@ Respond with ONLY valid JSON:
 }
 
 /**
- * Fallback heuristic-based model categorization
+ * Heuristic-based model categorization
+ * Uses pre-computed tiers from model_sync when available
  */
 function analyzeModelHeuristic(modelInfo) {
+    // If model_sync already computed tiers, use them directly
+    if (modelInfo.tiers && modelInfo.tiers.length > 0) {
+        // Use the highest tier the model fits in
+        const tier = modelInfo.tiers.includes('high') ? 'high' :
+                     modelInfo.tiers.includes('medium') ? 'medium' : 'low';
+        
+        const reason = modelInfo.trainedForToolUse 
+            ? `${modelInfo.paramsString || 'Unknown'} model with tool use (${modelInfo.function})`
+            : `${modelInfo.paramsString || 'Unknown'} model (${modelInfo.function})`;
+            
+        return { tier, confidence: 0.9, reason };
+    }
+    
+    // Fallback to name-based heuristics if no pre-computed data
     const name = (modelInfo.name || modelInfo.id || '').toLowerCase();
     
-    // Size-based heuristics
+    // Use sizeGB if available
+    if (modelInfo.sizeGB) {
+        const sizeGB = modelInfo.sizeGB;
+        if (sizeGB > 10) {
+            return { tier: 'high', confidence: 0.85, reason: `Large model (${sizeGB.toFixed(1)}GB)` };
+        } else if (sizeGB > 3) {
+            return { tier: 'medium', confidence: 0.85, reason: `Medium model (${sizeGB.toFixed(1)}GB)` };
+        } else {
+            return { tier: 'low', confidence: 0.85, reason: `Small model (${sizeGB.toFixed(1)}GB)` };
+        }
+    }
+    
+    // Size-based heuristics from name
     if (name.includes('70b') || name.includes('72b') || name.includes('65b')) {
         return { tier: 'high', confidence: 0.9, reason: 'Very large model (65B+)' };
     }
-    if (name.includes('7b') || name.includes('8b') || name.includes('13b')) {
-        return { tier: 'high', confidence: 0.8, reason: 'Large model (7B-13B)' };
+    if (name.includes('7b') || name.includes('8b') || name.includes('13b') || name.includes('14b')) {
+        return { tier: 'high', confidence: 0.8, reason: 'Large model (7B-14B)' };
     }
     if (name.includes('3b') || name.includes('4b') || name.includes('6b')) {
         return { tier: 'medium', confidence: 0.8, reason: 'Medium model (3B-6B)' };
@@ -248,76 +271,118 @@ function analyzeModelHeuristic(modelInfo) {
 
 /**
  * Update models.json presets with analyzed models
+ * Only adds main models (with tool use) to mainOptions
+ * Uses exact modelKey from LM Studio
  */
 async function updatePresetsWithModels(analyzedModels, modelDbService) {
     updateBootstrapStatus({ message: 'Updating presets...', progress: 80 });
     
     const db = modelDbService.loadModelDatabase();
     
-    // Clear existing mainOptions (we'll repopulate)
-    const highModels = [];
-    const mediumModels = [];
-    const lowModels = [];
+    // Categorize by tier AND function
+    const highMainModels = [];
+    const mediumMainModels = [];
+    const lowMainModels = [];
     
     for (const { model, analysis } of analyzedModels) {
-        const modelId = model.id || model.path;
-        if (!modelId) continue;
+        // Use exact modelKey (not path or name)
+        const modelKey = model.id;
+        if (!modelKey) continue;
         
-        // Add to modelSpecs
-        if (!db.modelSpecs[modelId]) {
-            db.modelSpecs[modelId] = {
-                id: modelId,
-                name: model.name || modelId.split('/').pop(),
-                author: modelId.split('/')[0] || 'Unknown',
-                type: 'main',
+        // Skip embedding models for mainOptions
+        if (model.function === 'embedder') {
+            console.log(`[Bootstrap] Skipping embedder: ${modelKey}`);
+            continue;
+        }
+        
+        // Add/update in modelSpecs with exact modelKey
+        if (!db.modelSpecs[modelKey]) {
+            db.modelSpecs[modelKey] = {
+                id: modelKey,
+                name: model.name || modelKey,
+                author: modelKey.split('/')[0] || 'Unknown',
+                type: model.function || 'main',
                 engine: 'lmstudio',
                 available: true,
                 description: analysis.reason || 'Discovered model',
-                requirements: { vram: 'Unknown', recommendedHardware: 'Unknown' },
-                performance: { speed: 'Unknown', reasoning: 'Unknown', coding: 'Unknown', memory: 'Unknown' },
-                capabilities: ['General'],
-                tags: ['discovered', analysis.tier]
+                sizeGB: model.sizeGB,
+                paramsString: model.paramsString,
+                trainedForToolUse: model.trainedForToolUse || false,
+                maxContextLength: model.maxContextLength,
+                requirements: { 
+                    vram: model.sizeGB ? `${model.sizeGB.toFixed(1)}GB` : 'Unknown',
+                    recommendedHardware: analysis.tier === 'high' ? 'RTX 4080+' : 
+                                        analysis.tier === 'medium' ? 'RTX 3080+' : 'RTX 3060+'
+                },
+                capabilities: model.trainedForToolUse ? ['Tool Use', 'Coding'] : ['General', 'Coding'],
+                tags: ['discovered', analysis.tier, model.function]
             };
         } else {
-            db.modelSpecs[modelId].available = true;
+            db.modelSpecs[modelKey].available = true;
+            db.modelSpecs[modelKey].sizeGB = model.sizeGB;
+            db.modelSpecs[modelKey].trainedForToolUse = model.trainedForToolUse;
         }
         
-        // Categorize by tier
-        if (analysis.tier === 'high' && analysis.confidence >= 0.5) {
-            highModels.push(modelId);
-        } else if (analysis.tier === 'medium' && analysis.confidence >= 0.5) {
-            mediumModels.push(modelId);
-        } else if (analysis.tier === 'low' && analysis.confidence >= 0.5) {
-            lowModels.push(modelId);
-        } else {
-            // Low confidence - add to medium as default
-            mediumModels.push(modelId);
+        // Only main/summarizer models go into mainOptions
+        // Prefer models with tool use for main, but include all LLMs
+        if (model.function !== 'embedder') {
+            // Use pre-computed tiers from model_sync if available
+            const tiers = model.tiers || [];
+            
+            if (tiers.includes('high') || analysis.tier === 'high') {
+                highMainModels.push(modelKey);
+            }
+            if (tiers.includes('medium') || analysis.tier === 'medium') {
+                mediumMainModels.push(modelKey);
+            }
+            if (tiers.includes('low') || analysis.tier === 'low') {
+                lowMainModels.push(modelKey);
+            }
         }
     }
     
-    // Update presets (keep top 5 per tier, add new ones)
-    if (highModels.length > 0) {
+    // Sort by: tool use first, then by size (smaller first for each tier)
+    const sortModels = (models, analyzed) => {
+        return [...new Set(models)].sort((a, b) => {
+            const aModel = analyzed.find(x => x.model.id === a)?.model;
+            const bModel = analyzed.find(x => x.model.id === b)?.model;
+            
+            // Tool use models first
+            if (aModel?.trainedForToolUse && !bModel?.trainedForToolUse) return -1;
+            if (!aModel?.trainedForToolUse && bModel?.trainedForToolUse) return 1;
+            
+            // Then by size (smaller first)
+            return (aModel?.sizeGB || 0) - (bModel?.sizeGB || 0);
+        });
+    };
+    
+    // Update presets with sorted models (max 10 per tier)
+    if (highMainModels.length > 0) {
+        const sorted = sortModels(highMainModels, analyzedModels);
         const existing = db.presets.high.mainOptions || [];
-        const combined = [...new Set([...existing, ...highModels])];
+        // Keep existing that are still valid, add new ones
+        const combined = [...new Set([...existing.filter(id => sorted.includes(id)), ...sorted])];
         db.presets.high.mainOptions = combined.slice(0, 10);
     }
     
-    if (mediumModels.length > 0) {
+    if (mediumMainModels.length > 0) {
+        const sorted = sortModels(mediumMainModels, analyzedModels);
         const existing = db.presets.medium.mainOptions || [];
-        const combined = [...new Set([...existing, ...mediumModels])];
+        const combined = [...new Set([...existing.filter(id => sorted.includes(id)), ...sorted])];
         db.presets.medium.mainOptions = combined.slice(0, 10);
     }
     
-    if (lowModels.length > 0) {
+    if (lowMainModels.length > 0) {
+        const sorted = sortModels(lowMainModels, analyzedModels);
         const existing = db.presets.low.mainOptions || [];
-        const combined = [...new Set([...existing, ...lowModels])];
+        const combined = [...new Set([...existing.filter(id => sorted.includes(id)), ...sorted])];
         db.presets.low.mainOptions = combined.slice(0, 10);
     }
     
     db.lastBootstrap = new Date().toISOString();
     modelDbService.saveModelDatabase(db);
     
-    console.log(`[Bootstrap] Updated presets: ${highModels.length} high, ${mediumModels.length} medium, ${lowModels.length} low`);
+    console.log(`[Bootstrap] Updated presets: ${db.presets.high.mainOptions?.length || 0} high, ${db.presets.medium.mainOptions?.length || 0} medium, ${db.presets.low.mainOptions?.length || 0} low`);
 }
 
 /**

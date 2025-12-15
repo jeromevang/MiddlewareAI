@@ -221,18 +221,32 @@ function dismissSuggestedModel(modelId) {
 }
 
 /**
- * Query LM Studio for available models
+ * Query LM Studio for available models using model_sync
+ * Returns models with exact modelKey and pre-computed categorization
  */
 async function discoverLMStudioModels() {
     try {
-        const response = await axios.get(`${LM_STUDIO_URL}/api/v0/models`, {
-            timeout: 10000
-        });
+        const { syncModels } = require('./lmstudio/model_sync.js');
+        const { models } = await syncModels(true); // Force refresh
         
-        const models = response.data?.data || response.data || [];
         console.log(`[ModelDB] Discovered ${models.length} models from LM Studio`);
         
-        return models;
+        // Return in format compatible with existing code
+        return models.map(m => ({
+            id: m.modelKey,              // Exact modelKey
+            path: m.modelKey,
+            name: m.displayName,
+            architecture: m.architecture,
+            size_bytes: m.sizeGB * 1024 * 1024 * 1024,
+            context_length: m.maxContextLength,
+            // Include pre-computed categorization
+            function: m.function,        // 'main', 'summarizer', 'embedder'
+            tiers: m.tiers,              // Pre-computed quality tiers
+            trainedForToolUse: m.trainedForToolUse,
+            capabilities: m.capabilities,
+            paramsString: m.paramsString,
+            sizeGB: m.sizeGB
+        }));
     } catch (error) {
         console.error('[ModelDB] Failed to query LM Studio:', error.message);
         return [];
@@ -301,35 +315,59 @@ Respond ONLY with valid JSON, no explanation.`;
 
 /**
  * Discover new models from LM Studio and analyze them
+ * Uses model_sync for exact modelKeys and pre-computed categorization
  */
 async function discoverAndAnalyzeModels(generateCompletion) {
     const db = loadModelDatabase();
     const existingIds = new Set(Object.keys(db.modelSpecs || {}));
     
-    // Get models from LM Studio
+    // Get models from LM Studio with pre-computed categorization
     const lmStudioModels = await discoverLMStudioModels();
     
     const newModels = [];
     
     for (const model of lmStudioModels) {
-        const modelId = model.id || model.path;
+        // Use exact modelKey
+        const modelKey = model.id;
         
         // Skip if already known
-        if (existingIds.has(modelId)) {
+        if (existingIds.has(modelKey)) {
             continue;
         }
         
-        console.log(`[ModelDB] Analyzing new model: ${modelId}`);
+        console.log(`[ModelDB] Analyzing new model: ${modelKey}`);
         
-        // Analyze with LLM if available
+        // Use pre-computed categorization from model_sync when available
         let analysis = null;
-        if (generateCompletion) {
+        if (model.function && model.tiers && model.tiers.length > 0) {
+            // Use pre-computed data from model_sync
+            const tier = model.tiers.includes('high') ? 'high' :
+                        model.tiers.includes('medium') ? 'medium' : 'low';
+            
+            analysis = {
+                name: model.name || modelKey,
+                author: modelKey.split('/')[0] || 'Unknown',
+                type: model.function,
+                description: model.trainedForToolUse 
+                    ? `${model.paramsString || ''} model with tool use`
+                    : `${model.paramsString || ''} ${model.function} model`,
+                suggestedTier: tier,
+                capabilities: model.capabilities || ['General'],
+                performance: {
+                    speed: tier === 'low' ? 'Excellent' : tier === 'medium' ? 'Good' : 'Fair',
+                    reasoning: tier === 'high' ? 'Excellent' : tier === 'medium' ? 'Good' : 'Fair',
+                    coding: model.trainedForToolUse ? 'Excellent' : 'Good',
+                    memory: model.maxContextLength > 32768 ? 'Excellent' : 'Good'
+                }
+            };
+        } else if (generateCompletion) {
+            // Fallback to LLM analysis if pre-computed data not available
             analysis = await analyzeModelWithLLM(model, generateCompletion);
         } else {
             // Basic analysis without LLM
             analysis = {
-                name: modelId.split('/').pop() || modelId,
-                author: 'Unknown',
+                name: modelKey.split('/').pop() || modelKey,
+                author: modelKey.split('/')[0] || 'Unknown',
                 type: 'main',
                 description: 'Discovered model',
                 suggestedTier: 'medium',
@@ -344,13 +382,16 @@ async function discoverAndAnalyzeModels(generateCompletion) {
         }
         
         const modelSpec = {
-            id: modelId,
+            id: modelKey,  // Use exact modelKey
             name: analysis.name,
             author: analysis.author,
-            type: analysis.type || 'main',
+            type: analysis.type || model.function || 'main',
             engine: 'lmstudio',
-            size: model.size_bytes ? `~${Math.round(model.size_bytes / 1024 / 1024 / 1024 * 10) / 10}GB` : 'Unknown',
-            contextLength: model.context_length || 4096,
+            size: model.sizeGB ? `~${model.sizeGB.toFixed(1)}GB` : 'Unknown',
+            sizeGB: model.sizeGB,
+            paramsString: model.paramsString,
+            trainedForToolUse: model.trainedForToolUse,
+            contextLength: model.context_length || model.maxContextLength || 4096,
             description: analysis.description,
             suggestedTier: analysis.suggestedTier,
             requirements: {
