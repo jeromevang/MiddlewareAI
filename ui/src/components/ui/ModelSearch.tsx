@@ -6,8 +6,13 @@ import {
   searchHuggingFace,
   downloadHFModel,
   getHFQuantizations,
+  discoverLMStudioModels,
+  downloadLMStudioModel,
   type HFModelResult,
   type HFQuantization,
+  type LMStudioModel,
+  type HFSearchResponse,
+  type LMStudioDiscoverResponse,
 } from "../../lib/api";
 import { Badge } from "./Badge";
 
@@ -17,34 +22,59 @@ interface ModelSearchProps {
   className?: string;
 }
 
+type ModelSource = 'huggingface' | 'lmstudio';
+
 export function ModelSearch({
   role,
   onModelDownloaded,
   className,
 }: ModelSearchProps) {
   const [query, setQuery] = useState("");
-  const [selectedModel, setSelectedModel] = useState<HFModelResult | null>(null);
+  const [source, setSource] = useState<ModelSource>('lmstudio'); // Default to LM Studio
+  const [selectedHFModel, setSelectedHFModel] = useState<HFModelResult | null>(null);
+  const [selectedLMModel, setSelectedLMModel] = useState<LMStudioModel | null>(null);
   const [selectedQuant, setSelectedQuant] = useState<string | null>(null);
 
   // Search mutation
   const searchMutation = useMutation({
-    mutationFn: (q: string) => searchHuggingFace(q, { role, limit: 15 }),
+    mutationFn: async (q: string) => {
+      if (source === 'huggingface') {
+        return await searchHuggingFace(q, { role, limit: 15 });
+      } else {
+        return await discoverLMStudioModels(q, 15);
+      }
+    },
+    onSuccess: () => {
+      setSelectedHFModel(null);
+      setSelectedLMModel(null);
+      setSelectedQuant(null);
+    },
   });
 
-  // Quantization query (only when model selected)
+  // Quantization query (only for HF models)
   const { data: quantsData, isLoading: quantsLoading } = useQuery({
-    queryKey: ["hf-quants", selectedModel?.id],
-    queryFn: () => getHFQuantizations(selectedModel!.id),
-    enabled: !!selectedModel,
+    queryKey: ["hf-quants", selectedHFModel?.id],
+    queryFn: () => getHFQuantizations(selectedHFModel!.id),
+    enabled: !!selectedHFModel,
   });
 
   // Download mutation
   const downloadMutation = useMutation({
-    mutationFn: () => downloadHFModel(selectedModel!.id, selectedQuant || undefined),
-    onSuccess: (data) => {
-      if (data.success && data.modelKey) {
-        onModelDownloaded?.(data.modelKey);
-        setSelectedModel(null);
+    mutationFn: async () => {
+      if (source === 'huggingface') {
+        return await downloadHFModel(selectedHFModel!.id, selectedQuant || undefined);
+      } else {
+        return await downloadLMStudioModel(selectedLMModel!.modelKey);
+      }
+    },
+    onSuccess: (data: any) => {
+      const success = data.success || data.status === 'ok';
+      const modelKey = data.modelKey || data.model?.modelKey;
+
+      if (success && modelKey) {
+        onModelDownloaded?.(modelKey);
+        setSelectedHFModel(null);
+        setSelectedLMModel(null);
         setSelectedQuant(null);
         setQuery("");
       }
@@ -65,6 +95,24 @@ export function ModelSearch({
 
   return (
     <div className={clsx("space-y-4", className)}>
+      {/* Source Selector */}
+      <div className="flex items-center gap-2">
+        <label className="text-sm font-medium text-white/70">Source:</label>
+        <select
+          value={source}
+          onChange={(e) => {
+            setSource(e.target.value as ModelSource);
+            setSelectedHFModel(null);
+            setSelectedLMModel(null);
+            setSelectedQuant(null);
+          }}
+          className="px-3 py-1 rounded bg-white/10 border border-white/20 text-white text-sm"
+        >
+          <option value="lmstudio">LM Studio Registry</option>
+          <option value="huggingface">Hugging Face</option>
+        </select>
+      </div>
+
       {/* Search Input */}
       <div className="flex items-center gap-2">
         <input
@@ -72,7 +120,11 @@ export function ModelSearch({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Search Hugging Face for models..."
+          placeholder={
+            source === 'lmstudio'
+              ? "Search LM Studio registry..."
+              : "Search Hugging Face for models..."
+          }
           className={clsx(
             "flex-1 px-3 py-2 rounded-lg text-sm",
             "bg-white/5 border border-white/20 text-white placeholder:text-white/40",
@@ -101,64 +153,107 @@ export function ModelSearch({
       )}
 
       {/* Search Results */}
-      {searchMutation.data?.results && searchMutation.data.results.length > 0 && (
-        <div className="space-y-2 max-h-64 overflow-y-auto">
-          {searchMutation.data.results.map((model) => (
-            <ModelResultCard
-              key={model.id}
-              model={model}
-              selected={selectedModel?.id === model.id}
-              onSelect={() => {
-                setSelectedModel(model);
-                setSelectedQuant(null);
-              }}
-            />
-          ))}
-        </div>
-      )}
+      {(() => {
+        const hfData = searchMutation.data as HFSearchResponse | undefined;
+        const lmData = searchMutation.data as LMStudioDiscoverResponse | undefined;
+
+        const results = source === 'huggingface'
+          ? hfData?.results
+          : lmData?.models;
+
+        return results && results.length > 0 && (
+          <div className="space-y-2 max-h-64 overflow-y-auto">
+            {results.map((model: any) => (
+              <ModelResultCard
+                key={source === 'huggingface' ? model.id : model.modelKey}
+                model={model}
+                source={source}
+                selected={
+                  source === 'huggingface'
+                    ? selectedHFModel?.id === model.id
+                    : selectedLMModel?.modelKey === model.modelKey
+                }
+                onSelect={() => {
+                  if (source === 'huggingface') {
+                    setSelectedHFModel(model as HFModelResult);
+                    setSelectedLMModel(null);
+                  } else {
+                    setSelectedLMModel(model as LMStudioModel);
+                    setSelectedHFModel(null);
+                  }
+                  setSelectedQuant(null);
+                }}
+              />
+            ))}
+          </div>
+        );
+      })()}
 
       {/* No results */}
-      {searchMutation.data?.results?.length === 0 && (
-        <p className="text-sm text-white/50 text-center py-4">
-          No models found. Try a different search term.
-        </p>
-      )}
+      {(() => {
+        const hfData = searchMutation.data as HFSearchResponse | undefined;
+        const lmData = searchMutation.data as LMStudioDiscoverResponse | undefined;
+
+        const results = source === 'huggingface'
+          ? hfData?.results
+          : lmData?.models;
+        return results?.length === 0 && (
+          <p className="text-sm text-white/50 text-center py-4">
+            No models found. Try a different search term.
+          </p>
+        );
+      })()}
 
       {/* Selected Model - Quantization Selection */}
-      {selectedModel && (
+      {(selectedHFModel || selectedLMModel) && (
         <div className="p-4 rounded-lg bg-white/10 border border-white/20 space-y-3">
           <div className="flex items-center justify-between">
             <div>
-              <h4 className="font-medium text-white">{selectedModel.name}</h4>
-              <p className="text-xs text-white/50">{selectedModel.author}</p>
+              <h4 className="font-medium text-white">
+                {source === 'huggingface' ? selectedHFModel!.name : selectedLMModel!.displayName}
+              </h4>
+              <p className="text-xs text-white/50">
+                {source === 'huggingface'
+                  ? selectedHFModel!.author
+                  : `${selectedLMModel!.badge} • ${selectedLMModel!.source}`
+                }
+              </p>
             </div>
             <button
-              onClick={() => setSelectedModel(null)}
+              onClick={() => {
+                setSelectedHFModel(null);
+                setSelectedLMModel(null);
+                setSelectedQuant(null);
+              }}
               className="text-white/40 hover:text-white"
             >
               ✕
             </button>
           </div>
 
-          {/* Quantization options */}
-          {quantsLoading && (
-            <p className="text-sm text-white/50">Loading quantization options...</p>
-          )}
+          {/* Quantization options (only for HF) */}
+          {source === 'huggingface' && (
+            <>
+              {quantsLoading && (
+                <p className="text-sm text-white/50">Loading quantization options...</p>
+              )}
 
-          {quantsData?.quantizations && quantsData.quantizations.length > 0 && (
-            <div className="space-y-2">
-              <label className="text-xs text-white/60">Select Quantization:</label>
-              <div className="flex flex-wrap gap-2">
-                {quantsData.quantizations.map((quant) => (
-                  <QuantButton
-                    key={quant.filename}
-                    quant={quant}
-                    selected={selectedQuant === quant.quantization}
-                    onSelect={() => setSelectedQuant(quant.quantization)}
-                  />
-                ))}
-              </div>
-            </div>
+              {quantsData?.quantizations && quantsData.quantizations.length > 0 && (
+                <div className="space-y-2">
+                  <label className="text-xs text-white/60">Select Quantization:</label>
+                  <div className="flex flex-wrap gap-2">
+                    {quantsData.quantizations.map((quant) => (
+                      <QuantButton
+                        key={quant.filename}
+                        quant={quant}
+                        selected={selectedQuant === quant.quantization}
+                        onSelect={() => setSelectedQuant(quant.quantization)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+            </>
           )}
 
           {/* Download button */}
@@ -190,12 +285,17 @@ export function ModelSearch({
 }
 
 interface ModelResultCardProps {
-  model: HFModelResult;
+  model: HFModelResult | LMStudioModel;
+  source: ModelSource;
   selected: boolean;
   onSelect: () => void;
 }
 
-function ModelResultCard({ model, selected, onSelect }: ModelResultCardProps) {
+function ModelResultCard({ model, source, selected, onSelect }: ModelResultCardProps) {
+  const isHF = source === 'huggingface';
+  const hfModel = model as HFModelResult;
+  const lmModel = model as LMStudioModel;
+
   return (
     <button
       onClick={onSelect}
@@ -209,20 +309,38 @@ function ModelResultCard({ model, selected, onSelect }: ModelResultCardProps) {
     >
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
-          <h5 className="font-medium text-white truncate">{model.name}</h5>
-          <p className="text-xs text-white/50">{model.author}</p>
+          <h5 className="font-medium text-white truncate">
+            {isHF ? hfModel.name : lmModel.displayName}
+          </h5>
+          <p className="text-xs text-white/50">
+            {isHF ? hfModel.author : `${lmModel.badge} • ${lmModel.source}`}
+          </p>
         </div>
         <div className="flex flex-col items-end gap-1 text-xs">
-          <span className="text-white/40">↓ {formatNumber(model.downloads)}</span>
-          <span className="text-white/40">♥ {formatNumber(model.likes)}</span>
+          {isHF ? (
+            <>
+              <span className="text-white/40">↓ {formatNumber(hfModel.downloads)}</span>
+              <span className="text-white/40">♥ {formatNumber(hfModel.likes)}</span>
+            </>
+          ) : (
+            <>
+              <span className="text-white/40">{lmModel.sizeGB ? `${lmModel.sizeGB}GB` : 'Unknown'}</span>
+              <Badge tone="neutral" className="text-xs">
+                {lmModel.badge}
+              </Badge>
+            </>
+          )}
         </div>
       </div>
       
       {/* Tags */}
       <div className="flex flex-wrap gap-1 mt-2">
-        {model.isGGUF && <Badge tone="positive">GGUF</Badge>}
-        {model.pipeline_tag && (
-          <Badge tone="neutral">{model.pipeline_tag}</Badge>
+        {isHF && hfModel.isGGUF && <Badge tone="positive">GGUF</Badge>}
+        {isHF && hfModel.pipeline_tag && (
+          <Badge tone="neutral">{hfModel.pipeline_tag}</Badge>
+        )}
+        {!isHF && lmModel.function && (
+          <Badge tone="neutral">{lmModel.function}</Badge>
         )}
       </div>
     </button>

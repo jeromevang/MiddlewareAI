@@ -2315,6 +2315,61 @@ app.get('/presets/optimize/status', (req, res) => {
 // =========================
 
 const hfService = require('./huggingface_service.js');
+const lmRegistryService = require('./lmstudio_registry_service.js');
+
+/**
+ * GET /models/lmstudio/discover - Discover models from LM Studio registry
+ * Query params: q (search query), limit
+ */
+app.get('/models/lmstudio/discover', async (req, res) => {
+    try {
+        const { q: query, limit = 20 } = req.query;
+        const models = await lmRegistryService.discoverModels({
+            query: query || '',
+            limit: parseInt(limit, 10)
+        });
+
+        res.json({
+            status: 'ok',
+            models,
+            source: 'lm-studio-registry'
+        });
+    } catch (error) {
+        console.error('[API] LM Studio discovery failed:', error.message);
+        res.status(500).json({
+            error: 'Failed to discover LM Studio models',
+            details: error.message
+        });
+    }
+});
+
+/**
+ * POST /models/lmstudio/download - Download from LM Studio registry
+ */
+app.post('/models/lmstudio/download', async (req, res) => {
+    try {
+        const { modelKey } = req.body;
+
+        if (!modelKey) {
+            return res.status(400).json({ error: 'modelKey is required' });
+        }
+
+        const result = await lmRegistryService.downloadModel(modelKey);
+
+        if (result.success) {
+            appendLog(`Downloaded from LM Studio registry: ${modelKey}`, 'info');
+            res.json(result);
+        } else {
+            res.status(500).json(result);
+        }
+    } catch (error) {
+        console.error('[API] LM Studio download failed:', error.message);
+        res.status(500).json({
+            error: 'Failed to download from LM Studio registry',
+            details: error.message
+        });
+    }
+});
 
 /**
  * GET /models/search - Search Hugging Face for models

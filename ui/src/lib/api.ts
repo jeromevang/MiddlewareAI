@@ -915,6 +915,30 @@ export interface HFDownloadResponse {
   error?: string;
 }
 
+export interface LMStudioModel {
+  name: string;
+  modelKey: string;
+  displayName: string;
+  badge: string;
+  source: string;
+  sizeGB?: number;
+  function?: string;
+}
+
+export interface LMStudioDiscoverResponse {
+  status: string;
+  models: LMStudioModel[];
+  source: string;
+}
+
+export interface LMStudioDownloadResponse {
+  success: boolean;
+  modelKey?: string;
+  message?: string;
+  error?: string;
+  model?: any;
+}
+
 export interface ActiveDownloadsResponse {
   status: string;
   downloads: Record<string, {
@@ -977,6 +1001,27 @@ export async function checkHFModelDownloaded(modelId: string): Promise<{
   downloaded: boolean;
 }> {
   return request(`/models/check-hf/${encodeURIComponent(modelId)}`);
+}
+
+/**
+ * Discover models from LM Studio's built-in registry
+ */
+export async function discoverLMStudioModels(query?: string, limit?: number): Promise<LMStudioDiscoverResponse> {
+  const params = new URLSearchParams();
+  if (query) params.set('q', query);
+  if (limit) params.set('limit', limit.toString());
+
+  return request<LMStudioDiscoverResponse>(`/models/lmstudio/discover?${params.toString()}`);
+}
+
+/**
+ * Download a model from LM Studio's registry
+ */
+export async function downloadLMStudioModel(modelKey: string): Promise<LMStudioDownloadResponse> {
+  return request<LMStudioDownloadResponse>("/models/lmstudio/download", {
+    method: "POST",
+    body: JSON.stringify({ modelKey }),
+  });
 }
 
 // =============================================================================
