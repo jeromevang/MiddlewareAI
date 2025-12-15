@@ -116,14 +116,25 @@ export default function ModelConfigPanel() {
       }
 
       // Auto-download required models
-      console.log('Ensuring required models are available...');
-      const downloadRes = await fetch(`/rag/ensure-models`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tier })
-      });
-      if (!downloadRes.ok) {
-        console.warn('Some models may need manual download');
+      console.log('🔄 Ensuring required models are available...', { tier, previousTier: currentTier });
+      try {
+        console.log('📡 Making fetch call to /rag/ensure-models...');
+        const downloadRes = await fetch(`/rag/ensure-models`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tier, previousTier: currentTier })
+        });
+        console.log('✅ ensure-models response received:', downloadRes.status, downloadRes.statusText);
+        if (!downloadRes.ok) {
+          const errorText = await downloadRes.text();
+          console.error('❌ ensure-models failed:', errorText);
+          console.warn('⚠️ Some models may need manual download');
+        } else {
+          const successText = await downloadRes.text();
+          console.log('🎉 ensure-models success:', successText);
+        }
+      } catch (error) {
+        console.error('💥 ensure-models fetch failed:', error);
       }
 
       // Change the tier
