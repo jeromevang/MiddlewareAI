@@ -3,7 +3,7 @@
     "url": "http://localhost:1234",
     "timeout_ms": 60000,
     "max_retries": 3,
-    "auto_start": false,
+    "auto_start": true,
     "server_port": 1234,
     "cli_path": {
       "windows": "%USERPROFILE%\\.lmstudio\\bin\\lms.exe",

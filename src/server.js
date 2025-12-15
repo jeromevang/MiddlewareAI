@@ -412,7 +412,7 @@ function modelSummary(cfg, extras = {}) {
 
 async function ensureReady() {
     // Initialize LM Studio (start server + load models if configured)
-    // await initializeLMStudio();
+    await initializeLMStudio();
     await sqliteCacheManager.initialize();
     await faissIndexManager.initialize();
 
