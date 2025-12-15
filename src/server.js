@@ -28,7 +28,7 @@ const { embedText, summarizeConversation, generateCompletion, proxyChatCompletio
 const { SQLiteCacheManager } = require('./sqlite_cache.js');
 const { FAISSIndexManager } = require('./faiss_storage.js');
 const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js');
-const { getProcessingConfig, getModelConfig, getConfig, getLMStudioConfig, getStorageConfig, getSessionConfig } = require('./config.js');
+const { getProcessingConfig, getModelConfig, getConfig, getLMStudioConfig, getStorageConfig, getSessionConfig, updateConfigFile } = require('./config.js');
 const { getRuntimeMode, isCloudMode, requireModeHealthCheck } = require('./runtime.js');
 const { main: runIndexer } = require('./middleware.js'); // to trigger reindex
 const { logDebugEvent, isTelemetryEnabled, setTelemetryOverride, getTelemetryOverride } = require('./debug_logger.js');
@@ -2093,7 +2093,10 @@ app.post('/presets/custom', async (req, res) => {
         };
         
         // Persist to config.json
-        updateConfig({ customPreset: customPresetConfig });
+        updateConfigFile(config => {
+            config.customPreset = customPresetConfig;
+            return config;
+        });
         
         appendLog(`Custom preset updated: main=${main}, rollingSummarizer=${rollingSummarizer}`, 'info');
         res.json({ status: 'ok', config: customPresetConfig });

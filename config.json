@@ -75,5 +75,9 @@
   },
   "sessions": {
     "default_retention_days": 30
+  },
+  "customPreset": {
+    "main": "mungert/osmosis-mcp-4b",
+    "rollingSummarizer": "qwen2.5-coder-0.5b-instruct"
   }
 }
