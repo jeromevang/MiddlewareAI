@@ -323,6 +323,55 @@ class FAISSIndexManager {
         logInfo(`FAISS index reset (${reason}).`);
     }
 
+    /**
+     * Get total count of indexed embeddings.
+     */
+    async count() {
+        return this.withLock(async () => {
+            if (!this.index) {
+                await this.initialize();
+            }
+            return this.idMap.length;
+        });
+    }
+
+    /**
+     * Search for similar embeddings and return results with scores.
+     * @param {Float32Array|number[]} embedding - Query embedding
+     * @param {number} topK - Number of results to return
+     * @returns {Promise<Array<{id: string, score: number}>>}
+     */
+    async search(embedding, topK = 5) {
+        const rawResults = await this.searchSimilar(embedding, topK);
+        
+        // Convert distances to similarity scores (0-1)
+        // FAISS returns L2 distances, convert to cosine-like similarity
+        return rawResults.map(r => ({
+            id: r.chunkId,
+            score: 1 / (1 + r.distance) // Convert distance to similarity score
+        }));
+    }
+
+    /**
+     * Get embedding by chunk ID (for debug purposes).
+     */
+    async getEmbedding(chunkId) {
+        return this.withLock(async () => {
+            if (!this.index) return null;
+            
+            const idx = this.idMap.indexOf(chunkId);
+            if (idx === -1) return null;
+            
+            try {
+                const vector = new Float32Array(this.index.reconstructN(idx, 1));
+                return vector;
+            } catch (err) {
+                logWarning(`Failed to get embedding for ${chunkId}: ${err.message}`);
+                return null;
+            }
+        });
+    }
+
     async persistIndex() {
         if (!this.index) {
             return;

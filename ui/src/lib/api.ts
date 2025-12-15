@@ -723,8 +723,8 @@ export async function toggleModelLock(
 
 export interface CustomPresetConfig {
   main: string | null;
-  summarizer: string | null;
-  embedder: string | null;
+  rollingSummarizer: string | null;
+  // Note: embedder and ragSummarizer are part of closed RAG pipeline, not user-selectable
 }
 
 export interface CustomPresetResponse {
@@ -766,6 +766,67 @@ export async function saveCustomPreset(config: CustomPresetConfig): Promise<Cust
 export async function optimizePreset(): Promise<OptimizeResponse> {
   return request<OptimizeResponse>("/presets/optimize", {
     method: "POST",
+  });
+}
+
+// =============================================================================
+// RAG Pipeline Tier APIs (Closed System)
+// =============================================================================
+
+export interface RagTierConfig {
+  embedder: {
+    model_name: string;
+    sizeGB: number;
+    contextLength: number;
+  };
+  ragSummarizer: {
+    model_name: string;
+    identifier: string;
+    sizeGB: number;
+  };
+  indexingSpeed: string;
+  summaryQuality: string;
+}
+
+export interface RagTierInfo {
+  id: string;
+  name: string;
+  description: string;
+  targetGPU: string;
+}
+
+export interface RagTierResponse {
+  status: string;
+  currentTier: "low" | "medium" | "high";
+  config: RagTierConfig;
+  availableTiers: RagTierInfo[];
+  locked: boolean;
+  note: string;
+}
+
+export interface RagTierChangeResponse {
+  status: string;
+  message: string;
+  previousTier: string;
+  newTier: string;
+  config: RagTierConfig;
+  reindexTriggered: boolean;
+}
+
+/**
+ * Get current RAG pipeline tier configuration
+ */
+export async function getRagTier(): Promise<RagTierResponse> {
+  return request<RagTierResponse>("/rag/tier");
+}
+
+/**
+ * Change RAG pipeline tier (triggers re-index)
+ */
+export async function setRagTier(tier: "low" | "medium" | "high"): Promise<RagTierChangeResponse> {
+  return request<RagTierChangeResponse>("/rag/tier", {
+    method: "POST",
+    body: JSON.stringify({ tier }),
   });
 }
 

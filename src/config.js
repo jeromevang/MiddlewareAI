@@ -4,10 +4,16 @@
  * Configuration Loader for Middleware
  *
  * Loads and validates configuration from config.json.
+ * 
+ * RAG Pipeline (embedding + ragSummarization) is a CLOSED SYSTEM.
+ * These configs come from rag_pipeline_config.js based on the active tier.
+ * 
+ * User-selectable models: main, rollingSummarization
  */
 
 const fs = require('fs');
 const path = require('path');
+const { getRagPipelineConfig, getFixedEmbedderConfig, getRagSummarizerConfig } = require('./rag_pipeline_config.js');
 
 const CONFIG_PATH = path.join(__dirname, '../config.json');
 
@@ -39,11 +45,20 @@ function validateConfig(config) {
         }
     }
 
-    const requiredModels = ['embedding', 'ragSummarization', 'rollingSummarization', 'main'];
-    for (const modelKey of requiredModels) {
+    // User-selectable models only (embedding and ragSummarization come from RAG pipeline)
+    const requiredUserModels = ['rollingSummarization', 'main'];
+    for (const modelKey of requiredUserModels) {
         const model = config.models[modelKey];
         if (!model || !model.identifier) {
-            throw new Error(`Missing identifier for model: ${modelKey}`);
+            throw new Error(`Missing identifier for user-selectable model: ${modelKey}`);
+        }
+    }
+
+    // Validate RAG pipeline tier if present
+    if (config.ragPipeline) {
+        const validTiers = ['low', 'medium', 'high'];
+        if (config.ragPipeline.tier && !validTiers.includes(config.ragPipeline.tier)) {
+            throw new Error(`Invalid RAG pipeline tier: ${config.ragPipeline.tier}`);
         }
     }
 
@@ -96,12 +111,71 @@ function getLMStudioConfig() {
     return loadConfig().lmstudio;
 }
 
+/**
+ * Get model configuration for a role.
+ * 
+ * CLOSED SYSTEM: embedding and ragSummarization come from RAG pipeline tier.
+ * USER SELECTABLE: main and rollingSummarization come from config.
+ * 
+ * @param {string} role - 'embedding' | 'ragSummarization' | 'rollingSummarization' | 'main'
+ * @returns {Object} Model configuration
+ */
 function getModelConfig(role) {
     const cfg = loadConfig();
+    const tier = cfg.ragPipeline?.tier || 'medium';
+    
+    // CLOSED RAG PIPELINE - These are NOT user configurable
+    if (role === 'embedding') {
+        const embedder = getFixedEmbedderConfig();
+        return {
+            ...embedder,
+            engine: 'local',
+            embedding_dimension: embedder.dimension
+        };
+    }
+    
+    if (role === 'ragSummarization') {
+        const ragSum = getRagSummarizerConfig(tier);
+        return {
+            ...ragSum,
+            engine: 'lmstudio'
+        };
+    }
+    
+    // USER SELECTABLE - These can be changed by user
     if (!cfg.models[role]) {
         throw new Error(`Model configuration not found for role: ${role}`);
     }
     return cfg.models[role];
+}
+
+/**
+ * Get the current RAG pipeline tier
+ * @returns {'low'|'medium'|'high'} Current tier
+ */
+function getRagPipelineTier() {
+    const cfg = loadConfig();
+    return cfg.ragPipeline?.tier || 'medium';
+}
+
+/**
+ * Set the RAG pipeline tier (triggers re-index requirement)
+ * @param {'low'|'medium'|'high'} tier 
+ */
+function setRagPipelineTier(tier) {
+    const validTiers = ['low', 'medium', 'high'];
+    if (!validTiers.includes(tier)) {
+        throw new Error(`Invalid tier: ${tier}`);
+    }
+    
+    updateConfigFile(cfg => {
+        cfg.ragPipeline = cfg.ragPipeline || {};
+        cfg.ragPipeline.tier = tier;
+        cfg.ragPipeline.locked = true;
+        return cfg;
+    });
+    
+    console.log(`[Config] RAG pipeline tier changed to: ${tier}`);
 }
 
 function getProcessingConfig() {
@@ -129,5 +203,7 @@ module.exports = {
     getRuntimeConfig,
     getSessionConfig,
     updateConfigFile,
+    getRagPipelineTier,
+    setRagPipelineTier,
 };
 

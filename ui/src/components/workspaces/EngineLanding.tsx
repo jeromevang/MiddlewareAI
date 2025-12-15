@@ -169,6 +169,62 @@ export default function EngineLanding() {
           />
         </section>
 
+        {/* Quick Links */}
+        <section className="grid gap-4 lg:grid-cols-3" aria-labelledby="quick-links">
+          <h2 id="quick-links" className="sr-only">Quick Links</h2>
+          
+          <button
+            onClick={() => navigate("/config")}
+            className="p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all text-left group"
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">⚙️</span>
+              <div>
+                <div className="font-medium text-white group-hover:text-accent-primary transition-colors">
+                  Model Configuration
+                </div>
+                <div className="text-xs text-white/50">
+                  Manage presets, models, and RAG pipeline
+                </div>
+              </div>
+            </div>
+          </button>
+          
+          <button
+            onClick={() => navigate("/debug")}
+            className="p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all text-left group"
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🔧</span>
+              <div>
+                <div className="font-medium text-white group-hover:text-accent-primary transition-colors">
+                  RAG Diagnostics
+                </div>
+                <div className="text-xs text-white/50">
+                  Debug embedder, search, and indexed data
+                </div>
+              </div>
+            </div>
+          </button>
+          
+          <button
+            onClick={() => navigate("/summary")}
+            className="p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all text-left group"
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">📊</span>
+              <div>
+                <div className="font-medium text-white group-hover:text-accent-primary transition-colors">
+                  Session History
+                </div>
+                <div className="text-xs text-white/50">
+                  View conversation turns and summaries
+                </div>
+              </div>
+            </div>
+          </button>
+        </section>
+
         {/* Performance Overview */}
         <section className="space-y-4">
           <h2 className="text-xl font-semibold text-white flex items-center gap-2">

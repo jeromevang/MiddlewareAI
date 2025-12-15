@@ -6,7 +6,6 @@ import {
   detectHardware,
   getModelLocks,
   toggleModelLock,
-  getPresets,
   optimizePreset,
   saveCustomPreset,
   type ModelLock,
@@ -19,14 +18,58 @@ import { Badge } from "../ui/Badge";
 import { ModelSearch } from "../ui/ModelSearch";
 import { ResourceBars } from "../ui/ResourceBars";
 
-// Fixed embedder configuration (system-wide, code-aware)
-const FIXED_EMBEDDER = {
-  id: "jinaai/jina-embeddings-v2-base-code",
-  name: "Jina Code Embeddings v2",
-  description: "Code-aware embeddings optimized for programming languages",
-  contextLength: 8192,
-  sizeGB: 0.3,
+// =============================================================================
+// RAG PIPELINE TIERS (Closed System - matches rag_pipeline_config.js)
+// =============================================================================
+const RAG_TIERS = {
+  low: {
+    name: "Low",
+    description: "Fast indexing, good for quick iterations",
+    targetGPU: "RTX 3060 / 8GB VRAM",
+    embedder: {
+      name: "Jina Code v2",
+      sizeGB: 0.3,
+      contextLength: 8192,
+    },
+    ragSummarizer: {
+      name: "Qwen2.5-Coder 0.5B",
+      identifier: "qwen2.5-coder-0.5b-instruct",
+      sizeGB: 0.4,
+    },
+  },
+  medium: {
+    name: "Medium",
+    description: "Balanced quality and speed",
+    targetGPU: "RTX 4070 / 12GB VRAM",
+    embedder: {
+      name: "Jina Code v2",
+      sizeGB: 0.3,
+      contextLength: 8192,
+    },
+    ragSummarizer: {
+      name: "Qwen2.5-Coder 1.5B",
+      identifier: "qwen2.5-coder-1.5b-instruct",
+      sizeGB: 0.9,
+    },
+  },
+  high: {
+    name: "High",
+    description: "Best quality summaries, slower indexing",
+    targetGPU: "RTX 5080 / 16GB VRAM",
+    embedder: {
+      name: "Jina Code v2",
+      sizeGB: 0.3,
+      contextLength: 8192,
+    },
+    ragSummarizer: {
+      name: "Phi-3.1 Mini 128K",
+      identifier: "phi-3.1-mini-128k-instruct",
+      sizeGB: 2.2,
+    },
+  },
 };
+
+type RagTier = keyof typeof RAG_TIERS;
 
 // Role descriptions for the UI
 const ROLE_INFO = {
@@ -37,19 +80,12 @@ const ROLE_INFO = {
     icon: "🤖",
     selectable: true,
   },
-  summarizer: {
-    name: "Summarizer",
-    description: "Compresses conversation history to maintain context without exceeding token limits.",
-    recommended: "Smaller, fast models (1-3B params)",
+  rollingSummarizer: {
+    name: "Rolling Summarizer",
+    description: "Compresses conversation history to maintain context across long sessions.",
+    recommended: "Smaller, fast models (0.5-3B params)",
     icon: "📝",
     selectable: true,
-  },
-  embedder: {
-    name: "Embedder",
-    description: "Creates vector embeddings for semantic search in RAG. Fixed to code-aware model for best results.",
-    recommended: "Jina Code v2 (8K context, code-optimized)",
-    icon: "🔍",
-    selectable: false, // Fixed system-wide
   },
 };
 
@@ -75,21 +111,24 @@ export function CustomPresetPanel({
 }: CustomPresetPanelProps) {
   const queryClient = useQueryClient();
   
+  // RAG Pipeline tier (closed system)
+  const [ragTier, setRagTier] = useState<RagTier>("medium");
+  const [pendingTierChange, setPendingTierChange] = useState<RagTier | null>(null);
+  
   // Show/hide model search
   const [showModelSearch, setShowModelSearch] = useState(false);
 
-  // Local state for selections
+  // Local state for user-selectable models only
   const [config, setConfig] = useState<CustomPresetConfig>({
     main: null,
-    summarizer: null,
-    embedder: null,
+    rollingSummarizer: null,
   });
 
   // Hardware detection
   const { data: hardwareData } = useQuery({
     queryKey: ["hardware"],
     queryFn: () => detectHardware(),
-    staleTime: 60000, // Cache for 1 minute
+    staleTime: 60000,
   });
 
   // Model locks
@@ -98,11 +137,22 @@ export function CustomPresetPanel({
     queryFn: getModelLocks,
   });
 
-  // Get presets to populate initial selections
-  const { data: presetsData } = useQuery({
-    queryKey: ["presets"],
-    queryFn: getPresets,
+  // Current RAG tier from server
+  const { data: ragTierData } = useQuery({
+    queryKey: ["ragTier"],
+    queryFn: async () => {
+      const res = await fetch("/rag/tier");
+      return res.json();
+    },
+    staleTime: 30000,
   });
+
+  // Update local tier when server data arrives
+  useEffect(() => {
+    if (ragTierData?.currentTier) {
+      setRagTier(ragTierData.currentTier as RagTier);
+    }
+  }, [ragTierData]);
 
   // Toggle lock mutation
   const lockMutation = useMutation({
@@ -112,21 +162,20 @@ export function CustomPresetPanel({
     },
   });
 
-  // Optimize mutation
+  // Optimize mutation (for main + rolling summarizer only)
   const optimizeMutation = useMutation({
     mutationFn: optimizePreset,
     onSuccess: (data) => {
       if (data.recommendation) {
         setConfig({
           main: data.recommendation.main,
-          summarizer: data.recommendation.summarizer,
-          embedder: FIXED_EMBEDDER.id, // Always use fixed embedder
+          rollingSummarizer: data.recommendation.summarizer, // Map to rollingSummarizer
         });
       }
     },
   });
 
-  // Save mutation
+  // Save custom preset
   const saveMutation = useMutation({
     mutationFn: saveCustomPreset,
     onSuccess: () => {
@@ -134,17 +183,24 @@ export function CustomPresetPanel({
     },
   });
 
-  // Initialize with defaults from presets (embedder is always fixed)
-  useEffect(() => {
-    if (presetsData?.presets?.low) {
-      const lowPreset = presetsData.presets.low;
-      setConfig({
-        main: lowPreset.mainOptions?.[0] || null,
-        summarizer: lowPreset.rollingSummarizer || null,
-        embedder: FIXED_EMBEDDER.id, // Always use fixed embedder
+  // Change RAG tier (triggers re-index)
+  const tierChangeMutation = useMutation({
+    mutationFn: async (tier: RagTier) => {
+      const res = await fetch("/rag/tier", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier }),
       });
-    }
-  }, [presetsData]);
+      return res.json();
+    },
+    onSuccess: (data) => {
+      if (data.status === "ok") {
+        setRagTier(data.newTier);
+        setPendingTierChange(null);
+        queryClient.invalidateQueries({ queryKey: ["ragTier"] });
+      }
+    },
+  });
 
   // Notify parent of config changes
   useEffect(() => {
@@ -153,6 +209,7 @@ export function CustomPresetPanel({
 
   const hardware = hardwareData?.hardware;
   const locks = locksData?.locks || {};
+  const currentTierConfig = RAG_TIERS[ragTier];
 
   // Calculate VRAM usage
   const getModelSize = (modelId: string | null): number => {
@@ -163,19 +220,31 @@ export function CustomPresetPanel({
 
   const vramBreakdown = {
     main: getModelSize(config.main),
-    summarizer: getModelSize(config.summarizer),
-    embedder: FIXED_EMBEDDER.sizeGB, // Fixed embedder
+    rollingSummarizer: getModelSize(config.rollingSummarizer),
+    embedder: currentTierConfig.embedder.sizeGB,
+    ragSummarizer: currentTierConfig.ragSummarizer.sizeGB,
   };
-  const totalVRAM = vramBreakdown.main + vramBreakdown.summarizer + vramBreakdown.embedder;
+  const totalVRAM = 
+    vramBreakdown.main + 
+    vramBreakdown.rollingSummarizer + 
+    vramBreakdown.embedder + 
+    vramBreakdown.ragSummarizer;
 
-  // Filter models by role
-  const mainModels = availableModels.filter(
+  // Filter models
+  const selectableModels = availableModels.filter(
     (m) => m.type !== "embedder" && m.type !== "embedding"
   );
-  const summarizerModels = availableModels.filter(
-    (m) => m.type !== "embedder" && m.type !== "embedding"
-  );
-  // Embedder models filtering removed - embedder is now fixed system-wide
+
+  const handleTierChange = (tier: RagTier) => {
+    if (tier === ragTier) return;
+    setPendingTierChange(tier);
+  };
+
+  const confirmTierChange = () => {
+    if (pendingTierChange) {
+      tierChangeMutation.mutate(pendingTierChange);
+    }
+  };
 
   const handleSave = () => {
     saveMutation.mutate(config);
@@ -188,7 +257,7 @@ export function CustomPresetPanel({
         <div>
           <h3 className="text-lg font-semibold text-white">Custom Preset</h3>
           <p className="text-sm text-white/60">
-            Configure models for each role manually
+            Configure main model and conversation summarizer
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -243,88 +312,139 @@ export function CustomPresetPanel({
       />
 
       {/* Real-time Resource Monitoring */}
-      <ResourceBars className="p-3 rounded-lg bg-white/5 border border-white/10" />
+      <ResourceBars />
 
-      {/* Role Selectors */}
+      {/* =========================================== */}
+      {/* RAG PIPELINE TIER (Closed System) */}
+      {/* =========================================== */}
+      <div className="p-4 rounded-lg bg-gradient-to-r from-blue-900/20 to-purple-900/20 border border-blue-500/30">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="text-xl">🔒</span>
+          <h4 className="font-semibold text-white">RAG Pipeline Quality</h4>
+          <Badge tone="info">Closed System</Badge>
+        </div>
+        <p className="text-xs text-white/60 mb-4">
+          Embedder and RAG Summarizer are fixed per tier. Changing tier will re-index your codebase.
+        </p>
+
+        {/* Tier Selector */}
+        <div className="grid grid-cols-3 gap-2 mb-4">
+          {(Object.keys(RAG_TIERS) as RagTier[]).map((tier) => {
+            const tierConfig = RAG_TIERS[tier];
+            const isSelected = ragTier === tier;
+            const isPending = pendingTierChange === tier;
+
+            return (
+              <button
+                key={tier}
+                onClick={() => handleTierChange(tier)}
+                className={clsx(
+                  "p-3 rounded-lg text-left transition-all",
+                  isSelected
+                    ? "bg-blue-600/30 border-2 border-blue-500"
+                    : isPending
+                    ? "bg-yellow-600/20 border-2 border-yellow-500/50"
+                    : "bg-white/5 border border-white/20 hover:bg-white/10"
+                )}
+              >
+                <div className="font-medium text-white">{tierConfig.name}</div>
+                <div className="text-xs text-white/50 mt-1">
+                  {tierConfig.targetGPU}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Pending Tier Change Confirmation */}
+        {pendingTierChange && (
+          <div className="p-3 rounded-lg bg-yellow-900/30 border border-yellow-500/50 mb-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm text-yellow-200">
+                  ⚠️ Change to <strong>{RAG_TIERS[pendingTierChange].name}</strong>?
+                </p>
+                <p className="text-xs text-yellow-200/70">
+                  This will re-index your entire codebase.
+                </p>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setPendingTierChange(null)}
+                  className="px-3 py-1 rounded text-sm bg-white/10 text-white hover:bg-white/20"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={confirmTierChange}
+                  disabled={tierChangeMutation.isPending}
+                  className="px-3 py-1 rounded text-sm bg-yellow-600 text-white hover:bg-yellow-500"
+                >
+                  {tierChangeMutation.isPending ? "Changing..." : "Confirm"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Current Tier Config Display */}
+        <div className="grid grid-cols-2 gap-3">
+          {/* Embedder (Fixed) */}
+          <div className="p-3 rounded-lg bg-black/20 border border-white/10">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-lg">🔍</span>
+              <span className="text-sm font-medium text-white">Embedder</span>
+            </div>
+            <div className="text-xs text-white/80">{currentTierConfig.embedder.name}</div>
+            <div className="flex gap-2 mt-2">
+              <Badge tone="neutral">{currentTierConfig.embedder.contextLength / 1000}K ctx</Badge>
+              <Badge tone="neutral">{currentTierConfig.embedder.sizeGB}GB</Badge>
+            </div>
+          </div>
+
+          {/* RAG Summarizer (Fixed) */}
+          <div className="p-3 rounded-lg bg-black/20 border border-white/10">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-lg">📄</span>
+              <span className="text-sm font-medium text-white">RAG Summarizer</span>
+            </div>
+            <div className="text-xs text-white/80">{currentTierConfig.ragSummarizer.name}</div>
+            <div className="flex gap-2 mt-2">
+              <Badge tone="neutral">4K ctx</Badge>
+              <Badge tone="neutral">{currentTierConfig.ragSummarizer.sizeGB}GB</Badge>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* =========================================== */}
+      {/* USER-SELECTABLE MODELS */}
+      {/* =========================================== */}
       <div className="space-y-4">
+        <div className="flex items-center gap-2">
+          <span className="text-lg">⚙️</span>
+          <h4 className="font-medium text-white">User-Selectable Models</h4>
+        </div>
+
         <RoleSelector
           role="main"
           info={ROLE_INFO.main}
           value={config.main}
-          options={mainModels}
+          options={selectableModels}
           locks={locks}
           onSelect={(id) => setConfig((c) => ({ ...c, main: id }))}
           onToggleLock={(id) => lockMutation.mutate({ modelId: id })}
         />
 
         <RoleSelector
-          role="summarizer"
-          info={ROLE_INFO.summarizer}
-          value={config.summarizer}
-          options={summarizerModels}
+          role="rollingSummarizer"
+          info={ROLE_INFO.rollingSummarizer}
+          value={config.rollingSummarizer}
+          options={selectableModels}
           locks={locks}
-          onSelect={(id) => setConfig((c) => ({ ...c, summarizer: id }))}
+          onSelect={(id) => setConfig((c) => ({ ...c, rollingSummarizer: id }))}
           onToggleLock={(id) => lockMutation.mutate({ modelId: id })}
         />
-
-        {/* Embedder - Fixed (not selectable) */}
-        <div className="p-4 rounded-lg bg-white/5 border border-white/10">
-          <div className="flex items-start justify-between mb-3">
-            <div className="flex items-start gap-3">
-              <div className="text-2xl">{ROLE_INFO.embedder.icon}</div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <h4 className="font-medium text-white">
-                    {ROLE_INFO.embedder.name}
-                  </h4>
-                  <Badge tone="info">
-                    Fixed
-                  </Badge>
-                </div>
-                <p className="text-xs text-white/50 mt-1">
-                  {ROLE_INFO.embedder.description}
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <StarRating {...getStarRatingFromSize(FIXED_EMBEDDER.sizeGB)} />
-            </div>
-          </div>
-
-          {/* Fixed embedder display */}
-          <div className="flex items-center gap-3">
-            <div className="flex-1 px-3 py-2 rounded-lg text-sm bg-gray-700/50 border border-white/10 text-white/70">
-              <div className="flex items-center justify-between">
-                <span>{FIXED_EMBEDDER.name}</span>
-                <span className="text-white/40 text-xs">
-                  {FIXED_EMBEDDER.sizeGB}GB • {FIXED_EMBEDDER.contextLength / 1000}K ctx
-                </span>
-              </div>
-            </div>
-            <div className="text-white/30">
-              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
-                <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
-              </svg>
-            </div>
-          </div>
-
-          {/* Info badges */}
-          <div className="flex flex-wrap gap-2 mt-2">
-            <Badge tone="neutral">
-              🧬 Code-Aware
-            </Badge>
-            <Badge tone="neutral">
-              {FIXED_EMBEDDER.contextLength / 1000}K Context
-            </Badge>
-            <Badge tone="neutral">
-              ~{FIXED_EMBEDDER.sizeGB} GB
-            </Badge>
-          </div>
-
-          <p className="text-xs text-white/40 mt-2 italic">
-            Embedder is fixed system-wide. Changing requires re-indexing all code.
-          </p>
-        </div>
       </div>
 
       {/* Optimization result message */}
@@ -377,7 +497,7 @@ export function CustomPresetPanel({
 }
 
 interface RoleSelectorProps {
-  role: "main" | "summarizer" | "embedder";
+  role: "main" | "rollingSummarizer";
   info: {
     name: string;
     description: string;
@@ -400,7 +520,6 @@ function RoleSelector({
   onSelect,
   onToggleLock,
 }: RoleSelectorProps) {
-  // _role is available for future use (e.g., role-specific styling)
   const selectedModel = options.find((m) => m.id === value);
   const { stars, label } = selectedModel?.sizeGB
     ? getStarRatingFromSize(selectedModel.sizeGB)
@@ -481,4 +600,3 @@ function RoleSelector({
 }
 
 export default CustomPresetPanel;
-

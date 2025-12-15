@@ -863,6 +863,120 @@ class SQLiteCacheManager {
         });
     }
 
+    // ==========================================================================
+    // DEBUG / DIAGNOSTICS METHODS
+    // ==========================================================================
+
+    /**
+     * Get chunk by ID for debug purposes.
+     */
+    async getChunkById(chunkId) {
+        return new Promise((resolve, reject) => {
+            this.db.get(`
+                SELECT chunk_id as id, file_path, chunk_start_line as chunk_index, 
+                       embedding, summary, chunk_size as tokens, timestamp as created_at
+                FROM cached_chunks WHERE chunk_id = ?
+            `, [chunkId], (err, row) => {
+                if (err) return reject(err);
+                if (!row) return resolve(null);
+                
+                // Try to get original code from summary or file (simplified for debug)
+                resolve({
+                    id: row.id,
+                    file_path: row.file_path,
+                    chunk_index: row.chunk_index || 0,
+                    original_code: row.summary ? `[Chunk from ${row.file_path}]` : '',
+                    summary: row.summary,
+                    tokens: row.tokens || 0,
+                    created_at: row.created_at
+                });
+            });
+        });
+    }
+
+    /**
+     * Get database statistics for debug.
+     */
+    async getStats() {
+        return new Promise((resolve, reject) => {
+            this.db.get(`
+                SELECT 
+                    COUNT(*) as chunkCount,
+                    COUNT(DISTINCT file_path) as fileCount,
+                    SUM(chunk_size) as totalTokens,
+                    AVG(chunk_size) as avgChunkSize,
+                    MAX(timestamp) as lastIndexed
+                FROM cached_chunks
+            `, [], (err, row) => {
+                if (err) return reject(err);
+                resolve({
+                    chunkCount: row?.chunkCount || 0,
+                    fileCount: row?.fileCount || 0,
+                    totalTokens: row?.totalTokens || 0,
+                    avgChunkSize: Math.round(row?.avgChunkSize || 0),
+                    lastIndexed: row?.lastIndexed || null
+                });
+            });
+        });
+    }
+
+    /**
+     * Get list of indexed files with chunk counts.
+     */
+    async getIndexedFiles() {
+        return new Promise((resolve, reject) => {
+            this.db.all(`
+                SELECT file_path as path, COUNT(*) as chunkCount, SUM(chunk_size) as totalTokens
+                FROM cached_chunks
+                GROUP BY file_path
+                ORDER BY file_path
+            `, [], (err, rows) => {
+                if (err) return reject(err);
+                resolve(rows || []);
+            });
+        });
+    }
+
+    /**
+     * Get chunks with optional filtering (for debug explorer).
+     */
+    async getChunks({ filePath = null, limit = 50, offset = 0 } = {}) {
+        let sql = `
+            SELECT chunk_id as id, file_path as filePath, chunk_start_line as chunkIndex,
+                   summary, chunk_size as tokens, timestamp as createdAt
+            FROM cached_chunks
+        `;
+        const params = [];
+        
+        if (filePath) {
+            sql += ' WHERE file_path = ?';
+            params.push(filePath);
+        }
+        
+        sql += ' ORDER BY file_path, chunk_start_line LIMIT ? OFFSET ?';
+        params.push(limit, offset);
+        
+        return new Promise((resolve, reject) => {
+            this.db.all(sql, params, (err, rows) => {
+                if (err) return reject(err);
+                resolve(rows || []);
+            });
+        });
+    }
+
+    /**
+     * Clear all chunks (for re-indexing).
+     */
+    async clearChunks() {
+        return new Promise((resolve, reject) => {
+            this.db.run('DELETE FROM cached_chunks', [], (err) => {
+                if (err) return reject(err);
+                logInfo('All cached chunks cleared for re-indexing.');
+                resolve();
+            });
+        });
+    }
+
     /**
      * Close the SQLite database connection.
      */

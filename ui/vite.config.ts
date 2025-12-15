@@ -24,6 +24,8 @@ const proxiedRoutes = [
   "/presets",
   "/hardware",
   "/summary",
+  "/rag",
+  "/debug",
 ];
 
 export default defineConfig(({ command }) => {

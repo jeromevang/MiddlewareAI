@@ -11,34 +11,28 @@
       "darwin": "~/.lmstudio/bin/lms"
     }
   },
+  "ragPipeline": {
+    "tier": "medium",
+    "locked": true,
+    "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
+  },
   "models": {
-    "activePreset": "low",
+    "activePreset": "medium",
+    "main": {
+      "model_name": "qwen/qwen3-8b",
+      "identifier": "qwen/qwen3-8b",
+      "userSelectable": true
+    },
+    "rollingSummarization": {
+      "model_name": "qwen2.5-coder-1.5b-instruct",
+      "identifier": "qwen2.5-coder-1.5b-instruct",
+      "context_length": 4096,
+      "userSelectable": true
+    },
     "perQualityMainModels": {
       "high": "qwen/qwen3-14b",
       "medium": "qwen/qwen3-8b",
       "low": "qwen/qwen3-4b-2507"
-    },
-    "embedding": {
-      "engine": "local",
-      "model_name": "jinaai/jina-embeddings-v2-base-code",
-      "identifier": "jina-embeddings-v2-base-code",
-      "context_length": 8192,
-      "locked": true,
-      "description": "Code-aware embeddings optimized for programming languages (8K context)"
-    },
-    "ragSummarization": {
-      "model_name": "qwen2.5-coder-1.5b-instruct",
-      "identifier": "qwen2.5-coder-1.5b-instruct",
-      "context_length": 4096
-    },
-    "rollingSummarization": {
-      "model_name": "qwen2.5-coder-0.5b-instruct",
-      "identifier": "qwen2.5-coder-0.5b-instruct",
-      "context_length": 4096
-    },
-    "main": {
-      "model_name": "qwen/qwen3-4b-2507",
-      "identifier": "qwen/qwen3-4b-2507"
     }
   },
   "processing": {

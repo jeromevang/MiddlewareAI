@@ -1922,25 +1922,133 @@ app.get('/presets/custom', (req, res) => {
 
 /**
  * POST /presets/custom - Save custom preset configuration
+ * 
+ * NOTE: Only main and rollingSummarizer are user-selectable.
+ * Embedder and RAG summarizer are part of the CLOSED RAG pipeline.
  */
 app.post('/presets/custom', async (req, res) => {
     try {
-        const { main, summarizer, embedder } = req.body || {};
+        const { main, rollingSummarizer } = req.body || {};
         
+        // Only user-selectable models (NOT embedder or ragSummarizer - those are closed)
         customPresetConfig = {
             main: main || null,
-            summarizer: summarizer || null,
-            embedder: embedder || null
+            rollingSummarizer: rollingSummarizer || null,
+            // embedder and ragSummarizer are LOCKED to RAG pipeline tier
         };
         
         // Persist to config.json
         updateConfig({ customPreset: customPresetConfig });
         
-        appendLog(`Custom preset updated: main=${main}, summarizer=${summarizer}, embedder=${embedder}`, 'info');
+        appendLog(`Custom preset updated: main=${main}, rollingSummarizer=${rollingSummarizer}`, 'info');
         res.json({ status: 'ok', config: customPresetConfig });
     } catch (error) {
         console.error('[API] Failed to save custom preset:', error.message);
         res.status(500).json({ error: 'Failed to save custom preset', details: error.message });
+    }
+});
+
+// =========================
+// RAG Pipeline Tier Management (Closed System)
+// =========================
+
+/**
+ * GET /rag/tier - Get current RAG pipeline tier
+ */
+app.get('/rag/tier', (req, res) => {
+    try {
+        const { getRagPipelineTier } = require('./config.js');
+        const { getRagPipelineConfig, getAllTiers } = require('./rag_pipeline_config.js');
+        
+        const currentTier = getRagPipelineTier();
+        const tierConfig = getRagPipelineConfig(currentTier);
+        const allTiers = getAllTiers();
+        
+        res.json({
+            status: 'ok',
+            currentTier,
+            config: {
+                embedder: tierConfig.embedder,
+                ragSummarizer: tierConfig.ragSummarizer,
+                indexingSpeed: tierConfig.indexingSpeed,
+                summaryQuality: tierConfig.summaryQuality
+            },
+            availableTiers: Object.keys(allTiers).map(key => ({
+                id: key,
+                name: allTiers[key].name,
+                description: allTiers[key].description,
+                targetGPU: allTiers[key].targetGPU
+            })),
+            locked: true,
+            note: 'RAG pipeline is a closed system. Changing tier requires re-indexing.'
+        });
+    } catch (error) {
+        console.error('[API] Failed to get RAG tier:', error.message);
+        res.status(500).json({ error: 'Failed to get RAG tier', details: error.message });
+    }
+});
+
+/**
+ * POST /rag/tier - Change RAG pipeline tier (triggers re-index)
+ */
+app.post('/rag/tier', async (req, res) => {
+    try {
+        const { tier } = req.body || {};
+        const validTiers = ['low', 'medium', 'high'];
+        
+        if (!tier || !validTiers.includes(tier)) {
+            return res.status(400).json({ 
+                error: `Invalid tier. Must be one of: ${validTiers.join(', ')}` 
+            });
+        }
+        
+        const { getRagPipelineTier, setRagPipelineTier } = require('./config.js');
+        const { requiresReindex, getRagPipelineConfig } = require('./rag_pipeline_config.js');
+        
+        const previousTier = getRagPipelineTier();
+        const needsReindex = requiresReindex(previousTier, tier);
+        
+        if (previousTier === tier) {
+            return res.json({ 
+                status: 'ok', 
+                message: 'Already on this tier',
+                tier,
+                reindexTriggered: false
+            });
+        }
+        
+        // Update the tier
+        setRagPipelineTier(tier);
+        const newConfig = getRagPipelineConfig(tier);
+        
+        appendLog(`RAG pipeline tier changed: ${previousTier} -> ${tier}`, 'info');
+        
+        // Trigger re-index if needed
+        if (needsReindex && isRagFeatureEnabled()) {
+            appendLog('Re-indexing triggered due to tier change...', 'info');
+            
+            // Clear existing index first (dimension may change)
+            await faissIndexManager.clear();
+            await sqliteCacheManager.clearChunks();
+            
+            // Start re-index in background
+            void startIndexer({ reason: `tier-change-${tier}`, background: true });
+        }
+        
+        res.json({
+            status: 'ok',
+            message: needsReindex ? 'Tier changed, re-indexing started' : 'Tier changed',
+            previousTier,
+            newTier: tier,
+            config: {
+                embedder: newConfig.embedder,
+                ragSummarizer: newConfig.ragSummarizer
+            },
+            reindexTriggered: needsReindex
+        });
+    } catch (error) {
+        console.error('[API] Failed to change RAG tier:', error.message);
+        res.status(500).json({ error: 'Failed to change RAG tier', details: error.message });
     }
 });
 
@@ -2970,6 +3078,334 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
  */
 app.post('/v1/chat/completions', (req, res) => handleChatCompletions(req, res, '/v1/chat/completions'));
 app.post('/chat/completions', (req, res) => handleChatCompletions(req, res, '/chat/completions'));
+
+// =============================================================================
+// DEBUG / DIAGNOSTICS ENDPOINTS
+// =============================================================================
+
+/**
+ * GET /debug/system-health - Get health status of all RAG components
+ */
+app.get('/debug/system-health', async (req, res) => {
+    try {
+        const health = {
+            embedder: { status: 'loading', message: 'Checking...' },
+            ragSummarizer: { status: 'loading', message: 'Checking...' },
+            faiss: { status: 'loading', message: 'Checking...', chunkCount: 0 },
+            lmstudio: { status: 'loading', message: 'Checking...' }
+        };
+
+        // Check Embedder
+        try {
+            // Just check if embedder module is available
+            const { embedText } = require('./lmstudio/embeddings.js');
+            if (typeof embedText === 'function') {
+                health.embedder = { status: 'ok', message: 'Jina Code v2 ready' };
+            }
+        } catch (e) {
+            health.embedder = { status: 'error', message: e.message };
+        }
+
+        // Check RAG Summarizer (via LM Studio)
+        try {
+            const { getRagPipelineTier } = require('./config.js');
+            const { getRagSummarizerConfig } = require('./rag_pipeline_config.js');
+            const tier = getRagPipelineTier();
+            const ragSumConfig = getRagSummarizerConfig(tier);
+            health.ragSummarizer = { 
+                status: 'ok', 
+                message: `${ragSumConfig.model_name} (${tier} tier)` 
+            };
+        } catch (e) {
+            health.ragSummarizer = { status: 'error', message: e.message };
+        }
+
+        // Check FAISS Index
+        try {
+            if (faissIndexManager) {
+                const count = await faissIndexManager.count();
+                health.faiss = { 
+                    status: count > 0 ? 'ok' : 'warn', 
+                    message: count > 0 ? 'Index loaded' : 'Index empty',
+                    chunkCount: count
+                };
+            } else {
+                health.faiss = { status: 'error', message: 'FAISS not initialized' };
+            }
+        } catch (e) {
+            health.faiss = { status: 'error', message: e.message };
+        }
+
+        // Check LM Studio
+        try {
+            const { isLMStudioRunning } = require('./lmstudio_manager.js');
+            const { getLMStudioConfig } = require('./config.js');
+            const cfg = getLMStudioConfig();
+            const isRunning = await isLMStudioRunning(cfg.url);
+            health.lmstudio = { 
+                status: isRunning ? 'ok' : 'error', 
+                message: isRunning ? 'Connected' : 'Not connected'
+            };
+        } catch (e) {
+            health.lmstudio = { status: 'error', message: e.message };
+        }
+
+        res.json({ status: 'ok', health });
+    } catch (error) {
+        res.status(500).json({ error: 'Health check failed', details: error.message });
+    }
+});
+
+/**
+ * POST /debug/test-embedder - Test the embedder with sample text
+ */
+app.post('/debug/test-embedder', async (req, res) => {
+    try {
+        const { text } = req.body || {};
+        if (!text) {
+            return res.status(400).json({ error: 'Missing text field' });
+        }
+
+        const startTime = Date.now();
+        const { embedText } = require('./lmstudio/embeddings.js');
+        const result = await embedText(text);
+        const timeMs = Date.now() - startTime;
+
+        if (result.failed || !result.embeddingVector) {
+            return res.json({ status: 'error', error: result.error || 'Embedding failed' });
+        }
+
+        res.json({
+            status: 'ok',
+            dimension: result.embeddingVector.length,
+            sample: Array.from(result.embeddingVector.slice(0, 10)),
+            timeMs
+        });
+    } catch (error) {
+        res.json({ status: 'error', error: error.message });
+    }
+});
+
+/**
+ * POST /debug/test-rag - Test RAG search
+ */
+app.post('/debug/test-rag', async (req, res) => {
+    try {
+        const { query, topK = 5 } = req.body || {};
+        if (!query) {
+            return res.status(400).json({ error: 'Missing query field' });
+        }
+
+        const startTime = Date.now();
+        const { embedText } = require('./lmstudio/embeddings.js');
+        const embResult = await embedText(query);
+        
+        if (embResult.failed || !embResult.embeddingVector) {
+            return res.json({ status: 'error', error: embResult.error || 'Embedding failed' });
+        }
+        
+        // Search FAISS
+        const searchResults = await faissIndexManager.search(embResult.embeddingVector, topK);
+        
+        // Get chunk details from SQLite
+        const results = [];
+        for (const r of searchResults) {
+            const chunk = await sqliteCacheManager.getChunkById(r.id);
+            if (chunk) {
+                results.push({
+                    chunk: {
+                        id: chunk.id,
+                        filePath: chunk.file_path,
+                        chunkIndex: chunk.chunk_index,
+                        originalCode: chunk.original_code?.slice(0, 300),
+                        summary: chunk.summary?.slice(0, 200),
+                        tokens: chunk.tokens
+                    },
+                    score: r.score
+                });
+            }
+        }
+
+        const timeMs = Date.now() - startTime;
+        res.json({ status: 'ok', results, timeMs });
+    } catch (error) {
+        res.json({ status: 'error', error: error.message });
+    }
+});
+
+/**
+ * POST /debug/test-summarizer - Test the RAG summarizer
+ */
+app.post('/debug/test-summarizer', async (req, res) => {
+    try {
+        const { text } = req.body || {};
+        if (!text) {
+            return res.status(400).json({ error: 'Missing text field' });
+        }
+
+        const startTime = Date.now();
+        const { summarizeChunk } = require('./lmstudio/chat.js');
+        const summary = await summarizeChunk(text);
+        const timeMs = Date.now() - startTime;
+
+        res.json({ status: 'ok', summary, timeMs });
+    } catch (error) {
+        res.json({ status: 'error', error: error.message });
+    }
+});
+
+/**
+ * GET /debug/rag/stats - Get RAG index statistics
+ */
+app.get('/debug/rag/stats', async (req, res) => {
+    try {
+        const totalChunks = await faissIndexManager.count();
+        
+        // Get stats from SQLite
+        const dbStats = await sqliteCacheManager.getStats();
+        
+        const { getStorageConfig } = require('./config.js');
+        const storageCfg = getStorageConfig();
+        
+        res.json({
+            status: 'ok',
+            stats: {
+                totalChunks,
+                totalFiles: dbStats?.fileCount || 0,
+                totalTokens: dbStats?.totalTokens || 0,
+                avgChunkSize: dbStats?.avgChunkSize || 0,
+                indexDimension: storageCfg.embedding_dimension || 768,
+                lastIndexed: dbStats?.lastIndexed || null
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get stats', details: error.message });
+    }
+});
+
+/**
+ * GET /debug/rag/files - Get list of indexed files
+ */
+app.get('/debug/rag/files', async (req, res) => {
+    try {
+        const files = await sqliteCacheManager.getIndexedFiles();
+        res.json({ status: 'ok', files });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get files', details: error.message });
+    }
+});
+
+/**
+ * GET /debug/rag/chunks - Get chunks (optionally filtered by file)
+ */
+app.get('/debug/rag/chunks', async (req, res) => {
+    try {
+        const { filePath, limit = 50, offset = 0 } = req.query;
+        const chunks = await sqliteCacheManager.getChunks({
+            filePath,
+            limit: parseInt(limit, 10),
+            offset: parseInt(offset, 10)
+        });
+        res.json({ status: 'ok', chunks });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get chunks', details: error.message });
+    }
+});
+
+/**
+ * GET /debug/rag/chunk/:id - Get single chunk with full details
+ */
+app.get('/debug/rag/chunk/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        const chunk = await sqliteCacheManager.getChunkById(id);
+        
+        if (!chunk) {
+            return res.status(404).json({ error: 'Chunk not found' });
+        }
+
+        // Get embedding preview from FAISS if available
+        let embeddingPreview = [];
+        try {
+            const embedding = await faissIndexManager.getEmbedding(id);
+            if (embedding) {
+                embeddingPreview = Array.from(embedding.slice(0, 20));
+            }
+        } catch (_) {
+            // Embedding lookup failed, that's ok
+        }
+
+        res.json({
+            status: 'ok',
+            chunk: {
+                id: chunk.id,
+                filePath: chunk.file_path,
+                chunkIndex: chunk.chunk_index,
+                originalCode: chunk.original_code,
+                summary: chunk.summary,
+                tokens: chunk.tokens,
+                embeddingPreview,
+                createdAt: chunk.created_at
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get chunk', details: error.message });
+    }
+});
+
+/**
+ * POST /debug/rag/search-explain - Search with detailed explanation
+ */
+app.post('/debug/rag/search-explain', async (req, res) => {
+    try {
+        const { query, topK = 10 } = req.body || {};
+        if (!query) {
+            return res.status(400).json({ error: 'Missing query field' });
+        }
+
+        const { embedText } = require('./lmstudio/embeddings.js');
+        const embResult = await embedText(query);
+        
+        if (embResult.failed || !embResult.embeddingVector) {
+            return res.status(500).json({ error: 'Embedding failed', details: embResult.error });
+        }
+        
+        const queryEmbedding = embResult.embeddingVector;
+        
+        // Search FAISS with scores
+        const searchResults = await faissIndexManager.search(queryEmbedding, topK);
+        
+        // Enrich with chunk data
+        const results = [];
+        for (const r of searchResults) {
+            const chunk = await sqliteCacheManager.getChunkById(r.id);
+            if (chunk) {
+                results.push({
+                    chunk: {
+                        id: chunk.id,
+                        filePath: chunk.file_path,
+                        chunkIndex: chunk.chunk_index,
+                        originalCode: chunk.original_code,
+                        summary: chunk.summary,
+                        tokens: chunk.tokens,
+                        createdAt: chunk.created_at
+                    },
+                    score: r.score,
+                    explanation: `Cosine similarity: ${(r.score * 100).toFixed(2)}%`
+                });
+            }
+        }
+
+        res.json({
+            status: 'ok',
+            query,
+            queryEmbeddingDimension: queryEmbedding.length,
+            results
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Search failed', details: error.message });
+    }
+});
 
 function teardownWebsocketServer() {
     if (dashboardBroadcastTimer) {
