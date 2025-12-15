@@ -41,6 +41,11 @@
       "high": "qwen/qwen3-14b",
       "medium": "mungert/osmosis-mcp-4b",
       "low": "qwen/qwen3-4b-2507"
+    },
+    "perQualityRollingSummarizers": {
+      "high": "qwen2.5-coder-1.5b-instruct",
+      "medium": "qwen2.5-coder-1.5b-instruct",
+      "low": "qwen2.5-coder-0.5b-instruct"
     }
   },
   "processing": {

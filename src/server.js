@@ -2139,6 +2139,38 @@ app.post('/presets/quality-model', async (req, res) => {
     }
 });
 
+/**
+ * POST /presets/quality-summarizer - Save selected summarizer model for a quality preset
+ */
+app.post('/presets/quality-summarizer', async (req, res) => {
+    try {
+        const { quality, summarizerId } = req.body || {};
+
+        if (!quality || !summarizerId) {
+            return res.status(400).json({ error: 'Missing quality or summarizerId' });
+        }
+
+        if (!['high', 'medium', 'low'].includes(quality)) {
+            return res.status(400).json({ error: 'Invalid quality tier' });
+        }
+
+        // Update the perQualityRollingSummarizers in config
+        updateConfigFile(config => {
+            if (!config.models.perQualityRollingSummarizers) {
+                config.models.perQualityRollingSummarizers = {};
+            }
+            config.models.perQualityRollingSummarizers[quality] = summarizerId;
+            return config;
+        });
+
+        appendLog(`Quality preset summarizer updated: ${quality}=${summarizerId}`, 'info');
+        res.json({ status: 'ok', quality, summarizerId });
+    } catch (error) {
+        console.error('[API] Failed to save quality preset summarizer:', error.message);
+        res.status(500).json({ error: 'Failed to save quality preset summarizer', details: error.message });
+    }
+});
+
 // =========================
 // RAG Pipeline Tier Management (Closed System)
 // =========================

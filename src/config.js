@@ -78,6 +78,22 @@ function validateConfig(config) {
         }
     }
 
+    // Validate perQualityRollingSummarizers if present (should be an object with string values)
+    if (config.models.perQualityRollingSummarizers) {
+        if (typeof config.models.perQualityRollingSummarizers !== 'object') {
+            throw new Error('perQualityRollingSummarizers must be an object');
+        }
+        const validKeys = ['high', 'medium', 'low'];
+        for (const key of Object.keys(config.models.perQualityRollingSummarizers)) {
+            if (!validKeys.includes(key)) {
+                throw new Error(`Invalid perQualityRollingSummarizers key: ${key}`);
+            }
+            if (typeof config.models.perQualityRollingSummarizers[key] !== 'string') {
+                throw new Error(`perQualityRollingSummarizers.${key} must be a string`);
+            }
+        }
+    }
+
     if (!config.lmstudio.url) {
         throw new Error('Missing LM Studio URL in configuration');
     }

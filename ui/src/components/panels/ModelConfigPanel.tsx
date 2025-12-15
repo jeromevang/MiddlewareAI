@@ -16,7 +16,7 @@ import clsx from "clsx";
 // Import from split files
 import type { RagTier } from './model-config/types';
 import { RAG_TIERS, getModelDisplayName } from './model-config/constants';
-import { saveQualityPresetModel, downloadModel } from '../../lib/api';
+import { saveQualityPresetModel, saveQualityPresetSummarizer, downloadModel } from '../../lib/api';
 
 
 export default function ModelConfigPanel() {
@@ -93,11 +93,26 @@ export default function ModelConfigPanel() {
     },
     onSuccess: (result) => {
       console.log('Quality preset model saved:', result);
-      queryClient.invalidateQueries({ queryKey: ['presets'] });
+      queryClient.invalidateQueries({ queryKey: ['config'] });
     },
     onError: (err) => {
       console.error('Failed to save quality preset model:', err);
       alert(`Failed to save model selection: ${err.message}`);
+    },
+  });
+
+  // Handle summarizer model selection for quality presets
+  const handleSummarizerModelChange = useMutation({
+    mutationFn: async (summarizerId: string) => {
+      return saveQualityPresetSummarizer({ quality: quality as 'high' | 'medium' | 'low', summarizerId });
+    },
+    onSuccess: (result) => {
+      console.log('Quality preset summarizer saved:', result);
+      queryClient.invalidateQueries({ queryKey: ['config'] });
+    },
+    onError: (err) => {
+      console.error('Failed to save summarizer selection:', err);
+      alert(`Failed to save summarizer selection: ${err.message}`);
     },
   });
 
@@ -301,31 +316,7 @@ export default function ModelConfigPanel() {
                       }}
                     >
                       <h3 className="font-semibold text-white mb-1">{meta.name}</h3>
-                      <p className="text-sm text-white/70 mb-2">{meta.description}</p>
-
-                      {isCustom ? (
-                        <div className="text-xs text-white/60">
-                          Configure below
-                        </div>
-                      ) : (
-                        <div className="space-y-1">
-                          <div className="text-xs text-white/50 font-medium">
-                            Recommended models:
-                          </div>
-                          <div className="space-y-0.5">
-                            {preset?.mainOptions?.slice(0, 3).map((modelId: string) => (
-                              <div key={modelId} className="text-xs text-white/70 truncate">
-                                • {getModelDisplayName(modelId)}
-                              </div>
-                            ))}
-                            {preset?.mainOptions && preset.mainOptions.length > 3 && (
-                              <div className="text-xs text-white/50">
-                                +{preset.mainOptions.length - 3} more...
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
+                      <p className="text-sm text-white/70">{meta.description}</p>
 
                       {quality === key && (
                         <div className="mt-2 text-xs text-green-400 font-semibold">✓ Selected</div>
@@ -344,8 +335,10 @@ export default function ModelConfigPanel() {
                 <MainModelSelector
                   quality={quality}
                   preset={presets[quality]}
-                  selectedModel={configData?.models.perQualityMainModels?.[quality] || null}
-                  onModelSelect={(modelId) => handleMainModelChange.mutate(modelId)}
+                  selectedMainModel={configData?.models.perQualityMainModels?.[quality] || null}
+                  selectedSummarizerModel={configData?.models.perQualityRollingSummarizers?.[quality] || null}
+                  onMainModelSelect={(modelId) => handleMainModelChange.mutate(modelId)}
+                  onSummarizerModelSelect={(summarizerId) => handleSummarizerModelChange.mutate(summarizerId)}
                   onModelDownload={(modelId) => handleDownloadModel.mutate(modelId)}
                 />
               </div>

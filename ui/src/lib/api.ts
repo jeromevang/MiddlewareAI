@@ -771,8 +771,26 @@ export interface QualityModelResponse {
   modelId: string;
 }
 
+export interface QualitySummarizerConfig {
+  quality: 'high' | 'medium' | 'low';
+  summarizerId: string;
+}
+
+export interface QualitySummarizerResponse {
+  status: string;
+  quality: string;
+  summarizerId: string;
+}
+
 export async function saveQualityPresetModel(config: QualityModelConfig): Promise<QualityModelResponse> {
   return request<QualityModelResponse>("/presets/quality-model", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
+export async function saveQualityPresetSummarizer(config: QualitySummarizerConfig): Promise<QualitySummarizerResponse> {
+  return request<QualitySummarizerResponse>("/presets/quality-summarizer", {
     method: "POST",
     body: JSON.stringify(config),
   });
