@@ -997,6 +997,86 @@ async function runSummarizationModel(messages) {
 }
 
 /**
+ * Emergency truncation - ensures messages fit within token limit.
+ * Keeps system message, truncates oldest conversation messages, keeps latest user message.
+ * This is a fallback when summarization fails - prevents context overflow errors.
+ * @param {Array<{role: string, content: string}>} messages - Chat messages
+ * @param {number} maxTokens - Maximum allowed tokens
+ * @returns {Promise<Array<{role: string, content: string}>>} - Truncated messages that fit
+ */
+async function truncateMessagesToFit(messages, maxTokens) {
+    const { truncateToTokenLimit } = require('./tokenizer.js');
+    
+    if (!messages || messages.length === 0) return messages;
+    
+    // Reserve 10% margin for safety
+    const targetTokens = Math.floor(maxTokens * 0.9);
+    
+    // Always keep: system message (first) and last user message
+    const systemMsg = messages[0];
+    const lastUserIdx = messages.map((m, i) => ({ m, i })).filter(x => x.m.role === 'user').pop()?.i;
+    const lastUserMsg = lastUserIdx !== undefined ? messages[lastUserIdx] : null;
+    
+    // Count system message tokens
+    const systemTokens = await countTokensPerMessage([systemMsg]);
+    let usedTokens = systemTokens[0] || 0;
+    
+    // Reserve space for last user message
+    let userMsgTokens = 0;
+    if (lastUserMsg) {
+        const userTokenCounts = await countTokensPerMessage([lastUserMsg]);
+        userMsgTokens = userTokenCounts[0] || 0;
+    }
+    
+    const budgetForMiddle = targetTokens - usedTokens - userMsgTokens;
+    
+    if (budgetForMiddle <= 0) {
+        // Extreme case: even system + user don't fit, truncate system content
+        console.warn('[Summary] Emergency: truncating system message content');
+        const truncatedSystemContent = await truncateToTokenLimit(
+            systemMsg.content, 
+            Math.floor(targetTokens * 0.5)
+        );
+        return [
+            { role: 'system', content: truncatedSystemContent + '\n\n[Context truncated due to length limits]' },
+            lastUserMsg || messages[messages.length - 1]
+        ];
+    }
+    
+    // Work backwards from last message (excluding user if we have it), keep what fits
+    const result = [systemMsg];
+    const middleMessages = messages.slice(1, lastUserIdx !== undefined ? lastUserIdx : messages.length);
+    let remainingBudget = budgetForMiddle;
+    const keptMiddle = [];
+    
+    // Start from newest (closest to current) and work backwards
+    for (let i = middleMessages.length - 1; i >= 0; i--) {
+        const msg = middleMessages[i];
+        const [msgTokens] = await countTokensPerMessage([msg]);
+        
+        if (msgTokens <= remainingBudget) {
+            keptMiddle.unshift(msg);
+            remainingBudget -= msgTokens;
+        } else {
+            // Can't fit more, stop
+            break;
+        }
+    }
+    
+    result.push(...keptMiddle);
+    if (lastUserMsg) {
+        result.push(lastUserMsg);
+    }
+    
+    const droppedCount = middleMessages.length - keptMiddle.length;
+    if (droppedCount > 0) {
+        console.log(`[Summary] Truncation: dropped ${droppedCount} older messages to fit ${maxTokens} token limit`);
+    }
+    
+    return result;
+}
+
+/**
  * MODE 1: Turn-based summarization (engine ON)
  * Summarizes oldest turns when conversation exceeds keep_recent_turns threshold.
  * @param {Array<{role: string, content: string}>} messages - Chat messages
@@ -1031,7 +1111,8 @@ async function handleTurnBasedSummary(messages) {
         const summary = await runSummarizationModel(toSummarize);
         
         if (!summary) {
-            return messages; // Summarization failed, return original
+            console.warn('[Summary] Turn-based summarization returned empty, applying truncation fallback');
+            return truncateMessagesToFit(messages, getMainModelMaxContext());
         }
         
         return [
@@ -1041,7 +1122,9 @@ async function handleTurnBasedSummary(messages) {
         ];
     } catch (err) {
         console.error('[Summary] Turn-based summarization failed:', err?.message || err);
-        return messages; // Return original on error
+        // CRITICAL: Never return oversized messages - truncate as fallback
+        console.log('[Summary] Applying emergency truncation');
+        return truncateMessagesToFit(messages, getMainModelMaxContext());
     }
 }
 
@@ -1072,7 +1155,8 @@ async function handleContextBasedSummary(messages) {
     
     if (budget <= 0) {
         console.warn('[Summary] System message too large, cannot fit context');
-        return messages;
+        // Fallback: truncate system message and keep last user message
+        return truncateMessagesToFit(messages, maxTokens);
     }
     
     // Find cut point: work backwards from newest, keep as many recent messages as fit
@@ -1090,8 +1174,8 @@ async function handleContextBasedSummary(messages) {
     const toKeep = messages.slice(cutIndex);
     
     if (toSummarize.length === 0) {
-        console.log('[Summary] No messages to summarize');
-        return messages;
+        console.log('[Summary] No messages to summarize, truncating to fit');
+        return truncateMessagesToFit(messages, maxTokens);
     }
     
     console.log(`[Summary] Context-based: summarizing ${toSummarize.length} oldest messages, keeping ${toKeep.length} recent`);
@@ -1100,8 +1184,8 @@ async function handleContextBasedSummary(messages) {
         const summary = await runSummarizationModel(toSummarize);
         
         if (!summary) {
-            console.warn('[Summary] Summarization returned empty, keeping original messages');
-            return messages;
+            console.warn('[Summary] Summarization returned empty, truncating to fit');
+            return truncateMessagesToFit(messages, maxTokens);
         }
         
         return [
@@ -1111,7 +1195,9 @@ async function handleContextBasedSummary(messages) {
         ];
     } catch (err) {
         console.error('[Summary] Context-based summarization failed:', err?.message || err);
-        return messages; // Return original on error
+        // CRITICAL: Never return oversized messages - truncate as fallback
+        console.log('[Summary] Applying emergency truncation');
+        return truncateMessagesToFit(messages, maxTokens);
     }
 }
 

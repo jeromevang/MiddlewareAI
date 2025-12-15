@@ -29,7 +29,8 @@ const ROLE_DEFAULTS = {
         topK: 40,
         repeatPenalty: 1.1,
         gpu: 'max',
-        maxTokens: -1
+        maxTokens: -1,
+        contextLength: 32768  // Default 32K context for main model - can be overridden per-model
     },
     summarizer: {
         temperature: 0,
@@ -42,7 +43,7 @@ const ROLE_DEFAULTS = {
     },
     embedder: {
         gpu: 'off',
-        contextLength: 512
+        contextLength: 8192  // Jina code embedder supports 8K
     }
 };
 

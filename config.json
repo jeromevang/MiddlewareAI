@@ -12,15 +12,15 @@
     }
   },
   "ragPipeline": {
-    "tier": "medium",
+    "tier": "low",
     "locked": true,
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },
   "models": {
     "activePreset": "medium",
     "main": {
-      "model_name": "qwen/qwen3-8b",
-      "identifier": "qwen/qwen3-8b",
+      "model_name": "qwen/qwen3-4b-2507",
+      "identifier": "qwen/qwen3-4b-2507",
       "userSelectable": true
     },
     "rollingSummarization": {
