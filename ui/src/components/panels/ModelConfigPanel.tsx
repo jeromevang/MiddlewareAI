@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, listLoadedModels, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels, getPresets, setActiveModel, getModelStatus, downloadModel, getBootstrapStatus, triggerBootstrap } from "../../lib/api";
+import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels, loadPresetModels, getPresets, setActiveModel, getModelStatus, downloadModel, getBootstrapStatus, triggerBootstrap } from "../../lib/api";
 import type { QualityPreset, ModelAvailability } from "../../lib/api";
 import { SuggestedModelsPanel } from "../ui/SuggestedModelsPanel";
 import { useDashboardStore } from "../../state/dashboard-store";
@@ -64,6 +64,7 @@ export default function ModelConfigPanel() {
   });
 
   const modelAvailability: Record<string, ModelAvailability> = modelStatusData?.availability || {};
+  const loadedModels: string[] = modelStatusData?.loadedModels || [];
 
   // Fetch bootstrap status
   const { data: bootstrapData } = useQuery({
@@ -107,7 +108,6 @@ export default function ModelConfigPanel() {
   const [confirmLoading, setConfirmLoading] = useState(false);
 
   // LM Studio state
-  const [loadedModels, setLoadedModels] = useState<any[]>([]);
   const [lmStudioHealth, setLMStudioHealth] = useState<{
     ready: boolean;
     server?: { status: string; output: string };
@@ -126,18 +126,13 @@ export default function ModelConfigPanel() {
   const [autoStarting, setAutoStarting] = useState(false);
   const [errorDismissed, setErrorDismissed] = useState(false);
 
-  // Update models when quality or presets change
+  // Update models.main when lastActiveModel changes (from successful model selection)
   useEffect(() => {
-    const preset = presets[quality];
-    if (preset && preset.embedding) {
-      setModels(prev => ({
-        embedding: preset.embedding,
-        ragSummarizer: preset.ragSummarizer,
-        rollingSummarizer: preset.rollingSummarizer,
-        main: prev.main || preset.mainOptions?.[0] || lastActiveModel || ''
-      }));
+    if (lastActiveModel && lastActiveModel !== models.main) {
+      console.log('Updating models.main from lastActiveModel:', lastActiveModel);
+      setModels(prev => ({ ...prev, main: lastActiveModel }));
     }
-  }, [quality, presets, lastActiveModel]);
+  }, [lastActiveModel]);
 
   // Set initial main model from last active or first option
   useEffect(() => {
@@ -150,25 +145,27 @@ export default function ModelConfigPanel() {
     }
   }, [presetsData]);
 
-  // Load current config on mount
+  // Load current config on mount (only set defaults if not already set)
   useEffect(() => {
     if (status?.config) {
       const config = status.config as any;
       if (config.runtime?.mode) {
         setMode(config.runtime.mode);
       }
-      if (config.models?.embedding?.model_name) {
+      if (config.models?.embedding?.model_name && !models.embedding) {
         setModels(prev => ({ ...prev, embedding: config.models.embedding.model_name }));
       }
-      if (config.models?.ragSummarization?.model_name) {
+      if (config.models?.ragSummarization?.model_name && !models.ragSummarizer) {
         setModels(prev => ({ ...prev, ragSummarizer: config.models.ragSummarization.model_name }));
       }
-      if (config.models?.rollingSummarization?.model_name) {
+      if (config.models?.rollingSummarization?.model_name && !models.rollingSummarizer) {
         setModels(prev => ({ ...prev, rollingSummarizer: config.models.rollingSummarization.model_name }));
       }
-      if (config.models?.main?.model_name) {
-        setModels(prev => ({ ...prev, main: config.models.main.model_name }));
-      }
+      // Only set main model from config if not already set by lastActiveModel or user selection
+      // Actually, main model should be dynamic and not loaded from config - remove this
+      // if (config.models?.main?.model_name && !models.main) {
+      //   setModels(prev => ({ ...prev, main: config.models.main.model_name }));
+      // }
     }
   }, [status]);
 
@@ -386,25 +383,10 @@ export default function ModelConfigPanel() {
     },
   });
 
-  const listModelsMutation = useMutation({
-    mutationFn: () => listLoadedModels(),
-    onSuccess: (data: { status: string; models: any[] }) => {
-      setLoadedModels(data.models || []);
-      setMessage(`✅ Found ${data.models?.length || 0} loaded models`);
-      setTimeout(() => setMessage(""), 3000);
-    },
-    onError: (err: unknown) => {
-      const detail = err instanceof Error ? err.message : "Failed to list models.";
-      setMessage(`❌ ${detail}`);
-    },
-  });
-
   const unloadModelMutation = useMutation({
     mutationFn: (modelId: string) => unloadModel(modelId),
     onSuccess: () => {
       setMessage("✅ Model unloaded successfully");
-      // Refresh the model list
-      listModelsMutation.mutate();
       setTimeout(() => setMessage(""), 3000);
     },
     onError: (err: unknown) => {
@@ -417,7 +399,6 @@ export default function ModelConfigPanel() {
     mutationFn: () => unloadAllModels(),
     onSuccess: () => {
       setMessage("✅ All models unloaded successfully");
-      setLoadedModels([]);
       setTimeout(() => setMessage(""), 3000);
     },
     onError: (err: unknown) => {
@@ -495,7 +476,6 @@ export default function ModelConfigPanel() {
       // Refresh health status and model list after loading
       setTimeout(() => {
         healthCheckMutation.mutate();
-        listModelsMutation.mutate();
         refreshContextMutation.mutate();
       }, 2000);
       setTimeout(() => setMessage(""), 3000);
@@ -506,10 +486,34 @@ export default function ModelConfigPanel() {
     },
   });
 
+  const loadPresetModelsMutation = useMutation({
+    mutationFn: (preset: string) => loadPresetModels(preset),
+    onSuccess: (_, preset) => {
+      setMessage(`✅ Preset '${preset}' models loaded successfully`);
+      // Refresh health status and model list after loading
+      setTimeout(() => {
+        healthCheckMutation.mutate();
+        refreshContextMutation.mutate();
+      }, 2000);
+      setTimeout(() => setMessage(""), 3000);
+    },
+    onError: (error: any, preset) => {
+      setMessage(`❌ Failed to load preset '${preset}' models: ${error.message || error}`);
+      setTimeout(() => setMessage(""), 5000);
+    },
+  });
+
   const setActiveModelMutation = useMutation({
     mutationFn: (modelId: string) => setActiveModel(modelId),
-    onSuccess: () => {
+    onSuccess: (data) => {
+      console.log('Active model set successfully:', data.lastActiveModel);
+      // Invalidate presets query to update lastActiveModel
       queryClient.invalidateQueries({ queryKey: ['presets'] });
+    },
+    onError: (error) => {
+      console.error('Failed to set active model:', error);
+      setMessage(`❌ Failed to set active model: ${error.message || error}`);
+      setTimeout(() => setMessage(""), 5000);
     },
   });
 
@@ -546,8 +550,9 @@ export default function ModelConfigPanel() {
   });
 
   const handleMainModelChange = (modelId: string) => {
+    // Update local state immediately for UI responsiveness
     setModels(prev => ({ ...prev, main: modelId }));
-    // Track the active model
+    // Track the active model on server
     setActiveModelMutation.mutate(modelId);
   };
 
@@ -564,6 +569,15 @@ export default function ModelConfigPanel() {
   // Check if a model is currently downloading
   const isModelDownloading = (modelId: string): boolean => {
     return modelAvailability[modelId]?.downloading ?? downloadModelMutation.isPending;
+  };
+
+  // Check if a model is currently loaded in LM Studio
+  const isModelLoaded = (modelId: string): boolean => {
+    return loadedModels.some(loadedId => 
+      loadedId === modelId || 
+      loadedId.includes(modelId) || 
+      modelId.includes(loadedId)
+    );
   };
 
   const handleSave = () => {
@@ -742,7 +756,10 @@ export default function ModelConfigPanel() {
                         ? 'border-cyan-400 bg-cyan-400/10 shadow-[0_0_20px_rgba(44,212,250,0.1)]'
                         : 'border-white/15 bg-white/5 hover:border-white/30'
                     }`}
-                    onClick={() => setQuality(key as "high" | "medium" | "low")}
+                    onClick={() => {
+                      setQuality(key as "high" | "medium" | "low");
+                      loadPresetModelsMutation.mutate(key);
+                    }}
                   >
                     <h3 className="font-semibold text-white mb-1">{preset.name}</h3>
                     <p className="text-sm text-white/70">{preset.description}</p>
@@ -783,6 +800,25 @@ export default function ModelConfigPanel() {
                   </div>
                   <div className="text-sm text-white/80">{getModelDisplayName(presets[quality]?.ragSummarizer || 'Not set')}</div>
                   <p className="text-xs text-white/50 mt-1">Code chunk summaries</p>
+                  {presets[quality]?.ragSummarizer && !isModelAvailable(presets[quality].ragSummarizer) && (
+                    <button
+                      onClick={() => handleDownloadModel(presets[quality].ragSummarizer)}
+                      disabled={isModelDownloading(presets[quality].ragSummarizer)}
+                      className="mt-2 text-xs px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                    >
+                      {isModelDownloading(presets[quality].ragSummarizer) ? (
+                        <>
+                          <div className="w-3 h-3 border border-amber-400 border-t-transparent rounded-full animate-spin"></div>
+                          Downloading...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-3 h-3" />
+                          Download
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
 
                 {/* Rolling Summarizer */}
@@ -794,6 +830,25 @@ export default function ModelConfigPanel() {
                   </div>
                   <div className="text-sm text-white/80">{getModelDisplayName(presets[quality]?.rollingSummarizer || 'Not set')}</div>
                   <p className="text-xs text-white/50 mt-1">Conversation memory</p>
+                  {presets[quality]?.rollingSummarizer && !isModelAvailable(presets[quality].rollingSummarizer) && (
+                    <button
+                      onClick={() => handleDownloadModel(presets[quality].rollingSummarizer)}
+                      disabled={isModelDownloading(presets[quality].rollingSummarizer)}
+                      className="mt-2 text-xs px-2 py-1 bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                    >
+                      {isModelDownloading(presets[quality].rollingSummarizer) ? (
+                        <>
+                          <div className="w-3 h-3 border border-purple-400 border-t-transparent rounded-full animate-spin"></div>
+                          Downloading...
+                        </>
+                      ) : (
+                        <>
+                          <Download className="w-3 h-3" />
+                          Download
+                        </>
+                      )}
+                    </button>
+                  )}
                 </div>
 
                 {/* Main Model - Active indicator */}
@@ -803,7 +858,7 @@ export default function ModelConfigPanel() {
                     <label className="text-sm font-semibold text-white">Main Model</label>
                     <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded">Active</span>
                   </div>
-                  <div className="text-sm text-white font-medium">{getModelDisplayName(models.main || 'Not selected')}</div>
+                  <div className="text-sm text-white font-medium">{getModelDisplayName(presets[quality]?.mainOptions?.[0] || 'Not set')}</div>
                   <p className="text-xs text-white/50 mt-1">Chat completions</p>
                 </div>
               </div>
@@ -821,6 +876,7 @@ export default function ModelConfigPanel() {
                   {(presets[quality]?.mainOptions || []).map((modelId: string) => {
                     const available = isModelAvailable(modelId);
                     const downloading = isModelDownloading(modelId);
+                    const loaded = isModelLoaded(modelId);
                     const isSelected = models.main === modelId;
                     
                     return (
@@ -837,17 +893,28 @@ export default function ModelConfigPanel() {
                       >
                         <div className="flex items-center gap-3">
                           {/* Status indicator */}
-                          {available ? (
-                            <Check className="h-4 w-4 text-green-400 flex-shrink-0" />
-                          ) : downloading ? (
-                            <Loader2 className="h-4 w-4 text-yellow-400 animate-spin flex-shrink-0" />
-                          ) : (
-                            <Download className="h-4 w-4 text-white/40 flex-shrink-0" />
-                          )}
+                          {(() => {
+                            if (isSelected) {
+                              return <Check className="h-4 w-4 text-green-400 flex-shrink-0" />;
+                            } else if (loaded) {
+                              return <Zap className="h-4 w-4 text-blue-400 flex-shrink-0" />;
+                            } else if (available) {
+                              return <div className="h-4 w-4 flex-shrink-0" />; {/* Empty space for alignment */}
+                            } else if (downloading) {
+                              return <Loader2 className="h-4 w-4 text-yellow-400 animate-spin flex-shrink-0" />;
+                            } else {
+                              return <Download className="h-4 w-4 text-white/40 flex-shrink-0" />;
+                            }
+                          })()}
                           
                           <div>
                             <div className={`text-sm font-medium ${available ? 'text-white' : 'text-white/60'}`}>
                               {getModelDisplayName(modelId)}
+                              {loaded && !isSelected && (
+                                <span className="ml-2 text-xs px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded">
+                                  Loaded
+                                </span>
+                              )}
                             </div>
                             <div className="text-xs text-white/50">
                               {modelId.split('/')[0]}
@@ -1224,14 +1291,6 @@ export default function ModelConfigPanel() {
             <h4 className="text-sm font-semibold text-white mb-3">Model Management</h4>
             <div className="flex flex-wrap gap-3">
               <Button
-                onClick={() => listModelsMutation.mutate()}
-                loading={listModelsMutation.isPending}
-                variant="secondary"
-                disabled={!lmStudioHealth.ready}
-              >
-                List Loaded Models
-              </Button>
-              <Button
                 onClick={() => loadModelsMutation.mutate()}
                 loading={loadModelsMutation.isPending}
                 variant="primary"
@@ -1253,22 +1312,22 @@ export default function ModelConfigPanel() {
             <div className="space-y-3">
               <h4 className="text-sm font-semibold text-white">Loaded Models ({loadedModels.length})</h4>
               <div className="space-y-2 max-h-48 overflow-y-auto">
-                {loadedModels.map((model) => (
-                  <div key={model.id} className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                {loadedModels.map((modelId) => (
+                  <div key={modelId} className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-white truncate">{model.id}</div>
+                      <div className="text-sm font-medium text-white truncate">{getModelDisplayName(modelId)}</div>
                       <div className="text-xs text-white/60">
-                        Size: {model.size || 'Unknown'} • Context: {model.context_length || 'Unknown'}
+                        {modelId.split('/')[0]}
                       </div>
                     </div>
                     <Button
                       variant="danger"
                       onClick={() => {
                         openConfirm({
-                          title: `Unload Model: ${model.id}?`,
-                          description: `This will unload the model "${model.id}" from LM Studio memory.`,
+                          title: `Unload Model: ${getModelDisplayName(modelId)}?`,
+                          description: `This will unload the model "${getModelDisplayName(modelId)}" from LM Studio memory.`,
                           confirmLabel: "Unload",
-                          onConfirm: () => unloadModelMutation.mutate(model.id),
+                          onConfirm: () => unloadModelMutation.mutate(modelId),
                         });
                       }}
                       loading={unloadModelMutation.isPending}

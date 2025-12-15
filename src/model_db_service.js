@@ -15,6 +15,7 @@ const path = require('path');
 const axios = require('axios');
 const { exec, spawn } = require('child_process');
 const { promisify } = require('util');
+const { getLMStudioCLIPath } = require('./lmstudio_manager.js');
 
 const execAsync = promisify(exec);
 
@@ -448,7 +449,7 @@ function createDefaultDatabase() {
 async function getDownloadedModels() {
     try {
         // Try lms ls --json first
-        const { stdout } = await execAsync('lms ls --json', {
+        const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" ls --json`, {
             timeout: 30000,
             encoding: 'utf8'
         });
@@ -459,7 +460,7 @@ async function getDownloadedModels() {
     } catch (error) {
         // Fallback: try without --json and parse text output
         try {
-            const { stdout } = await execAsync('lms ls', {
+            const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" ls`, {
                 timeout: 30000,
                 encoding: 'utf8'
             });
@@ -536,7 +537,8 @@ async function downloadModel(modelId) {
     
     try {
         // Use lms get to download the model
-        const { stdout, stderr } = await execAsync(`lms get "${modelId}"`, {
+        const cliPath = getLMStudioCLIPath();
+        const { stdout, stderr } = await execAsync(`"${cliPath}" get "${modelId}"`, {
             timeout: 600000, // 10 minutes timeout for large models
             encoding: 'utf8'
         });

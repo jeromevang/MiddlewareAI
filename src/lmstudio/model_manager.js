@@ -4,6 +4,7 @@ const axios = require('axios');
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
+const { getLMStudioCLIPath } = require('../lmstudio_manager.js');
 const { LM_STUDIO_URL, LM_STUDIO_TIMEOUT_MS, MAX_RETRIES, loadedModels, loadingModels, withLMStudioLock, generateRequestId, setLastLoadedSnapshot, getLastLoadedSnapshot } = require('./state.js');
 
 function normalizeModelId(id) {
@@ -165,8 +166,29 @@ async function openModel(modelOrId) {
     const { identifier, loadName } = resolveModelNames(modelOrId);
     const modelName = loadName || identifier;
     const requestId = generateRequestId();
-    let retries = MAX_RETRIES;
 
+    // First, load the model
+    try {
+        console.log(`[LM Studio Load] Loading model: ${modelName}`);
+        await axios.post(
+            `${LM_STUDIO_URL}/api/v0/models/load`,
+            { identifier: modelName },
+            {
+                timeout: LM_STUDIO_TIMEOUT_MS,
+                headers: { 'Content-Type': 'application/json' }
+            }
+        );
+        console.log(`[LM Studio Load] Successfully loaded model: ${modelName}`);
+    } catch (loadError) {
+        console.error(`[LM Studio Load] Failed to load model ${modelName}:`, loadError.message);
+        throw loadError;
+    }
+
+    // Wait a bit for the model to load
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    // Then warm it
+    let retries = MAX_RETRIES;
     while (retries > 0) {
         try {
             console.log(`[LM Studio Request] ${requestId} - Warming model via chat: ${modelName}`);
@@ -210,7 +232,7 @@ async function unloadModel(modelOrId) {
 
     try {
         console.log(`[LM Studio Unload] Unloading model: ${identifier}`);
-        const { stdout, stderr } = await execAsync(`lms unload "${identifier}"`);
+        const { stdout, stderr } = await execAsync(`"${getLMStudioCLIPath()}" unload "${identifier}"`);
 
         // Remove from our tracking
         loadedModels.delete(identifier);
@@ -229,7 +251,7 @@ async function unloadModel(modelOrId) {
 async function unloadAllModels() {
     try {
         console.log(`[LM Studio Unload] Unloading all models`);
-        const { stdout, stderr } = await execAsync('lms unload --all');
+        const { stdout, stderr } = await execAsync(`"${getLMStudioCLIPath()}" unload --all`);
 
         // Clear our tracking
         loadedModels.clear();
@@ -267,7 +289,7 @@ async function listLoadedModels() {
 
 async function getServerStatus() {
     try {
-        const { stdout } = await execAsync('lms server status');
+        const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" server status`);
         return { status: 'running', output: stdout.trim() };
     } catch (error) {
         if (error.code === 1) {
@@ -280,7 +302,7 @@ async function getServerStatus() {
 async function startLMStudioServer() {
     try {
         console.log('[LM Studio Server] Starting LM Studio server...');
-        const { stdout } = await execAsync('lms server start');
+        const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" server start`);
         console.log('[LM Studio Server] Server start command executed');
 
         // Wait a bit for server to initialize
@@ -302,7 +324,7 @@ async function startLMStudioServer() {
 async function stopLMStudioServer() {
     try {
         console.log('[LM Studio Server] Stopping LM Studio server...');
-        const { stdout } = await execAsync('lms server stop');
+        const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" server stop`);
         console.log('[LM Studio Server] Server stop command executed');
 
         // Wait a bit for server to shut down
@@ -338,12 +360,42 @@ async function checkLMStudioHealth() {
 
 async function ensureRequiredModelsLoaded() {
     const { getModelConfig } = require('../config.js');
-    const { findLMStudioModelId } = require('../model_db_service.js');
+    const { findLMStudioModelId, getLastActiveModel } = require('../model_db_service.js');
 
-    // Load all required models: main + both summarizers
+    // First, unload all currently loaded models to ensure we start fresh
+    console.log('[LM Studio] Unloading all currently loaded models...');
+    try {
+        await unloadAllModels();
+        console.log('[LM Studio] All models unloaded successfully');
+    } catch (error) {
+        console.warn('[LM Studio] Failed to unload models:', error.message);
+    }
+
+    // Load all required models: main (from user selection) + both summarizers (from config)
     const modelConfigs = [];
 
-    try { modelConfigs.push({ type: 'main', config: getModelConfig('main') }); } catch (e) { console.warn('[LM Studio] Main model not configured'); }
+    // For main model, use the user's last active selection instead of config default
+    try {
+        const lastActiveModel = getLastActiveModel();
+        if (lastActiveModel) {
+            // Create a config object for the active model
+            const activeModelConfig = {
+                identifier: lastActiveModel,
+                model_name: lastActiveModel
+            };
+            modelConfigs.push({ type: 'main', config: activeModelConfig });
+            console.log(`[LM Studio] Using active model: ${lastActiveModel}`);
+        } else {
+            // Fallback to config if no active model
+            modelConfigs.push({ type: 'main', config: getModelConfig('main') });
+            console.log('[LM Studio] No active model found, using config default');
+        }
+    } catch (e) {
+        console.warn('[LM Studio] Could not get active model, using config default:', e.message);
+        try { modelConfigs.push({ type: 'main', config: getModelConfig('main') }); } catch (e2) { console.warn('[LM Studio] Main model not configured'); }
+    }
+
+    // Summarization models still use config (not user-selectable)
     try { modelConfigs.push({ type: 'ragSummarization', config: getModelConfig('ragSummarization') }); } catch (e) { console.warn('[LM Studio] RAG summarization model not configured'); }
     try { modelConfigs.push({ type: 'rollingSummarization', config: getModelConfig('rollingSummarization') }); } catch (e) { console.warn('[LM Studio] Rolling summarization model not configured'); }
 
@@ -417,6 +469,74 @@ async function waitForServerReady(timeoutMs = 30000) {
     throw new Error(`LM Studio server did not become ready within ${timeoutMs}ms`);
 }
 
+async function ensurePresetModelsLoaded(presetName) {
+    const { getPreset, findLMStudioModelId } = require('../model_db_service.js');
+
+    const preset = getPreset(presetName);
+    if (!preset) {
+        throw new Error(`Preset '${presetName}' not found`);
+    }
+
+    // First, unload all currently loaded models to ensure we start fresh
+    console.log('[LM Studio] Unloading all currently loaded models...');
+    try {
+        await unloadAllModels();
+        console.log('[LM Studio] All models unloaded successfully');
+    } catch (error) {
+        console.warn('[LM Studio] Failed to unload models:', error.message);
+    }
+
+    // Load all models for this preset
+    const modelConfigs = [];
+
+    // Embedding model (local, doesn't need loading)
+    if (preset.embedding) {
+        console.log(`[LM Studio] Embedding model: ${preset.embedding} (local, no loading needed)`);
+    }
+
+    // RAG Summarizer
+    if (preset.ragSummarizer) {
+        modelConfigs.push({ type: 'ragSummarizer', config: { identifier: preset.ragSummarizer, model_name: preset.ragSummarizer } });
+    }
+
+    // Rolling Summarizer
+    if (preset.rollingSummarizer) {
+        modelConfigs.push({ type: 'rollingSummarizer', config: { identifier: preset.rollingSummarizer, model_name: preset.rollingSummarizer } });
+    }
+
+    // Main model - use the first/main option from the preset
+    if (preset.mainOptions && preset.mainOptions.length > 0) {
+        const mainModelId = preset.mainOptions[0]; // Use first option as default
+        modelConfigs.push({ type: 'main', config: { identifier: mainModelId, model_name: mainModelId } });
+        console.log(`[LM Studio] Using main model from preset: ${mainModelId}`);
+    }
+
+    const requiredModels = modelConfigs.filter(m => m.config && m.config.identifier);
+
+    console.log(`[LM Studio] Ensuring preset '${presetName}' models are loaded:`, requiredModels.map(m => m.config.identifier));
+
+    for (const { type, config } of requiredModels) {
+        try {
+            // Find the actual LM Studio model ID
+            const actualId = await findLMStudioModelId(config.identifier);
+
+            if (!actualId) {
+                console.warn(`[LM Studio] Could not find LM Studio model matching: ${config.identifier} (${type})`);
+                continue;
+            }
+
+            console.log(`[LM Studio] Loading model: ${actualId} (from preset: ${config.identifier})`);
+            await ensureModelLoaded({ ...config, identifier: actualId });
+            console.log(`[LM Studio] Successfully loaded model: ${actualId}`);
+        } catch (error) {
+            console.error(`[LM Studio] Failed to load model ${config.identifier}:`, error.message);
+            // Don't throw - continue loading other models
+        }
+    }
+
+    console.log(`[LM Studio] All preset '${presetName}' models loaded successfully`);
+}
+
 module.exports = {
     normalizeModelId,
     resolveModelNames,
@@ -436,5 +556,6 @@ module.exports = {
     checkLMStudioHealth,
     waitForServerReady,
     ensureRequiredModelsLoaded,
+    ensurePresetModelsLoaded,
     initializeLMStudioWithModels,
 };

@@ -217,6 +217,18 @@ export async function loadRequiredModels(): Promise<{
   });
 }
 
+export async function loadPresetModels(preset: string): Promise<{
+  status: string;
+  message: string;
+}> {
+  return request<{
+    status: string;
+    message: string;
+  }>(`/lmstudio/models/load-preset/${preset}`, {
+    method: "POST",
+  });
+}
+
 export async function refreshModelContext(): Promise<{
   status: string;
   context: {
@@ -389,6 +401,7 @@ export interface ModelStatusResponse {
   status: string;
   availability: Record<string, ModelAvailability>;
   activeDownloads: Record<string, { status: string; startedAt: number }>;
+  loadedModels: string[];
 }
 
 export interface DownloadResponse {

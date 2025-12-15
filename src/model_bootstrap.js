@@ -13,6 +13,7 @@
 const { exec } = require('child_process');
 const { promisify } = require('util');
 const axios = require('axios');
+const { getLMStudioCLIPath } = require('./lmstudio_manager.js');
 
 const execAsync = promisify(exec);
 
@@ -51,7 +52,7 @@ function updateBootstrapStatus(updates) {
  */
 async function isModelDownloaded(modelId) {
     try {
-        const { stdout } = await execAsync('lms ls', { timeout: 30000 });
+        const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" ls`, { timeout: 30000 });
         const lines = stdout.toLowerCase();
         const modelName = modelId.split('/').pop()?.toLowerCase() || '';
         return lines.includes(modelName) || lines.includes(modelId.toLowerCase());
@@ -68,7 +69,7 @@ async function downloadBootstrapModel(modelId) {
     updateBootstrapStatus({ message: `Downloading bootstrap model: ${modelId}...`, progress: 10 });
     
     try {
-        const { stdout, stderr } = await execAsync(`lms get "${modelId}"`, {
+        const { stdout, stderr } = await execAsync(`"${getLMStudioCLIPath()}" get "${modelId}"`, {
             timeout: 300000 // 5 minutes
         });
         console.log('[Bootstrap] Download output:', stdout || stderr);
@@ -86,7 +87,7 @@ async function loadBootstrapModel(modelId) {
     updateBootstrapStatus({ message: `Loading bootstrap model...`, progress: 20 });
     
     try {
-        const { stdout, stderr } = await execAsync(`lms load "${modelId}"`, {
+        const { stdout, stderr } = await execAsync(`"${getLMStudioCLIPath()}" load "${modelId}"`, {
             timeout: 120000 // 2 minutes
         });
         console.log('[Bootstrap] Load output:', stdout || stderr);
@@ -107,7 +108,7 @@ async function unloadBootstrapModel(modelId) {
     updateBootstrapStatus({ message: `Unloading bootstrap model...`, progress: 90 });
     
     try {
-        const { stdout, stderr } = await execAsync(`lms unload "${modelId}"`, {
+        const { stdout, stderr } = await execAsync(`"${getLMStudioCLIPath()}" unload "${modelId}"`, {
             timeout: 30000
         });
         console.log('[Bootstrap] Unload output:', stdout || stderr);
@@ -125,7 +126,7 @@ async function unloadBootstrapModel(modelId) {
 async function getDownloadedModels() {
     try {
         // Try CLI first
-        const { stdout } = await execAsync('lms ls', { timeout: 30000 });
+        const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" ls`, { timeout: 30000 });
         const lines = stdout.trim().split('\n').filter(line => line.trim());
         
         // Parse the lms ls output properly

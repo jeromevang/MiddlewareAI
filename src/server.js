@@ -24,7 +24,7 @@ const http = require('http');
 const crypto = require('crypto');
 const WebSocketLib = require('ws');
 const { WebSocketServer } = WebSocketLib;
-const { embedText, summarizeConversation, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, initializeLMStudioWithModels } = require('./lmstudio_client.js');
+const { embedText, summarizeConversation, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, ensureRequiredModelsLoaded, ensurePresetModelsLoaded, initializeLMStudioWithModels } = require('./lmstudio_client.js');
 const { SQLiteCacheManager } = require('./sqlite_cache.js');
 const { FAISSIndexManager } = require('./faiss_storage.js');
 const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js');
@@ -166,8 +166,9 @@ async function refreshModelContext() {
         const contextLength = await getModelContextLength();
         MODEL_CONTEXT_LENGTH = contextLength;
         CONTEXT_MAX_TOKENS = Math.min(processingConfig.max_context_tokens || MODEL_CONTEXT_LENGTH, MODEL_CONTEXT_LENGTH);
-        CONTEXT_BUDGET_TOKENS = Math.floor(CONTEXT_MAX_TOKENS * CONTEXT_BUDGET_RATIO);
-        console.log(`[Context] Refreshed context budget: ${CONTEXT_BUDGET_TOKENS} tokens (${CONTEXT_BUDGET_RATIO * 100}% of ${CONTEXT_MAX_TOKENS})`);
+        const budgetRatio = processingConfig.context_budget_ratio || 0.7;
+        CONTEXT_BUDGET_TOKENS = Math.floor(CONTEXT_MAX_TOKENS * budgetRatio);
+        console.log(`[Context] Refreshed context budget: ${CONTEXT_BUDGET_TOKENS} tokens (${budgetRatio * 100}% of ${CONTEXT_MAX_TOKENS})`);
     } catch (error) {
         console.warn('[Context] Failed to refresh model context:', error);
     }
@@ -1183,6 +1184,22 @@ app.post('/lmstudio/models/load-required', async (req, res) => {
     }
 });
 
+app.post('/lmstudio/models/load-preset/:preset', async (req, res) => {
+    try {
+        const { preset } = req.params;
+        if (!preset || !['high', 'medium', 'low'].includes(preset)) {
+            return res.status(400).json({ error: 'Invalid preset. Must be one of: high, medium, low' });
+        }
+
+        await ensurePresetModelsLoaded(preset);
+        appendLog(`Preset '${preset}' models loaded via API`, 'info');
+        res.json({ status: 'ok', message: `Preset '${preset}' models loaded successfully` });
+    } catch (error) {
+        console.error(`[API] Failed to load preset '${req.params.preset}' models:`, error.message);
+        res.status(500).json({ error: 'Failed to load preset models', details: error.message });
+    }
+});
+
 // =============================================================================
 // Model Database API Endpoints
 // =============================================================================
@@ -1244,6 +1261,35 @@ app.post('/models/active', async (req, res) => {
         // Save to database (store the original modelId for display purposes)
         const result = setActiveModel(modelId);
         appendLog(`Active model set to: ${modelId}`, 'info');
+
+        // Ensure LM Studio is running
+        const lmHealth = await checkLMStudioHealth();
+        if (!lmHealth.ready) {
+            console.log('[API] LM Studio not ready, starting server...');
+            // Always try to start LM Studio for model loading, regardless of config
+            const cfg = getLMStudioConfig();
+            if (await isLMStudioRunning(cfg.url)) {
+                console.log('[LM Studio] Server already running.');
+            } else {
+                const cliPath = getLMStudioCLIPath();
+                const args = ['server', 'start', '--port', (cfg.server_port || 1234).toString()];
+                try {
+                    const { spawn } = require('child_process');
+                    const proc = spawn(cliPath, args, { stdio: 'inherit', shell: true });
+                    // Wait a bit for server to start
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                } catch (startError) {
+                    console.warn('[API] Failed to start LM Studio server:', startError.message);
+                }
+            }
+            const healthAfter = await checkLMStudioHealth();
+            if (!healthAfter.ready) {
+                return res.status(503).json({ 
+                    error: 'LM Studio server could not be started',
+                    details: 'Please start LM Studio manually'
+                });
+            }
+        }
 
         // Find the actual LM Studio model ID (may differ from preset ID)
         const { findLMStudioModelId } = require('./model_db_service.js');
@@ -1378,7 +1424,17 @@ app.get('/models/status', async (req, res) => {
     try {
         const availability = getModelAvailability();
         const downloads = getActiveDownloads();
-        res.json({ status: 'ok', availability, activeDownloads: downloads });
+        
+        // Get currently loaded models from LM Studio
+        let loadedModels = [];
+        try {
+            const lmModels = await listLoadedModels();
+            loadedModels = lmModels.map(model => model.id || model.identifier).filter(Boolean);
+        } catch (error) {
+            console.warn('[API] Failed to get loaded models from LM Studio:', error.message);
+        }
+        
+        res.json({ status: 'ok', availability, activeDownloads: downloads, loadedModels });
     } catch (error) {
         console.error('[API] Failed to get model status:', error.message);
         res.status(500).json({ error: 'Failed to get model status', details: error.message });
@@ -2222,7 +2278,8 @@ async function start() {
         // Initialize LM Studio and load required models
         console.log('[Server] Initializing LM Studio...');
         try {
-            await initializeLMStudioWithModels();
+            // await initializeLMStudioWithModels();
+            console.log('[Server] LM Studio initialization skipped');
             console.log('[Server] LM Studio initialization successful');
         } catch (error) {
             console.warn('[Server] LM Studio initialization failed, continuing without models:', error.message);
