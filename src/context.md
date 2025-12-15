@@ -34,6 +34,12 @@
 - **Smart Model Unloading**: 
   - When switching presets: unloads unused models, keeps shared ones, loads new ones
   - When manually switching main model: unloads previous, loads new, keeps summarizers
+- **Quantization Selection for Downloads**:
+  - Added `GET /models/quant-options` endpoint returning available quantizations (Q4_K_M, Q5_K_M, Q8_0, Q3_K_M, Q2_K)
+  - Download API now accepts `quantization` parameter: `POST /models/download/:id` with body `{ quantization: 'q4_k_m' }`
+  - CLI command now uses `lms get model-name@quant -y` format
+  - UI shows "Download Quality" dropdown in Model Configuration section
+  - Default quantization is Q4_K_M (balanced size/quality)
 - **Codebase Refactoring**:
   - Created `routes/` folder with modular route files (status, config, lmstudio, models, sessions, rag)
   - Created `models/` folder with split modules (database, presets, matcher, downloader)

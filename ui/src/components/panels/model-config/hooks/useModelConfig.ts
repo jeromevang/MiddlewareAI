@@ -108,7 +108,8 @@ export function useModelConfig(): UseModelConfigReturn {
 
   // Download Model Mutation
   const downloadModelMutation = useMutation({
-    mutationFn: downloadModel,
+    mutationFn: ({ modelId, quant }: { modelId: string; quant?: string }) => 
+      downloadModel(modelId, quant),
     onSuccess: () => {
       setTimeout(() => {
         refetchModelStatus();
@@ -147,8 +148,8 @@ export function useModelConfig(): UseModelConfigReturn {
     setActiveModelMutation.mutate(modelId);
   };
 
-  const handleDownloadModel = (modelId: string) => {
-    downloadModelMutation.mutate(modelId);
+  const handleDownloadModel = (modelId: string, quant?: string) => {
+    downloadModelMutation.mutate({ modelId, quant });
   };
 
   const handlePresetChange = (preset: 'high' | 'medium' | 'low') => {

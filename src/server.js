@@ -1411,10 +1411,11 @@ app.post('/models/evaluate', async (req, res) => {
 app.post('/models/download/:id', async (req, res) => {
     try {
         const modelId = decodeURIComponent(req.params.id);
-        appendLog(`Starting model download: ${modelId}`, 'info');
+        const quantization = req.body?.quantization || req.query?.quant || 'q4_k_m';
+        appendLog(`Starting model download: ${modelId} (quant: ${quantization})`, 'info');
 
         // Start download (runs in background, returns immediately)
-        const result = await downloadModelFromDB(modelId);
+        const result = await downloadModelFromDB(modelId, quantization);
 
         if (result.success) {
             appendLog(`Model download started: ${modelId}`, 'info');
@@ -1442,6 +1443,14 @@ app.post('/models/download/:id', async (req, res) => {
         console.error('[API] Failed to download model:', error.message);
         res.status(500).json({ error: 'Failed to download model', details: error.message });
     }
+});
+
+/**
+ * GET /models/quant-options - Get available quantization options
+ */
+app.get('/models/quant-options', (req, res) => {
+    const { getQuantOptions } = require('./model_db_service.js');
+    res.json({ options: getQuantOptions(), default: 'q4_k_m' });
 });
 
 /**

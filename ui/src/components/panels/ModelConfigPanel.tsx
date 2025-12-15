@@ -1,13 +1,14 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels, loadPresetModels, getPresets, setActiveModel, getModelStatus, downloadModel, getBootstrapStatus, triggerBootstrap } from "../../lib/api";
-import type { QualityPreset, ModelAvailability } from "../../lib/api";
+import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels, loadPresetModels, getPresets, setActiveModel, getModelStatus, downloadModel, getQuantOptions, getBootstrapStatus, triggerBootstrap } from "../../lib/api";
+import type { QualityPreset, ModelAvailability, QuantOption } from "../../lib/api";
 import { SuggestedModelsPanel } from "../ui/SuggestedModelsPanel";
 import { useDashboardStore } from "../../state/dashboard-store";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { Cpu, HardDrive, Zap, ChevronDown, ChevronUp, Check, Download, Loader2 } from "lucide-react";
+import { DownloadProgress } from "../ui/DownloadProgress";
 
 // Helper to get display name from model ID
 function getModelDisplayName(modelId: string): string {
@@ -59,12 +60,35 @@ export default function ModelConfigPanel() {
   const { data: modelStatusData, refetch: refetchModelStatus } = useQuery({
     queryKey: ['modelStatus'],
     queryFn: getModelStatus,
-    staleTime: 10000, // 10 seconds
-    refetchInterval: 15000, // Refresh every 15 seconds
+    staleTime: 2000, // 2 seconds when downloads active
+    // Poll faster when downloads are active
+    refetchInterval: (query) => {
+      const hasActiveDownloads = Object.keys(query.state.data?.activeDownloads || {}).length > 0;
+      return hasActiveDownloads ? 1000 : 15000; // 1s during downloads, 15s otherwise
+    },
   });
 
   const modelAvailability: Record<string, ModelAvailability> = modelStatusData?.availability || {};
   const loadedModels: string[] = modelStatusData?.loadedModels || [];
+  const activeDownloads: Record<string, { status: string; startedAt: number; progress: number }> =
+    Object.fromEntries(
+      Object.entries(modelStatusData?.activeDownloads || {}).map(([k, v]: [string, any]) => [
+        k,
+        { status: v.status || 'downloading', startedAt: v.startedAt || Date.now(), progress: v.progress || 0 }
+      ])
+    );
+
+  // Fetch quantization options
+  const { data: quantOptionsData } = useQuery({
+    queryKey: ['quantOptions'],
+    queryFn: getQuantOptions,
+    staleTime: 300000, // 5 minutes - these rarely change
+  });
+  const quantOptions: QuantOption[] = quantOptionsData?.options || [
+    { id: 'q4_k_m', name: 'Q4_K_M', description: 'Balanced (recommended)', sizeMultiplier: 0.5 },
+    { id: 'q8_0', name: 'Q8_0', description: 'High quality', sizeMultiplier: 0.9 },
+    { id: 'q3_k_m', name: 'Q3_K_M', description: 'Compact', sizeMultiplier: 0.4 },
+  ];
 
   // Fetch bootstrap status
   const { data: bootstrapData } = useQuery({
@@ -88,6 +112,7 @@ export default function ModelConfigPanel() {
   const [mode, setMode] = useState<"local" | "cloud">("local");
   const [quality, setQuality] = useState<"high" | "medium" | "low">("high");
   const [showModelDiscovery, setShowModelDiscovery] = useState(false);
+  const [selectedQuant, setSelectedQuant] = useState<string>("q4_k_m");
   const [models, setModels] = useState<ModelSelection>({
     embedding: "",
     ragSummarizer: "",
@@ -519,7 +544,8 @@ export default function ModelConfigPanel() {
 
   // Download model mutation
   const downloadModelMutation = useMutation({
-    mutationFn: downloadModel,
+    mutationFn: ({ modelId, quant }: { modelId: string; quant: string }) => 
+      downloadModel(modelId, quant),
     onSuccess: (data) => {
       setMessage(`✅ ${data.message}`);
       // Refresh model status after download
@@ -556,9 +582,10 @@ export default function ModelConfigPanel() {
     setActiveModelMutation.mutate(modelId);
   };
 
-  const handleDownloadModel = (modelId: string) => {
-    setMessage(`⏳ Downloading ${getModelDisplayName(modelId)}...`);
-    downloadModelMutation.mutate(modelId);
+  const handleDownloadModel = (modelId: string, quant?: string) => {
+    const quantToUse = quant || selectedQuant;
+    setMessage(`⏳ Downloading ${getModelDisplayName(modelId)} (${quantToUse.toUpperCase()})...`);
+    downloadModelMutation.mutate({ modelId, quant: quantToUse });
   };
 
   // Check if a model is available
@@ -778,6 +805,26 @@ export default function ModelConfigPanel() {
           {/* Model Configuration */}
           <Card title="Model Configuration" subtitle="Auto-configured based on selected preset">
             <div className="space-y-6">
+              {/* Quantization Selector for Downloads */}
+              <div className="flex items-center justify-between p-3 bg-white/5 border border-white/10 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <Download className="h-4 w-4 text-amber-400" />
+                  <span className="text-sm text-white">Download Quality</span>
+                  <span className="text-xs text-white/50">(for new model downloads)</span>
+                </div>
+                <select
+                  value={selectedQuant}
+                  onChange={(e) => setSelectedQuant(e.target.value)}
+                  className="px-3 py-1.5 rounded-lg border border-white/20 bg-white/10 text-sm text-white focus:border-amber-400 focus:outline-none"
+                >
+                  {quantOptions.map((opt) => (
+                    <option key={opt.id} value={opt.id}>
+                      {opt.name} - {opt.description}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               {/* All 4 models in a grid */}
               <div className="grid gap-4 md:grid-cols-2">
                 {/* Embedding Model */}
@@ -1418,6 +1465,9 @@ export default function ModelConfigPanel() {
             : () => setLMStudioError(null)}
         />
       )}
+
+      {/* Download Progress Indicator */}
+      <DownloadProgress downloads={activeDownloads} />
     </div>
   );
 }

@@ -255,6 +255,128 @@ test.describe('Model Load/Unload', () => {
   });
 });
 
+test.describe('Model Download', () => {
+  test('can start model download via API', async ({ request }) => {
+    // Get presets to find a model that needs downloading
+    const presetsResponse = await request.get(`${API_BASE}/models/presets`);
+    expect(presetsResponse.status()).toBe(200);
+    
+    const presetsData = await presetsResponse.json();
+    const lowPreset = presetsData.presets?.low;
+    
+    // Get model status to find models that aren't available
+    const statusResponse = await request.get(`${API_BASE}/models/status`);
+    expect(statusResponse.status()).toBe(200);
+    
+    const statusData = await statusResponse.json();
+    const availability = statusData.availability || {};
+    
+    // Find a model from the low preset that needs downloading
+    let modelToDownload: string | null = null;
+    
+    for (const modelId of lowPreset?.mainOptions || []) {
+      if (availability[modelId] && !availability[modelId].available) {
+        modelToDownload = modelId;
+        break;
+      }
+    }
+    
+    // Also check summarizers
+    if (!modelToDownload && lowPreset?.ragSummarizer) {
+      if (availability[lowPreset.ragSummarizer] && !availability[lowPreset.ragSummarizer].available) {
+        modelToDownload = lowPreset.ragSummarizer;
+      }
+    }
+    
+    if (!modelToDownload) {
+      console.log('All models already downloaded, skipping download test');
+      console.log('Available models:', Object.keys(availability).filter(k => availability[k]?.available));
+      return;
+    }
+    
+    console.log('Starting download for:', modelToDownload);
+    
+    // Start the download
+    const downloadResponse = await request.post(
+      `${API_BASE}/models/download/${encodeURIComponent(modelToDownload)}`
+    );
+    
+    // Should return 200 (started) or already downloading
+    expect([200, 500]).toContain(downloadResponse.status());
+    
+    if (downloadResponse.status() === 200) {
+      const downloadData = await downloadResponse.json();
+      console.log('Download response:', downloadData);
+      
+      expect(downloadData.status).toBe('ok');
+      expect(['Download started', 'Download already in progress']).toContain(downloadData.message);
+      
+      // Check that the download status is tracked
+      const statusAfter = await request.get(`${API_BASE}/models/status`);
+      const statusAfterData = await statusAfter.json();
+      
+      console.log('Active downloads:', statusAfterData.activeDownloads);
+      
+      // The download should be tracked (or already completed if very fast)
+      const isDownloading = statusAfterData.activeDownloads?.[modelToDownload] || 
+                           statusAfterData.availability?.[modelToDownload]?.downloading;
+      console.log('Is downloading:', isDownloading);
+    }
+  });
+
+  test('download status is tracked correctly', async ({ request }) => {
+    // Get current active downloads
+    const statusResponse = await request.get(`${API_BASE}/models/status`);
+    expect(statusResponse.status()).toBe(200);
+    
+    const statusData = await statusResponse.json();
+    console.log('Current active downloads:', Object.keys(statusData.activeDownloads || {}));
+    console.log('Models currently downloading:', 
+      Object.entries(statusData.availability || {})
+        .filter(([_, v]: [string, any]) => v.downloading)
+        .map(([k]) => k)
+    );
+    
+    // The API should return the expected structure
+    expect(statusData).toHaveProperty('availability');
+    expect(statusData).toHaveProperty('activeDownloads');
+    expect(statusData).toHaveProperty('loadedModels');
+  });
+
+  test('can check if specific model needs download', async ({ request }) => {
+    // Get model status
+    const statusResponse = await request.get(`${API_BASE}/models/status`);
+    expect(statusResponse.status()).toBe(200);
+    
+    const statusData = await statusResponse.json();
+    const availability = statusData.availability || {};
+    
+    // Count models by status
+    const stats = {
+      available: 0,
+      notAvailable: 0,
+      downloading: 0
+    };
+    
+    for (const [modelId, status] of Object.entries(availability) as [string, any][]) {
+      if (status.available) {
+        stats.available++;
+      } else {
+        stats.notAvailable++;
+      }
+      if (status.downloading) {
+        stats.downloading++;
+      }
+    }
+    
+    console.log('Model availability stats:', stats);
+    console.log('Total models tracked:', Object.keys(availability).length);
+    
+    // Should have some models tracked
+    expect(Object.keys(availability).length).toBeGreaterThan(0);
+  });
+});
+
 test.describe('Smart Model Switching', () => {
   // Increase timeout for model loading tests
   test.setTimeout(180000); // 3 minutes

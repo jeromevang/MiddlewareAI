@@ -418,12 +418,15 @@ export interface ValidateResponse {
 
 /**
  * Download a model via LM Studio CLI
+ * @param modelId - The model ID to download
+ * @param quantization - Optional quantization (e.g., 'q4_k_m'). Defaults to 'q4_k_m'
  */
-export async function downloadModel(modelId: string): Promise<DownloadResponse> {
+export async function downloadModel(modelId: string, quantization?: string): Promise<DownloadResponse> {
   return request<DownloadResponse>(
     `/models/download/${encodeURIComponent(modelId)}`,
     {
       method: "POST",
+      body: JSON.stringify({ quantization: quantization || 'q4_k_m' }),
     }
   );
 }
@@ -477,4 +480,27 @@ export async function triggerBootstrap(): Promise<BootstrapResponse> {
   return request<BootstrapResponse>("/models/bootstrap", {
     method: "POST",
   });
+}
+
+// =============================================================================
+// Quantization APIs
+// =============================================================================
+
+export interface QuantOption {
+  id: string;
+  name: string;
+  description: string;
+  sizeMultiplier: number;
+}
+
+export interface QuantOptionsResponse {
+  options: QuantOption[];
+  default: string;
+}
+
+/**
+ * Get available quantization options
+ */
+export async function getQuantOptions(): Promise<QuantOptionsResponse> {
+  return request<QuantOptionsResponse>("/models/quant-options");
 }

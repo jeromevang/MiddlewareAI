@@ -13,6 +13,7 @@ export {
   getModelStatus,
   setActiveModel,
   downloadModel,
+  getQuantOptions,
   triggerBootstrap,
   getBootstrapStatus,
 } from './models';
@@ -21,6 +22,8 @@ export type {
   ModelStatusResponse,
   ActiveModelResponse,
   DownloadResponse,
+  QuantOption,
+  QuantOptionsResponse,
 } from './models';
 
 // LM Studio API

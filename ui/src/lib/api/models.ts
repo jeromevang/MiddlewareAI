@@ -30,6 +30,18 @@ export interface DownloadResponse {
   modelId?: string;
 }
 
+export interface QuantOption {
+  id: string;
+  name: string;
+  description: string;
+  sizeMultiplier: number;
+}
+
+export interface QuantOptionsResponse {
+  options: QuantOption[];
+  default: string;
+}
+
 /**
  * Get all presets and last active model
  */
@@ -55,11 +67,19 @@ export async function setActiveModel(modelId: string): Promise<ActiveModelRespon
 }
 
 /**
- * Download a model
+ * Get available quantization options
  */
-export async function downloadModel(modelId: string): Promise<DownloadResponse> {
+export async function getQuantOptions(): Promise<QuantOptionsResponse> {
+  return request<QuantOptionsResponse>('/models/quant-options');
+}
+
+/**
+ * Download a model with optional quantization
+ */
+export async function downloadModel(modelId: string, quantization?: string): Promise<DownloadResponse> {
   return request<DownloadResponse>(`/models/download/${encodeURIComponent(modelId)}`, {
     method: 'POST',
+    body: JSON.stringify({ quantization: quantization || 'q4_k_m' }),
   });
 }
 

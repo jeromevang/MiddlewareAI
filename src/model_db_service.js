@@ -526,13 +526,85 @@ async function getDownloadedModels() {
  * @param {string} modelId - Model ID to download
  * @returns {{success: boolean, message: string, status?: string}}
  */
-async function downloadModel(modelId) {
+/**
+ * Available quantization options for GGUF models
+ */
+const QUANT_OPTIONS = [
+    { id: 'q4_k_m', name: 'Q4_K_M', description: 'Balanced (recommended)', sizeMultiplier: 0.5 },
+    { id: 'q5_k_m', name: 'Q5_K_M', description: 'Better quality', sizeMultiplier: 0.6 },
+    { id: 'q8_0', name: 'Q8_0', description: 'High quality', sizeMultiplier: 0.9 },
+    { id: 'q3_k_m', name: 'Q3_K_M', description: 'Compact', sizeMultiplier: 0.4 },
+    { id: 'q2_k', name: 'Q2_K', description: 'Smallest', sizeMultiplier: 0.3 },
+];
+
+const DEFAULT_QUANT = 'q4_k_m';
+
+/**
+ * Get available quantization options
+ */
+function getQuantOptions() {
+    return QUANT_OPTIONS;
+}
+
+/**
+ * Extract a clean model name for LM Studio CLI from a full model ID
+ * LM Studio CLI expects simple search terms like: "phi-2", "llama-3.1-8b", "qwen2.5-coder-7b"
+ * 
+ * Examples:
+ * - "lmstudio-community/Phi-2-GGUF" -> "phi-2"
+ * - "lmstudio-community/Qwen2.5-Coder-7B-Instruct-GGUF" -> "qwen2.5-coder-7b-instruct"
+ * - "bartowski/Llama-3.2-1B-Instruct-GGUF" -> "llama-3.2-1b-instruct"
+ * 
+ * @param {string} modelId - Full model ID
+ * @param {string} [quantization] - Optional quantization (e.g., 'q4_k_m')
+ * @returns {string} CLI-ready model name with optional @quant suffix
+ */
+function extractModelNameForCLI(modelId, quantization = null) {
+    if (!modelId) return '';
+    
+    // Remove organization prefix (e.g., "lmstudio-community/")
+    let name = modelId.includes('/') ? modelId.split('/').pop() : modelId;
+    
+    // Remove existing quantization markers (e.g., @q4_k_m)
+    name = name.replace(/@.*$/, '');
+    
+    // Remove -GGUF suffix
+    name = name.replace(/-GGUF$/i, '');
+    
+    // Convert to lowercase for CLI search
+    name = name.toLowerCase();
+    
+    // Append quantization if provided
+    if (quantization) {
+        name = `${name}@${quantization}`;
+    }
+    
+    return name;
+}
+
+/**
+ * Start downloading a model via LM Studio CLI
+ * @param {string} modelId - Model ID to download
+ * @param {string} [quantization] - Optional quantization (e.g., 'q4_k_m'). Defaults to 'q4_k_m'
+ * @returns {{success: boolean, message: string, status?: string}}
+ */
+async function downloadModel(modelId, quantization = DEFAULT_QUANT) {
     if (activeDownloads.has(modelId)) {
         return { success: false, message: 'Download already in progress', status: 'downloading' };
     }
 
+    // Extract clean model name for CLI with quantization
+    const cliModelName = extractModelNameForCLI(modelId, quantization);
     console.log(`[ModelDB] Starting download for: ${modelId}`);
-    activeDownloads.set(modelId, { status: 'downloading', startedAt: Date.now(), progress: 0 });
+    console.log(`[ModelDB] CLI command: lms get "${cliModelName}" -y`);
+    
+    activeDownloads.set(modelId, { 
+        status: 'downloading', 
+        startedAt: Date.now(), 
+        progress: 0,
+        cliName: cliModelName,
+        modelId: modelId
+    });
 
     // Update model spec with download status
     const db = loadModelDatabase();
@@ -542,30 +614,41 @@ async function downloadModel(modelId) {
     }
 
     const cliPath = getLMStudioCLIPath();
-    
-    // Use spawn to run in background
-    const downloadProcess = spawn(cliPath, ['get', modelId], {
+
+    // Use spawn with -y flag for non-interactive mode
+    const downloadProcess = spawn(cliPath, ['get', cliModelName, '-y'], {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false,
         shell: true
     });
 
     let output = '';
-    
+
     downloadProcess.stdout.on('data', (data) => {
         const text = data.toString();
         output += text;
-        console.log(`[ModelDB Download] ${modelId}: ${text.trim()}`);
         
-        // Update progress if available
-        const progressMatch = text.match(/(\d+)%/);
+        // Parse progress from LM Studio output (e.g., "99.13% |   2.37 GB / 2.39 GB")
+        const progressMatch = text.match(/(\d+(?:\.\d+)?)\s*%/);
         if (progressMatch) {
-            const progress = parseInt(progressMatch[1], 10);
-            activeDownloads.set(modelId, { 
-                status: 'downloading', 
-                startedAt: activeDownloads.get(modelId)?.startedAt || Date.now(),
-                progress 
+            const progress = Math.round(parseFloat(progressMatch[1]));
+            const currentDownload = activeDownloads.get(modelId) || {};
+            activeDownloads.set(modelId, {
+                ...currentDownload,
+                status: 'downloading',
+                progress,
+                lastUpdate: Date.now()
             });
+            
+            // Only log every 10% to reduce noise
+            if (progress % 10 === 0 || progress >= 99) {
+                console.log(`[ModelDB Download] ${modelId}: ${progress}%`);
+            }
+        }
+        
+        // Check for completion message
+        if (text.includes('Download completed') || text.includes('Finalizing')) {
+            console.log(`[ModelDB Download] ${modelId}: Finalizing...`);
         }
     });
 
@@ -991,6 +1074,8 @@ module.exports = {
     downloadModel,
     getDownloadStatus,
     getActiveDownloads,
+    getQuantOptions,
+    extractModelNameForCLI,
     // Model ID matching
     findLMStudioModelId,
     normalizeModelIdForMatching,

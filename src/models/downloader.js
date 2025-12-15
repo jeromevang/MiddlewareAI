@@ -116,6 +116,35 @@ function getActiveDownloads() {
 }
 
 /**
+ * Extract a clean model name for LM Studio CLI from a full model ID
+ * LM Studio CLI expects simple search terms like: "phi-2", "llama-3.1-8b", "qwen2.5-coder-7b"
+ * 
+ * Examples:
+ * - "lmstudio-community/Phi-2-GGUF" -> "phi-2"
+ * - "lmstudio-community/Qwen2.5-Coder-7B-Instruct-GGUF" -> "qwen2.5-coder-7b-instruct"
+ * - "bartowski/Llama-3.2-1B-Instruct-GGUF" -> "llama-3.2-1b-instruct"
+ * @param {string} modelId - Full model ID
+ * @returns {string} Clean model name for CLI
+ */
+function extractModelNameForCLI(modelId) {
+    if (!modelId) return '';
+    
+    // Remove organization prefix (e.g., "lmstudio-community/")
+    let name = modelId.includes('/') ? modelId.split('/').pop() : modelId;
+    
+    // Remove quantization markers (e.g., @q4_k_m)
+    name = name.replace(/@.*$/, '');
+    
+    // Remove -GGUF suffix
+    name = name.replace(/-GGUF$/i, '');
+    
+    // Convert to lowercase for CLI search
+    name = name.toLowerCase();
+    
+    return name;
+}
+
+/**
  * Start downloading a model via LM Studio CLI
  * Uses spawn to run in background and returns immediately
  * @param {string} modelId - Model ID to download
@@ -126,8 +155,17 @@ async function downloadModel(modelId) {
         return { success: false, message: 'Download already in progress', status: 'downloading' };
     }
 
-    console.log(`[ModelDB] Starting download for: ${modelId}`);
-    activeDownloads.set(modelId, { status: 'downloading', startedAt: Date.now(), progress: 0 });
+    // Extract clean model name for CLI
+    const cliModelName = extractModelNameForCLI(modelId);
+    console.log(`[ModelDB] Starting download for: ${modelId} (CLI name: ${cliModelName})`);
+    
+    activeDownloads.set(modelId, { 
+        status: 'downloading', 
+        startedAt: Date.now(), 
+        progress: 0, 
+        cliName: cliModelName,
+        modelId: modelId
+    });
 
     // Update model spec with download status
     const db = loadModelDatabase();
@@ -138,8 +176,8 @@ async function downloadModel(modelId) {
 
     const cliPath = getLMStudioCLIPath();
     
-    // Use spawn to run in background
-    const downloadProcess = spawn(cliPath, ['get', modelId], {
+    // Use spawn with -y flag for non-interactive mode (auto-confirms and selects recommended quantization)
+    const downloadProcess = spawn(cliPath, ['get', cliModelName, '-y'], {
         stdio: ['ignore', 'pipe', 'pipe'],
         detached: false,
         shell: true
@@ -150,17 +188,28 @@ async function downloadModel(modelId) {
     downloadProcess.stdout.on('data', (data) => {
         const text = data.toString();
         output += text;
-        console.log(`[ModelDB Download] ${modelId}: ${text.trim()}`);
         
-        // Update progress if available
-        const progressMatch = text.match(/(\d+)%/);
+        // Parse progress from LM Studio output (e.g., "99.13% |   2.37 GB / 2.39 GB")
+        const progressMatch = text.match(/(\d+(?:\.\d+)?)\s*%/);
         if (progressMatch) {
-            const progress = parseInt(progressMatch[1], 10);
+            const progress = Math.round(parseFloat(progressMatch[1]));
+            const currentDownload = activeDownloads.get(modelId) || {};
             activeDownloads.set(modelId, { 
+                ...currentDownload,
                 status: 'downloading', 
-                startedAt: activeDownloads.get(modelId)?.startedAt || Date.now(),
-                progress 
+                progress,
+                lastUpdate: Date.now()
             });
+            
+            // Only log every 10% to reduce noise
+            if (progress % 10 === 0 || progress >= 99) {
+                console.log(`[ModelDB Download] ${modelId}: ${progress}%`);
+            }
+        }
+        
+        // Check for completion message
+        if (text.includes('Download completed') || text.includes('Finalizing')) {
+            console.log(`[ModelDB Download] ${modelId}: Finalizing...`);
         }
     });
 
