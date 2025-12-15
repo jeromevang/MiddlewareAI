@@ -1564,7 +1564,7 @@ app.post('/lmstudio/models/load-preset/:preset', async (req, res) => {
             // Determine what to load
             const modelsToLoad = [
                 { role: 'main', id: customConfig.main },
-                { role: 'summarizer', id: customConfig.summarizer },
+                { role: 'summarizer', id: customConfig.rollingSummarizer },
                 { role: 'embedder', id: customConfig.embedder }
             ].filter(m => m.id);
             
