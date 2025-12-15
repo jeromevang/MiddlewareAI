@@ -31,7 +31,16 @@
 - **Model ID Matching**: Added intelligent matching between preset IDs and actual LM Studio identifiers
   - `findLMStudioModelId()` matches preset IDs like `lmstudio-community/Qwen2.5-3B-Instruct-GGUF` to actual downloaded models like `qwen2.5-3b-instruct`
   - Uses normalized matching, substring matching, and token-based fuzzy matching
-  - Enables selecting models in UI that get properly loaded in LM Studio
+- **Smart Model Unloading**: 
+  - When switching presets: unloads unused models, keeps shared ones, loads new ones
+  - When manually switching main model: unloads previous, loads new, keeps summarizers
+- **Codebase Refactoring**:
+  - Created `routes/` folder with modular route files (status, config, lmstudio, models, sessions, rag)
+  - Created `models/` folder with split modules (database, presets, matcher, downloader)
+  - Created `middleware/` folder with error-handler.js and logging.js
+  - Created `config/`, `storage/`, `utils/` folders with index files
+  - Frontend: Created `model-config/` components (PresetSelector, ModelCards, MainModelList)
+  - Frontend: Created `lib/api/` with split API modules (client, models, lmstudio)
 
 ## Dependencies
 - **LM Studio**: For generating embeddings and summaries.

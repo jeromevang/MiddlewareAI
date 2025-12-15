@@ -469,72 +469,205 @@ async function waitForServerReady(timeoutMs = 30000) {
     throw new Error(`LM Studio server did not become ready within ${timeoutMs}ms`);
 }
 
+/**
+ * Smart preset model loading with intelligent unloading
+ * Only unloads models not needed by the new preset, keeps shared ones
+ * @param {string} presetName - 'high', 'medium', or 'low'
+ * @returns {Promise<{loaded: string[], failed: string[], needsDownload: string[], unloaded: string[], kept: string[]}>}
+ */
 async function ensurePresetModelsLoaded(presetName) {
-    const { getPreset, findLMStudioModelId } = require('../model_db_service.js');
+    const { getPreset, findLMStudioModelId, isModelAvailable } = require('../model_db_service.js');
+
+    const result = {
+        loaded: [],
+        failed: [],
+        needsDownload: [],
+        unloaded: [],
+        kept: []
+    };
 
     const preset = getPreset(presetName);
     if (!preset) {
         throw new Error(`Preset '${presetName}' not found`);
     }
 
-    // First, unload all currently loaded models to ensure we start fresh
-    console.log('[LM Studio] Unloading all currently loaded models...');
-    try {
-        await unloadAllModels();
-        console.log('[LM Studio] All models unloaded successfully');
-    } catch (error) {
-        console.warn('[LM Studio] Failed to unload models:', error.message);
-    }
+    // Build list of required models for this preset
+    const requiredModels = [];
 
-    // Load all models for this preset
-    const modelConfigs = [];
-
-    // Embedding model (local, doesn't need loading)
+    // Embedding model (local, doesn't need LM Studio loading)
     if (preset.embedding) {
         console.log(`[LM Studio] Embedding model: ${preset.embedding} (local, no loading needed)`);
     }
 
     // RAG Summarizer
     if (preset.ragSummarizer) {
-        modelConfigs.push({ type: 'ragSummarizer', config: { identifier: preset.ragSummarizer, model_name: preset.ragSummarizer } });
+        requiredModels.push({ type: 'ragSummarizer', presetId: preset.ragSummarizer });
     }
 
     // Rolling Summarizer
     if (preset.rollingSummarizer) {
-        modelConfigs.push({ type: 'rollingSummarizer', config: { identifier: preset.rollingSummarizer, model_name: preset.rollingSummarizer } });
+        requiredModels.push({ type: 'rollingSummarizer', presetId: preset.rollingSummarizer });
     }
 
-    // Main model - use the first/main option from the preset
+    // Main model - use the first option from the preset
     if (preset.mainOptions && preset.mainOptions.length > 0) {
-        const mainModelId = preset.mainOptions[0]; // Use first option as default
-        modelConfigs.push({ type: 'main', config: { identifier: mainModelId, model_name: mainModelId } });
+        const mainModelId = preset.mainOptions[0];
+        requiredModels.push({ type: 'main', presetId: mainModelId });
         console.log(`[LM Studio] Using main model from preset: ${mainModelId}`);
     }
 
-    const requiredModels = modelConfigs.filter(m => m.config && m.config.identifier);
-
-    console.log(`[LM Studio] Ensuring preset '${presetName}' models are loaded:`, requiredModels.map(m => m.config.identifier));
-
-    for (const { type, config } of requiredModels) {
-        try {
-            // Find the actual LM Studio model ID
-            const actualId = await findLMStudioModelId(config.identifier);
-
-            if (!actualId) {
-                console.warn(`[LM Studio] Could not find LM Studio model matching: ${config.identifier} (${type})`);
-                continue;
+    // Resolve all preset IDs to actual LM Studio IDs
+    const resolvedModels = [];
+    for (const model of requiredModels) {
+        const actualId = await findLMStudioModelId(model.presetId);
+        if (actualId) {
+            resolvedModels.push({ ...model, actualId });
+        } else {
+            // Check if model is available (downloaded)
+            const available = isModelAvailable ? isModelAvailable(model.presetId) : false;
+            if (!available) {
+                result.needsDownload.push(model.presetId);
+                console.warn(`[LM Studio] Model needs download: ${model.presetId} (${model.type})`);
+            } else {
+                result.failed.push(model.presetId);
+                console.warn(`[LM Studio] Could not resolve model: ${model.presetId} (${model.type})`);
             }
-
-            console.log(`[LM Studio] Loading model: ${actualId} (from preset: ${config.identifier})`);
-            await ensureModelLoaded({ ...config, identifier: actualId });
-            console.log(`[LM Studio] Successfully loaded model: ${actualId}`);
-        } catch (error) {
-            console.error(`[LM Studio] Failed to load model ${config.identifier}:`, error.message);
-            // Don't throw - continue loading other models
         }
     }
 
-    console.log(`[LM Studio] All preset '${presetName}' models loaded successfully`);
+    // Get currently loaded models
+    let currentlyLoaded = [];
+    try {
+        const loadedList = await listLoadedModels();
+        currentlyLoaded = loadedList.map(m => m.id);
+    } catch (error) {
+        console.warn('[LM Studio] Could not get loaded models list:', error.message);
+    }
+
+    // Determine what to unload (loaded but not needed)
+    const neededIds = new Set(resolvedModels.map(m => m.actualId));
+    const modelsToUnload = currentlyLoaded.filter(loadedId => {
+        // Check if this loaded model matches any needed model
+        return ![...neededIds].some(neededId => modelIdMatches(neededId, loadedId));
+    });
+
+    // Determine what's already loaded and can be kept
+    const modelsToKeep = currentlyLoaded.filter(loadedId => {
+        return [...neededIds].some(neededId => modelIdMatches(neededId, loadedId));
+    });
+
+    // Determine what needs to be loaded (needed but not loaded)
+    const modelsToLoad = resolvedModels.filter(model => {
+        return !currentlyLoaded.some(loadedId => modelIdMatches(model.actualId, loadedId));
+    });
+
+    console.log(`[LM Studio] Smart unloading: unload ${modelsToUnload.length}, keep ${modelsToKeep.length}, load ${modelsToLoad.length}`);
+
+    // Unload models not needed by new preset
+    for (const modelId of modelsToUnload) {
+        try {
+            console.log(`[LM Studio] Unloading unused model: ${modelId}`);
+            await unloadModel(modelId);
+            result.unloaded.push(modelId);
+        } catch (error) {
+            console.warn(`[LM Studio] Failed to unload ${modelId}:`, error.message);
+        }
+    }
+
+    // Track kept models
+    result.kept = modelsToKeep;
+    modelsToKeep.forEach(id => console.log(`[LM Studio] Keeping already loaded: ${id}`));
+
+    // Load new models
+    for (const model of modelsToLoad) {
+        try {
+            console.log(`[LM Studio] Loading model: ${model.actualId} (${model.type})`);
+            await ensureModelLoaded({ identifier: model.actualId });
+            result.loaded.push(model.actualId);
+            console.log(`[LM Studio] Successfully loaded: ${model.actualId}`);
+        } catch (error) {
+            console.error(`[LM Studio] Failed to load ${model.actualId}:`, error.message);
+            result.failed.push(model.presetId);
+        }
+    }
+
+    console.log(`[LM Studio] Preset '${presetName}' complete: loaded=${result.loaded.length}, kept=${result.kept.length}, unloaded=${result.unloaded.length}, failed=${result.failed.length}, needsDownload=${result.needsDownload.length}`);
+    return result;
+}
+
+/**
+ * Switch to a different main model (manual selection)
+ * Unloads the previous main model and loads the new one
+ * Keeps summarizer models loaded
+ * @param {string} newModelId - The model ID to switch to
+ * @param {string|null} previousModelId - The previous main model (optional, will be unloaded)
+ * @returns {Promise<{success: boolean, loaded?: string, unloaded?: string, error?: string}>}
+ */
+async function switchMainModel(newModelId, previousModelId = null) {
+    const { findLMStudioModelId } = require('../model_db_service.js');
+
+    const result = { success: false };
+
+    if (!newModelId) {
+        result.error = 'No model ID provided';
+        return result;
+    }
+
+    // Resolve the new model ID to actual LM Studio ID
+    const actualNewId = await findLMStudioModelId(newModelId);
+    if (!actualNewId) {
+        result.error = `Could not find LM Studio model matching: ${newModelId}`;
+        return result;
+    }
+
+    // Check if new model is already loaded
+    let currentlyLoaded = [];
+    try {
+        const loadedList = await listLoadedModels();
+        currentlyLoaded = loadedList.map(m => m.id);
+    } catch (error) {
+        console.warn('[LM Studio] Could not get loaded models list:', error.message);
+    }
+
+    const newAlreadyLoaded = currentlyLoaded.some(id => modelIdMatches(actualNewId, id));
+    if (newAlreadyLoaded) {
+        console.log(`[LM Studio] Model already loaded: ${actualNewId}`);
+        result.success = true;
+        result.loaded = actualNewId;
+        result.message = 'Model already loaded';
+        return result;
+    }
+
+    // Unload previous main model if specified and different
+    if (previousModelId && previousModelId !== newModelId) {
+        const actualPrevId = await findLMStudioModelId(previousModelId);
+        if (actualPrevId) {
+            const prevLoaded = currentlyLoaded.some(id => modelIdMatches(actualPrevId, id));
+            if (prevLoaded) {
+                try {
+                    console.log(`[LM Studio] Unloading previous main model: ${actualPrevId}`);
+                    await unloadModel(actualPrevId);
+                    result.unloaded = actualPrevId;
+                } catch (error) {
+                    console.warn(`[LM Studio] Failed to unload previous model: ${error.message}`);
+                }
+            }
+        }
+    }
+
+    // Load the new model
+    try {
+        console.log(`[LM Studio] Loading new main model: ${actualNewId}`);
+        await ensureModelLoaded({ identifier: actualNewId });
+        result.success = true;
+        result.loaded = actualNewId;
+        console.log(`[LM Studio] Successfully switched to: ${actualNewId}`);
+    } catch (error) {
+        result.error = `Failed to load model: ${error.message}`;
+        console.error(`[LM Studio] Failed to load ${actualNewId}:`, error.message);
+    }
+
+    return result;
 }
 
 module.exports = {
@@ -557,5 +690,6 @@ module.exports = {
     waitForServerReady,
     ensureRequiredModelsLoaded,
     ensurePresetModelsLoaded,
+    switchMainModel,
     initializeLMStudioWithModels,
 };

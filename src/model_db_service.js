@@ -520,57 +520,91 @@ async function getDownloadedModels() {
  * @param {string} modelId - The model ID to download
  * @returns {Promise<{success: boolean, message: string}>}
  */
+/**
+ * Start downloading a model via LM Studio CLI
+ * Uses spawn to run in background and returns immediately
+ * @param {string} modelId - Model ID to download
+ * @returns {{success: boolean, message: string, status?: string}}
+ */
 async function downloadModel(modelId) {
     if (activeDownloads.has(modelId)) {
-        return { success: false, message: 'Download already in progress' };
+        return { success: false, message: 'Download already in progress', status: 'downloading' };
     }
-    
+
     console.log(`[ModelDB] Starting download for: ${modelId}`);
-    activeDownloads.set(modelId, { status: 'downloading', startedAt: Date.now() });
-    
+    activeDownloads.set(modelId, { status: 'downloading', startedAt: Date.now(), progress: 0 });
+
     // Update model spec with download status
     const db = loadModelDatabase();
     if (db.modelSpecs[modelId]) {
         db.modelSpecs[modelId].downloadProgress = 'starting';
         saveModelDatabase(db);
     }
+
+    const cliPath = getLMStudioCLIPath();
     
-    try {
-        // Use lms get to download the model
-        const cliPath = getLMStudioCLIPath();
-        const { stdout, stderr } = await execAsync(`"${cliPath}" get "${modelId}"`, {
-            timeout: 600000, // 10 minutes timeout for large models
-            encoding: 'utf8'
-        });
+    // Use spawn to run in background
+    const downloadProcess = spawn(cliPath, ['get', modelId], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false,
+        shell: true
+    });
+
+    let output = '';
+    
+    downloadProcess.stdout.on('data', (data) => {
+        const text = data.toString();
+        output += text;
+        console.log(`[ModelDB Download] ${modelId}: ${text.trim()}`);
         
-        console.log(`[ModelDB] Download complete for: ${modelId}`);
-        console.log('[ModelDB] Output:', stdout || stderr);
-        
-        // Update availability
+        // Update progress if available
+        const progressMatch = text.match(/(\d+)%/);
+        if (progressMatch) {
+            const progress = parseInt(progressMatch[1], 10);
+            activeDownloads.set(modelId, { 
+                status: 'downloading', 
+                startedAt: activeDownloads.get(modelId)?.startedAt || Date.now(),
+                progress 
+            });
+        }
+    });
+
+    downloadProcess.stderr.on('data', (data) => {
+        const text = data.toString();
+        console.log(`[ModelDB Download Error] ${modelId}: ${text.trim()}`);
+    });
+
+    downloadProcess.on('close', (code) => {
         activeDownloads.delete(modelId);
         
-        // Mark as available in database
         const dbUpdated = loadModelDatabase();
-        if (dbUpdated.modelSpecs[modelId]) {
-            dbUpdated.modelSpecs[modelId].available = true;
-            dbUpdated.modelSpecs[modelId].downloadProgress = null;
-            saveModelDatabase(dbUpdated);
+        if (code === 0) {
+            console.log(`[ModelDB] Download complete for: ${modelId}`);
+            if (dbUpdated.modelSpecs[modelId]) {
+                dbUpdated.modelSpecs[modelId].available = true;
+                dbUpdated.modelSpecs[modelId].downloadProgress = null;
+                saveModelDatabase(dbUpdated);
+            }
+        } else {
+            console.error(`[ModelDB] Download failed for ${modelId} with code ${code}`);
+            if (dbUpdated.modelSpecs[modelId]) {
+                dbUpdated.modelSpecs[modelId].downloadProgress = null;
+                saveModelDatabase(dbUpdated);
+            }
         }
-        
-        return { success: true, message: 'Download completed successfully' };
-    } catch (error) {
-        console.error(`[ModelDB] Download failed for ${modelId}:`, error.message);
+    });
+
+    downloadProcess.on('error', (error) => {
+        console.error(`[ModelDB] Download process error for ${modelId}:`, error.message);
         activeDownloads.delete(modelId);
-        
-        // Update database with failure
-        const dbFailed = loadModelDatabase();
-        if (dbFailed.modelSpecs[modelId]) {
-            dbFailed.modelSpecs[modelId].downloadProgress = null;
-            saveModelDatabase(dbFailed);
-        }
-        
-        return { success: false, message: error.message };
-    }
+    });
+
+    // Return immediately - download runs in background
+    return { 
+        success: true, 
+        message: 'Download started', 
+        status: 'downloading' 
+    };
 }
 
 /**
@@ -771,15 +805,27 @@ async function initializeModelDatabase() {
 function getModelAvailability() {
     const db = loadModelDatabase();
     const availability = {};
-    
+
     for (const [modelId, spec] of Object.entries(db.modelSpecs || {})) {
         availability[modelId] = {
             available: spec.available ?? false,
             downloading: getDownloadStatus(modelId).downloading
         };
     }
-    
+
     return availability;
+}
+
+/**
+ * Check if a specific model is available (downloaded)
+ * @param {string} modelId - Model ID to check
+ * @returns {boolean}
+ */
+function isModelAvailable(modelId) {
+    if (!modelId) return false;
+    const db = loadModelDatabase();
+    const spec = db.modelSpecs?.[modelId];
+    return spec?.available ?? false;
 }
 
 /**
@@ -951,5 +997,6 @@ module.exports = {
     // Startup & validation
     validatePresets,
     initializeModelDatabase,
-    getModelAvailability
+    getModelAvailability,
+    isModelAvailable
 };

@@ -24,7 +24,7 @@ const http = require('http');
 const crypto = require('crypto');
 const WebSocketLib = require('ws');
 const { WebSocketServer } = WebSocketLib;
-const { embedText, summarizeConversation, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, ensureRequiredModelsLoaded, ensurePresetModelsLoaded, initializeLMStudioWithModels } = require('./lmstudio_client.js');
+const { embedText, summarizeConversation, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, ensureRequiredModelsLoaded, ensurePresetModelsLoaded, switchMainModel, initializeLMStudioWithModels } = require('./lmstudio_client.js');
 const { SQLiteCacheManager } = require('./sqlite_cache.js');
 const { FAISSIndexManager } = require('./faiss_storage.js');
 const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js');
@@ -1191,9 +1191,18 @@ app.post('/lmstudio/models/load-preset/:preset', async (req, res) => {
             return res.status(400).json({ error: 'Invalid preset. Must be one of: high, medium, low' });
         }
 
-        await ensurePresetModelsLoaded(preset);
-        appendLog(`Preset '${preset}' models loaded via API`, 'info');
-        res.json({ status: 'ok', message: `Preset '${preset}' models loaded successfully` });
+        const result = await ensurePresetModelsLoaded(preset);
+        appendLog(`Preset '${preset}' models loaded via API: loaded=${result.loaded.length}, kept=${result.kept.length}, unloaded=${result.unloaded.length}`, 'info');
+        
+        res.json({ 
+            status: 'ok', 
+            message: `Preset '${preset}' models loaded successfully`,
+            loaded: result.loaded,
+            kept: result.kept,
+            unloaded: result.unloaded,
+            failed: result.failed,
+            needsDownload: result.needsDownload
+        });
     } catch (error) {
         console.error(`[API] Failed to load preset '${req.params.preset}' models:`, error.message);
         res.status(500).json({ error: 'Failed to load preset models', details: error.message });
@@ -1250,6 +1259,7 @@ app.get('/models/suggested', async (req, res) => {
 
 /**
  * POST /models/active - Set the currently active main model and load it in LM Studio
+ * Uses smart switching: unloads previous main model, loads new one
  */
 app.post('/models/active', async (req, res) => {
     try {
@@ -1258,6 +1268,9 @@ app.post('/models/active', async (req, res) => {
             return res.status(400).json({ error: 'modelId required' });
         }
 
+        // Get the previous active model before setting new one
+        const previousModel = getLastActiveModel();
+        
         // Save to database (store the original modelId for display purposes)
         const result = setActiveModel(modelId);
         appendLog(`Active model set to: ${modelId}`, 'info');
@@ -1266,7 +1279,6 @@ app.post('/models/active', async (req, res) => {
         const lmHealth = await checkLMStudioHealth();
         if (!lmHealth.ready) {
             console.log('[API] LM Studio not ready, starting server...');
-            // Always try to start LM Studio for model loading, regardless of config
             const cfg = getLMStudioConfig();
             if (await isLMStudioRunning(cfg.url)) {
                 console.log('[LM Studio] Server already running.');
@@ -1276,7 +1288,6 @@ app.post('/models/active', async (req, res) => {
                 try {
                     const { spawn } = require('child_process');
                     const proc = spawn(cliPath, args, { stdio: 'inherit', shell: true });
-                    // Wait a bit for server to start
                     await new Promise(resolve => setTimeout(resolve, 3000));
                 } catch (startError) {
                     console.warn('[API] Failed to start LM Studio server:', startError.message);
@@ -1291,35 +1302,35 @@ app.post('/models/active', async (req, res) => {
             }
         }
 
-        // Find the actual LM Studio model ID (may differ from preset ID)
-        const { findLMStudioModelId } = require('./model_db_service.js');
-        const actualModelId = await findLMStudioModelId(modelId);
+        // Use switchMainModel to intelligently unload old and load new
+        console.log(`[API] Switching main model from: ${previousModel || 'none'} to: ${modelId}`);
         
-        if (!actualModelId) {
-            console.warn(`[API] Could not find LM Studio model matching: ${modelId}`);
+        const switchResult = await switchMainModel(modelId, previousModel);
+        
+        if (!switchResult.success) {
+            if (switchResult.error?.includes('not found')) {
+                return res.json({ 
+                    status: 'ok', 
+                    lastActiveModel: result,
+                    warning: 'Model set but not found in LM Studio. It may need to be downloaded first.'
+                });
+            }
             return res.json({ 
                 status: 'ok', 
                 lastActiveModel: result,
-                warning: 'Model set but not found in LM Studio. It may need to be downloaded first.'
+                warning: switchResult.error || 'Model set but failed to load'
             });
         }
 
-        // Load the model in LM Studio using the actual ID
-        try {
-            const { ensureModelLoaded } = require('./lmstudio/model_manager.js');
-            console.log(`[API] Loading model in LM Studio: ${actualModelId} (from: ${modelId})`);
-            await ensureModelLoaded({ identifier: actualModelId });
-            appendLog(`Model loaded in LM Studio: ${actualModelId}`, 'info');
-        } catch (loadError) {
-            console.warn(`[API] Model set but failed to load in LM Studio: ${loadError.message}`);
-            return res.json({ 
-                status: 'ok', 
-                lastActiveModel: result,
-                warning: `Model set but failed to load: ${loadError.message}`
-            });
-        }
-
-        res.json({ status: 'ok', lastActiveModel: result, loadedModel: actualModelId });
+        appendLog(`Model switched: ${switchResult.unloaded ? `unloaded ${switchResult.unloaded}, ` : ''}loaded ${switchResult.loaded}`, 'info');
+        
+        res.json({ 
+            status: 'ok', 
+            lastActiveModel: result, 
+            loadedModel: switchResult.loaded,
+            unloadedModel: switchResult.unloaded || null,
+            message: switchResult.message
+        });
     } catch (error) {
         console.error('[API] Failed to set active model:', error.message);
         res.status(500).json({ error: 'Failed to set active model', details: error.message });
@@ -1395,21 +1406,37 @@ app.post('/models/evaluate', async (req, res) => {
 
 /**
  * POST /models/download/:id - Download a model via LM Studio CLI
+ * Returns immediately - download runs in background
  */
 app.post('/models/download/:id', async (req, res) => {
     try {
         const modelId = decodeURIComponent(req.params.id);
         appendLog(`Starting model download: ${modelId}`, 'info');
-        
-        // Start download (async, will complete in background)
+
+        // Start download (runs in background, returns immediately)
         const result = await downloadModelFromDB(modelId);
-        
+
         if (result.success) {
-            appendLog(`Model download completed: ${modelId}`, 'info');
-            res.json({ status: 'ok', message: result.message });
+            appendLog(`Model download started: ${modelId}`, 'info');
+            res.json({ 
+                status: 'ok', 
+                message: result.message,
+                downloadStatus: result.status || 'downloading',
+                modelId 
+            });
         } else {
-            appendLog(`Model download failed: ${modelId} - ${result.message}`, 'warn');
-            res.status(500).json({ error: 'Download failed', details: result.message });
+            // Check if already downloading
+            if (result.status === 'downloading') {
+                res.json({ 
+                    status: 'ok', 
+                    message: 'Download already in progress',
+                    downloadStatus: 'downloading',
+                    modelId 
+                });
+            } else {
+                appendLog(`Model download failed: ${modelId} - ${result.message}`, 'warn');
+                res.status(500).json({ error: 'Download failed', details: result.message });
+            }
         }
     } catch (error) {
         console.error('[API] Failed to download model:', error.message);
