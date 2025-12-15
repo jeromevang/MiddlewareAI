@@ -603,6 +603,43 @@ async function ensurePresetModelsLoaded(presetName) {
  * @param {string|null} previousModelId - The previous main model (optional, will be unloaded)
  * @returns {Promise<{success: boolean, loaded?: string, unloaded?: string, error?: string}>}
  */
+// Helper function to check if a model is still needed for summarization tasks
+async function isModelStillNeeded(modelId, currentlyLoaded) {
+    const { getConfig } = require('../config.js');
+
+    try {
+        const config = getConfig();
+        const { findLMStudioModelId } = require('../model_db_service.js');
+
+        // Check if model is used for RAG summarizer
+        if (config.models?.ragSummarization?.model_name) {
+            const ragModelId = await findLMStudioModelId(config.models.ragSummarization.model_name);
+            if (ragModelId && currentlyLoaded.some(id => modelIdMatches(ragModelId, id))) {
+                const modelResolved = await findLMStudioModelId(modelId);
+                if (modelResolved && modelIdMatches(ragModelId, modelResolved)) {
+                    return true;
+                }
+            }
+        }
+
+        // Check if model is used for rolling summarizer
+        if (config.models?.rollingSummarization?.model_name) {
+            const rollingModelId = await findLMStudioModelId(config.models.rollingSummarization.model_name);
+            if (rollingModelId && currentlyLoaded.some(id => modelIdMatches(rollingModelId, id))) {
+                const modelResolved = await findLMStudioModelId(modelId);
+                if (modelResolved && modelIdMatches(rollingModelId, modelResolved)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    } catch (error) {
+        console.warn('[LM Studio] Error checking if model still needed:', error.message);
+        return false; // Default to not needed if we can't check
+    }
+}
+
 async function switchMainModel(newModelId, previousModelId = null) {
     const { findLMStudioModelId } = require('../model_db_service.js');
 
