@@ -430,7 +430,14 @@ function createDefaultDatabase() {
                 description: 'Works on 4GB VRAM, fastest inference',
                 embedding: 'Xenova/all-MiniLM-L6-v2',
                 summarizer: 'lmstudio-community/Qwen2.5-1.5B-Instruct-GGUF',
-                mainOptions: []
+                mainOptions: [
+                    'lmstudio-community/Llama-3.2-1B-Instruct-GGUF',
+                    'lmstudio-community/Llama-3.2-3B-Instruct-GGUF',
+                    'lmstudio-community/Qwen2.5-1.5B-Instruct-GGUF',
+                    'lmstudio-community/Qwen2.5-3B-Instruct-GGUF',
+                    'microsoft/Phi-2-GGUF',
+                    'microsoft/Phi-3-mini-4k-instruct-GGUF'
+                ]
             }
         },
         modelSpecs: {},

@@ -47,6 +47,22 @@ function validateConfig(config) {
         }
     }
 
+    // Validate perQualityMainModels if present (should be an object with string values)
+    if (config.models.perQualityMainModels) {
+        if (typeof config.models.perQualityMainModels !== 'object') {
+            throw new Error('perQualityMainModels must be an object');
+        }
+        const validKeys = ['high', 'medium', 'low'];
+        for (const key of Object.keys(config.models.perQualityMainModels)) {
+            if (!validKeys.includes(key)) {
+                throw new Error(`Invalid perQualityMainModels key: ${key}`);
+            }
+            if (typeof config.models.perQualityMainModels[key] !== 'string') {
+                throw new Error(`perQualityMainModels.${key} must be a string`);
+            }
+        }
+    }
+
     if (!config.lmstudio.url) {
         throw new Error('Missing LM Studio URL in configuration');
     }

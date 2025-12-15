@@ -12,22 +12,27 @@
     }
   },
   "models": {
+    "perQualityMainModels": {
+      "high": "",
+      "medium": "",
+      "low": "llama-3.2-1b-instruct"
+    },
     "embedding": {
       "engine": "local",
       "model_name": "Xenova/all-MiniLM-L6-v2",
       "identifier": "all-MiniLM-L6-v2"
     },
     "ragSummarization": {
-      "model_name": "lmstudio-community/Phi-3-mini-4k-instruct-GGUF",
-      "identifier": "Phi-3-mini-4k-instruct-GGUF"
+      "model_name": "lmstudio-community/Qwen2.5-1.5B-Instruct-GGUF",
+      "identifier": "Qwen2.5-1.5B-Instruct-GGUF"
     },
     "rollingSummarization": {
-      "model_name": "lmstudio-community/Qwen2.5-3B-Instruct-GGUF",
-      "identifier": "Qwen2.5-3B-Instruct-GGUF"
+      "model_name": "lmstudio-community/Qwen2.5-1.5B-Instruct-GGUF",
+      "identifier": "Qwen2.5-1.5B-Instruct-GGUF"
     },
     "main": {
-      "model_name": "osmosis-ai/osmosis-mcp-4b",
-      "identifier": "osmosis-mcp-4b"
+      "model_name": "llama-3.2-1b-instruct",
+      "identifier": "llama-3.2-1b-instruct"
     }
   },
   "processing": {

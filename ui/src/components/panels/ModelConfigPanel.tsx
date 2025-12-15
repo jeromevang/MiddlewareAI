@@ -186,11 +186,15 @@ export default function ModelConfigPanel() {
       if (config.models?.rollingSummarization?.model_name && !models.rollingSummarizer) {
         setModels(prev => ({ ...prev, rollingSummarizer: config.models.rollingSummarization.model_name }));
       }
-      // Only set main model from config if not already set by lastActiveModel or user selection
-      // Actually, main model should be dynamic and not loaded from config - remove this
-      // if (config.models?.main?.model_name && !models.main) {
-      //   setModels(prev => ({ ...prev, main: config.models.main.model_name }));
-      // }
+      // Load main model from config - prefer per-quality saved model, fallback to general main model
+      if (!models.main) {
+        const savedQualityModel = config.models?.perQualityMainModels?.[quality];
+        if (savedQualityModel) {
+          setModels(prev => ({ ...prev, main: savedQualityModel }));
+        } else if (config.models?.main?.model_name) {
+          setModels(prev => ({ ...prev, main: config.models.main.model_name }));
+        }
+      }
     }
   }, [status]);
 
@@ -515,6 +519,33 @@ export default function ModelConfigPanel() {
     mutationFn: (preset: string) => loadPresetModels(preset),
     onSuccess: (_, preset) => {
       setMessage(`✅ Preset '${preset}' models loaded successfully`);
+
+      // Set the main model to the previously selected one for this quality, or first available option
+      const presetData = presets[preset as keyof typeof presets];
+      if (presetData?.mainOptions?.length > 0) {
+        // Check if there's a previously saved model for this quality level
+        const config = status?.config as any;
+        const savedQualityModel = config?.models?.perQualityMainModels?.[preset];
+
+        // Use saved model if it exists and is available in this preset, otherwise use first option
+        let selectedModel = presetData.mainOptions[0]; // default to first option
+        if (savedQualityModel && presetData.mainOptions.includes(savedQualityModel)) {
+          selectedModel = savedQualityModel;
+        }
+
+        setModels(prev => ({ ...prev, main: selectedModel }));
+        setActiveModelMutation.mutate(selectedModel);
+        // Persist the selection
+        mutation.mutate({
+          models: {
+            main: {
+              model_name: selectedModel,
+              identifier: selectedModel.split('/').pop()
+            }
+          }
+        });
+      }
+
       // Refresh health status and model list after loading
       setTimeout(() => {
         healthCheckMutation.mutate();
@@ -580,6 +611,20 @@ export default function ModelConfigPanel() {
     setModels(prev => ({ ...prev, main: modelId }));
     // Track the active model on server
     setActiveModelMutation.mutate(modelId);
+    // Persist the selection in config for current quality level
+    const config = status?.config as any;
+    const currentPerQuality = config?.models?.perQualityMainModels || { high: '', medium: '', low: '' };
+    currentPerQuality[quality] = modelId;
+
+    mutation.mutate({
+      models: {
+        perQualityMainModels: currentPerQuality,
+        main: {
+          model_name: modelId,
+          identifier: modelId.split('/').pop()
+        }
+      }
+    });
   };
 
   const handleDownloadModel = (modelId: string, quant?: string) => {
@@ -815,7 +860,7 @@ export default function ModelConfigPanel() {
                 <select
                   value={selectedQuant}
                   onChange={(e) => setSelectedQuant(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg border border-white/20 bg-white/10 text-sm text-white focus:border-amber-400 focus:outline-none"
+                  className="px-3 py-1.5 rounded-lg border border-white/20 bg-gray-800 text-sm text-white focus:border-amber-400 focus:outline-none"
                 >
                   {quantOptions.map((opt) => (
                     <option key={opt.id} value={opt.id}>
@@ -905,7 +950,7 @@ export default function ModelConfigPanel() {
                     <label className="text-sm font-semibold text-white">Main Model</label>
                     <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded">Active</span>
                   </div>
-                  <div className="text-sm text-white font-medium">{getModelDisplayName(presets[quality]?.mainOptions?.[0] || 'Not set')}</div>
+                  <div className="text-sm text-white font-medium">{getModelDisplayName(models.main || presets[quality]?.mainOptions?.[0] || 'Not set')}</div>
                   <p className="text-xs text-white/50 mt-1">Chat completions</p>
                 </div>
               </div>

@@ -14,21 +14,31 @@ interface PresetSelectorProps {
   isLoading?: boolean;
 }
 
+// Utility function to get selected preset button classes
+function getSelectedButtonClasses(color: string): string {
+  const colorMap: Record<string, string> = {
+    cyan: 'border-cyan-500/50 bg-cyan-500/10',
+    purple: 'border-purple-500/50 bg-purple-500/10',
+    green: 'border-green-500/50 bg-green-500/10',
+  };
+  return colorMap[color] || colorMap.cyan;
+}
+
 const presetMeta = {
-  high: { 
-    label: 'High Quality', 
+  high: {
+    label: 'High Quality',
     description: 'Best quality for 12GB+ VRAM',
-    color: 'cyan' 
+    color: 'cyan'
   },
-  medium: { 
-    label: 'Balanced', 
+  medium: {
+    label: 'Balanced',
     description: 'Good balance for 8GB VRAM',
-    color: 'purple' 
+    color: 'purple'
   },
-  low: { 
-    label: 'Fast & Lightweight', 
+  low: {
+    label: 'Fast & Lightweight',
     description: 'Works on 4GB VRAM, fastest inference',
-    color: 'green' 
+    color: 'green'
   },
 };
 
@@ -63,7 +73,7 @@ export function PresetSelector({
               key={key}
               className={`p-4 rounded-lg border text-left transition-all ${
                 isSelected
-                  ? `border-${meta.color}-500/50 bg-${meta.color}-500/10`
+                  ? getSelectedButtonClasses(meta.color)
                   : 'border-white/15 bg-white/5 hover:border-white/30'
               }`}
               onClick={() => onPresetChange(key as 'high' | 'medium' | 'low')}
