@@ -20,7 +20,7 @@
     "filterBelowMinContext": true
   },
   "ragPipeline": {
-    "tier": "high",
+    "tier": "low",
     "locked": true,
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },
@@ -38,7 +38,7 @@
       "userSelectable": true
     },
     "perQualityMainModels": {
-      "high": "cursorcore-qw2.5-7b",
+      "high": "qwen/qwen2.5-coder-14b",
       "medium": "mungert/osmosis-mcp-4b",
       "low": "qwen/qwen3-4b-2507"
     },

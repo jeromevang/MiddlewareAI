@@ -78,13 +78,56 @@ export default function ModelConfigPanel() {
   // RAG Tier Change Mutation
   const changeRagTierMutation = useMutation({
     mutationFn: async (tier: string) => {
+      const currentTier = configData?.rag?.activeTier || 'medium';
+
+      // Check if re-indexing is needed
+      const reindexRes = await fetch(`/rag/check-reindex?from=${currentTier}&to=${tier}`);
+      if (!reindexRes.ok) throw new Error('Failed to check reindex requirement');
+
+      const { needsReindex } = await reindexRes.json();
+
+      if (needsReindex) {
+        // Show re-indexing message
+        alert(`Changing RAG quality from ${currentTier} to ${tier} requires re-indexing your codebase. This may take several minutes.\n\nClick OK to continue.`);
+
+        // Start re-indexing process
+        console.log('Starting reindexing process...');
+        const reindexResponse = await fetch('/rag/reindex', { method: 'POST' });
+        if (!reindexResponse.ok) {
+          throw new Error('Failed to start reindexing');
+        }
+      }
+
+      // Auto-download required models
+      console.log('Ensuring required models are available...');
+      const downloadRes = await fetch(`/rag/ensure-models`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tier })
+      });
+      if (!downloadRes.ok) {
+        console.warn('Some models may need manual download');
+      }
+
+      // Change the tier
       const res = await fetch("/rag/tier", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ tier }),
       });
       if (!res.ok) throw new Error('Failed to change RAG tier');
+
       return res.json();
+    },
+    onSuccess: (_, tier) => {
+      console.log('RAG tier changed successfully to:', tier);
+      queryClient.invalidateQueries({ queryKey: ['ragTier'] });
+      queryClient.invalidateQueries({ queryKey: ['config'] });
+      queryClient.invalidateQueries({ queryKey: ['modelStatus'] });
+    },
+    onError: (err) => {
+      console.error('Failed to change RAG tier:', err);
+      alert(`Failed to change RAG tier: ${err.message}`);
     },
   });
 

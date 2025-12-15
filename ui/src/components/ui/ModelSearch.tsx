@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import clsx from "clsx";
 
@@ -34,6 +34,11 @@ export function ModelSearch({
   const [selectedHFModel, setSelectedHFModel] = useState<HFModelResult | null>(null);
   const [selectedLMModel, setSelectedLMModel] = useState<LMStudioModel | null>(null);
   const [selectedQuant, setSelectedQuant] = useState<string | null>(null);
+
+  // Debug logging for source changes
+  useEffect(() => {
+    console.log('[ModelSearch] Source is now:', source);
+  }, [source]);
 
   // Search mutation
   const searchMutation = useMutation({
@@ -113,12 +118,14 @@ export function ModelSearch({
         <select
           value={source}
           onChange={(e) => {
-            setSource(e.target.value as ModelSource);
+            const newSource = e.target.value as ModelSource;
+            console.log('[ModelSearch] Source changed to:', newSource);
+            setSource(newSource);
             setSelectedHFModel(null);
             setSelectedLMModel(null);
             setSelectedQuant(null);
           }}
-          className="px-3 py-1 rounded bg-white/10 border border-white/20 text-white text-sm"
+          className="px-3 py-1 rounded bg-gray-800 border border-white/20 text-white text-sm focus:outline-none focus:ring-1 focus:ring-accent-primary/50"
         >
           <option value="lmstudio">LM Studio Registry</option>
           <option value="huggingface">Hugging Face</option>
@@ -133,9 +140,13 @@ export function ModelSearch({
           onChange={(e) => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={
-            source === 'lmstudio'
-              ? "Search LM Studio registry..."
-              : "Search Hugging Face for models..."
+            (() => {
+              const placeholder = source === 'lmstudio'
+                ? "Search LM Studio registry..."
+                : "Search Hugging Face for models...";
+              console.log('[ModelSearch] Placeholder for source', source, ':', placeholder);
+              return placeholder;
+            })()
           }
           className={clsx(
             "flex-1 px-3 py-2 rounded-lg text-sm",

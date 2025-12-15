@@ -2280,6 +2280,60 @@ app.post('/rag/tier', async (req, res) => {
 });
 
 /**
+ * GET /rag/check-reindex - Check if changing tiers requires reindexing
+ */
+app.get('/rag/check-reindex', (req, res) => {
+    try {
+        const { from, to } = req.query;
+        if (!from || !to) {
+            return res.status(400).json({ error: 'Missing from or to parameters' });
+        }
+
+        const { requiresReindex } = require('./rag_pipeline_config.js');
+        const needsReindex = requiresReindex(from, to);
+        res.json({ needsReindex });
+    } catch (error) {
+        console.error('[API] Failed to check reindex requirement:', error.message);
+        res.status(500).json({ error: 'Failed to check reindex requirement', details: error.message });
+    }
+});
+
+/**
+ * POST /rag/ensure-models - Ensure required models are downloaded for a tier
+ */
+app.post('/rag/ensure-models', async (req, res) => {
+    try {
+        const { tier } = req.body;
+        if (!tier) {
+            return res.status(400).json({ error: 'Missing tier parameter' });
+        }
+
+        const { getRagPipelineConfig } = require('./rag_pipeline_config.js');
+        const pipelineConfig = getRagPipelineConfig(tier);
+        if (!pipelineConfig) {
+            return res.status(400).json({ error: 'Invalid tier' });
+        }
+
+        // Check and download embedder if needed
+        const embedderId = pipelineConfig.embedder.identifier;
+        console.log(`Checking embedder: ${embedderId}`);
+        // For now, assume models are available or will be downloaded manually
+        // TODO: Implement actual model availability checking
+
+        // Check and download RAG summarizer if needed
+        const summarizerId = pipelineConfig.ragSummarizer.identifier;
+        console.log(`Checking RAG summarizer: ${summarizerId}`);
+        // For now, assume models are available or will be downloaded manually
+        // TODO: Implement actual model availability checking
+
+        res.json({ status: 'ok', message: 'Models checked (auto-download not yet implemented)' });
+    } catch (error) {
+        console.error('[API] Failed to ensure models:', error.message);
+        res.status(500).json({ error: 'Failed to ensure models', details: error.message });
+    }
+});
+
+/**
  * POST /presets/optimize - Run LLM-powered optimization
  */
 app.post('/presets/optimize', async (req, res) => {

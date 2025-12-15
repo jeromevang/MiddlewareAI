@@ -26,48 +26,74 @@ const FIXED_EMBEDDER = {
 const RAG_PIPELINE_TIERS = {
     low: {
         name: 'Low',
-        description: 'Fast indexing, good for quick iterations',
+        description: 'Fast indexing, lightweight code-aware embeddings',
         targetGPU: 'RTX 3060 / 8GB VRAM',
-        embedder: FIXED_EMBEDDER,
+        embedder: {
+            model_name: 'jinaai/jina-embeddings-v2-small-en',
+            identifier: 'jinaai/jina-embeddings-v2-small-en',
+            engine: 'local',
+            dimension: 512,  // Fast, lightweight semantic resolution
+            context_length: 8192,
+            description: 'Lightweight embeddings with good code understanding',
+            locked: true
+        },
         ragSummarizer: {
-            model_name: 'qwen2.5-coder-0.5b-instruct',
-            identifier: 'qwen2.5-coder-0.5b-instruct',
-            context_length: 4096,
-            description: 'Lightweight code summarizer for RAG chunks',
-            sizeGB: 0.4
+            model_name: 'microsoft/phi-2',
+            identifier: 'microsoft/phi-2',
+            context_length: 2048,
+            description: 'Efficient code summarizer with strong function awareness',
+            sizeGB: 2.7
         },
         indexingSpeed: 'fast',
-        summaryQuality: 'basic'
-    },
-    medium: {
-        name: 'Medium',
-        description: 'Balanced quality and speed',
-        targetGPU: 'RTX 4070 / 12GB VRAM',
-        embedder: FIXED_EMBEDDER,
-        ragSummarizer: {
-            model_name: 'qwen2.5-coder-1.5b-instruct',
-            identifier: 'qwen2.5-coder-1.5b-instruct',
-            context_length: 4096,
-            description: 'Balanced code summarizer for RAG chunks',
-            sizeGB: 0.9
-        },
-        indexingSpeed: 'moderate',
         summaryQuality: 'good'
     },
+
+    medium: {
+        name: 'Medium',
+        description: 'Balanced quality and speed for code RAG',
+        targetGPU: 'RTX 4070 / 12GB VRAM',
+        embedder: {
+            model_name: 'jinaai/jina-embeddings-v2-base-en',
+            identifier: 'jinaai/jina-embeddings-v2-base-en',
+            engine: 'local',
+            dimension: 768,  // Balanced semantic resolution
+            context_length: 8192,
+            description: 'High-quality code-aware embeddings',
+            locked: true
+        },
+        ragSummarizer: {
+            model_name: 'codellama/CodeLlama-7b-Instruct-hf',
+            identifier: 'codellama/CodeLlama-7b-Instruct-hf',
+            context_length: 4096,
+            description: 'Specialized code summarizer with excellent function analysis',
+            sizeGB: 7.0
+        },
+        indexingSpeed: 'moderate',
+        summaryQuality: 'excellent'
+    },
+
     high: {
         name: 'High',
-        description: 'Best quality summaries, slower indexing',
+        description: 'Maximum code understanding and summarization quality',
         targetGPU: 'RTX 5080 / 16GB VRAM',
-        embedder: FIXED_EMBEDDER,
+        embedder: {
+            model_name: 'thenlper/gte-large',
+            identifier: 'thenlper/gte-large',
+            engine: 'local',
+            dimension: 1024,  // Maximum semantic resolution
+            context_length: 8192,
+            description: 'Premium embeddings with deep semantic understanding',
+            locked: true
+        },
         ragSummarizer: {
-            model_name: 'phi-3.1-mini-128k-instruct',
-            identifier: 'phi-3.1-mini-128k-instruct',
+            model_name: 'codellama/CodeLlama-13b-Instruct-hf',
+            identifier: 'codellama/CodeLlama-13b-Instruct-hf',
             context_length: 4096,
-            description: 'High-quality code summarizer for RAG chunks',
-            sizeGB: 2.2
+            description: 'Professional-grade code summarizer with comprehensive analysis',
+            sizeGB: 13.0
         },
         indexingSpeed: 'slow',
-        summaryQuality: 'excellent'
+        summaryQuality: 'premium'
     }
 };
 
@@ -123,11 +149,22 @@ function getRagPipelineConfig(tier = 'medium') {
 }
 
 /**
- * Get the fixed embedder config (same for all tiers)
+ * Get the embedder config for a specific tier
+ * @param {'low'|'medium'|'high'} tier
  * @returns {Object} Embedder configuration
  */
+function getEmbedderConfig(tier = 'medium') {
+    const config = RAG_PIPELINE_TIERS[tier];
+    return config?.embedder || RAG_PIPELINE_TIERS.medium.embedder;
+}
+
+/**
+ * Get the fixed embedder config (deprecated - use getEmbedderConfig)
+ * @returns {Object} Embedder configuration
+ * @deprecated Use getEmbedderConfig(tier) instead
+ */
 function getFixedEmbedderConfig() {
-    return { ...FIXED_EMBEDDER };
+    return getEmbedderConfig('medium');
 }
 
 /**
@@ -168,34 +205,36 @@ function getAllTiers() {
 
 /**
  * Check if changing from one tier to another requires re-indexing
- * @param {string} fromTier 
- * @param {string} toTier 
+ * @param {string} fromTier
+ * @param {string} toTier
  * @returns {boolean} True if re-index required
  */
 function requiresReindex(fromTier, toTier) {
     if (fromTier === toTier) return false;
-    
+
     const from = RAG_PIPELINE_TIERS[fromTier];
     const to = RAG_PIPELINE_TIERS[toTier];
-    
+
     if (!from || !to) return true;
-    
+
     // Re-index required if:
-    // 1. Embedder changes (dimension mismatch)
-    // 2. RAG summarizer changes (summary quality changes)
-    const embedderChanged = from.embedder.model_name !== to.embedder.model_name;
+    // 1. Embedder changes (model or dimension mismatch)
+    // 2. RAG summarizer changes (different model)
+    const embedderChanged = from.embedder.model_name !== to.embedder.model_name ||
+                           from.embedder.dimension !== to.embedder.dimension;
     const summarizerChanged = from.ragSummarizer.identifier !== to.ragSummarizer.identifier;
-    
+
     return embedderChanged || summarizerChanged;
 }
 
 module.exports = {
-    FIXED_EMBEDDER,
+    FIXED_EMBEDDER, // Deprecated - kept for backward compatibility
     RAG_PIPELINE_TIERS,
     DEFAULT_ROLLING_SUMMARIZERS,
     DEFAULT_MAIN_MODELS,
     getRagPipelineConfig,
-    getFixedEmbedderConfig,
+    getFixedEmbedderConfig, // Deprecated - use getEmbedderConfig
+    getEmbedderConfig,
     getRagSummarizerConfig,
     getDefaultRollingSummarizer,
     getDefaultMainModel,
