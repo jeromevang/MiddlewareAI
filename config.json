@@ -32,8 +32,8 @@
       "userSelectable": true
     },
     "rollingSummarization": {
-      "model_name": "qwen2.5-coder-1.5b-instruct",
-      "identifier": "qwen2.5-coder-1.5b-instruct",
+      "model_name": "phi-3.1-mini-128k-instruct",
+      "identifier": "phi-3.1-mini-128k-instruct",
       "context_length": 4096,
       "userSelectable": true
     },
@@ -43,9 +43,9 @@
       "low": "qwen/qwen3-4b-2507"
     },
     "perQualityRollingSummarizers": {
-      "high": "qwen2.5-7b-instruct-1m",
-      "medium": "qwen2.5-coder-1.5b-instruct",
-      "low": "qwen2.5-coder-0.5b-instruct"
+      "high": "mistral-7b-instruct-v0.3",
+      "medium": "qwen2.5-coder-0.5b-instruct",
+      "low": "tinyllama-1.1b-chat-v1.0"
     }
   },
   "processing": {

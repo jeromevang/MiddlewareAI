@@ -2305,7 +2305,7 @@ app.get('/rag/check-reindex', (req, res) => {
 app.post('/rag/ensure-models', async (req, res) => {
     try {
         const { tier, previousTier } = req.body;
-        console.log(`[RAG] ensure-models called: tier=${tier}, previousTier=${previousTier}`);
+        console.log(`[RAG] 🔄 ensure-models called: tier=${tier}, previousTier=${previousTier}`);
         if (!tier) {
             return res.status(400).json({ error: 'Missing tier parameter' });
         }

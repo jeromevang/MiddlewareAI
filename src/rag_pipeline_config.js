@@ -104,22 +104,22 @@ const RAG_PIPELINE_TIERS = {
 // Default rolling summarizers per tier (user can override)
 const DEFAULT_ROLLING_SUMMARIZERS = {
     low: {
-        model_name: 'qwen2.5-coder-0.5b-instruct',
-        identifier: 'qwen2.5-coder-0.5b-instruct',
-        context_length: 4096,
+        model_name: 'tinyllama-1.1b-chat-v1.0',
+        identifier: 'tinyllama-1.1b-chat-v1.0',
+        context_length: 2048,
         description: 'Fast conversation memory compression'
     },
     medium: {
-        model_name: 'qwen2.5-coder-1.5b-instruct',
-        identifier: 'qwen2.5-coder-1.5b-instruct',
+        model_name: 'qwen2.5-coder-0.5b-instruct',
+        identifier: 'qwen2.5-coder-0.5b-instruct',
         context_length: 4096,
-        description: 'Balanced conversation memory'
+        description: 'Balanced conversation memory management'
     },
     high: {
-        model_name: 'phi-3.1-mini-128k-instruct',
-        identifier: 'phi-3.1-mini-128k-instruct',
-        context_length: 4096,
-        description: 'High-quality conversation memory'
+        model_name: 'mistral-7b-instruct-v0.3',
+        identifier: 'mistral-7b-instruct-v0.3',
+        context_length: 32768,
+        description: 'Advanced conversation memory optimization'
     }
 };
 
