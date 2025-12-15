@@ -41,16 +41,21 @@ export function RagIndexingStatus() {
         setIsVisible(true);
         return 10000; // Every 10 seconds when completed
       }
+      // Show if there was recent activity (files processed > 0)
+      if (data && typeof data === 'object' && 'filesProcessed' in data && typeof data.filesProcessed === 'number' && data.filesProcessed > 0) {
+        setIsVisible(true);
+        return 30000; // Every 30 seconds when idle but has data
+      }
       setIsVisible(false);
       return 30000; // Every 30 seconds when idle
     },
     staleTime: 1000,
   });
 
-  // Auto-hide completed status after 30 seconds
+  // Auto-hide completed status after 2 minutes (increased for testing)
   useEffect(() => {
     if (status?.status === 'completed' && !status?.isIndexing) {
-      const timer = setTimeout(() => setIsVisible(false), 30000);
+      const timer = setTimeout(() => setIsVisible(false), 120000); // 2 minutes
       return () => clearTimeout(timer);
     }
   }, [status?.status, status?.isIndexing]);
