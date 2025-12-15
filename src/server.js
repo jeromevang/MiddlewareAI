@@ -2300,7 +2300,7 @@ app.get('/rag/check-reindex', (req, res) => {
 });
 
 /**
- * POST /rag/ensure-models - Ensure required models are downloaded for a tier
+ * POST /rag/ensure-models - Ensure required models are loaded for a tier
  */
 app.post('/rag/ensure-models', async (req, res) => {
     try {
@@ -2315,19 +2315,29 @@ app.post('/rag/ensure-models', async (req, res) => {
             return res.status(400).json({ error: 'Invalid tier' });
         }
 
-        // Check and download embedder if needed
+        const { openModel } = require('./lmstudio/model_manager.js');
+
+        // Load embedder model if needed
         const embedderId = pipelineConfig.embedder.identifier;
-        console.log(`Checking embedder: ${embedderId}`);
-        // For now, assume models are available or will be downloaded manually
-        // TODO: Implement actual model availability checking
+        console.log(`Ensuring embedder is loaded: ${embedderId}`);
+        try {
+            await openModel(embedderId);
+            console.log(`Embedder ${embedderId} is ready`);
+        } catch (error) {
+            console.warn(`Failed to load embedder ${embedderId}:`, error.message);
+        }
 
-        // Check and download RAG summarizer if needed
+        // Load RAG summarizer if needed
         const summarizerId = pipelineConfig.ragSummarizer.identifier;
-        console.log(`Checking RAG summarizer: ${summarizerId}`);
-        // For now, assume models are available or will be downloaded manually
-        // TODO: Implement actual model availability checking
+        console.log(`Ensuring RAG summarizer is loaded: ${summarizerId}`);
+        try {
+            await openModel(summarizerId);
+            console.log(`RAG summarizer ${summarizerId} is ready`);
+        } catch (error) {
+            console.warn(`Failed to load RAG summarizer ${summarizerId}:`, error.message);
+        }
 
-        res.json({ status: 'ok', message: 'Models checked (auto-download not yet implemented)' });
+        res.json({ status: 'ok', message: 'Models loading initiated' });
     } catch (error) {
         console.error('[API] Failed to ensure models:', error.message);
         res.status(500).json({ error: 'Failed to ensure models', details: error.message });

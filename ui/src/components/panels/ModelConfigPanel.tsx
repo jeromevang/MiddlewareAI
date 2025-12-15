@@ -88,12 +88,28 @@ export default function ModelConfigPanel() {
       const { needsReindex } = await reindexRes.json();
 
       if (needsReindex) {
-        // Show re-indexing message
-        alert(`Changing RAG quality from ${currentTier} to ${tier} requires re-indexing your codebase. This may take several minutes.\n\nClick OK to continue.`);
+        // Show confirmation dialog for reindexing
+        const confirmed = window.confirm(
+          `Changing RAG quality from ${currentTier} to ${tier} requires re-indexing your entire codebase.\n\n` +
+          `This will:\n` +
+          `• Clear existing embeddings\n` +
+          `• Re-analyze all source files\n` +
+          `• Generate new embeddings with the new model\n\n` +
+          `This process may take several minutes depending on your codebase size.\n\n` +
+          `Continue with reindexing?`
+        );
+
+        if (!confirmed) {
+          throw new Error('Reindexing cancelled by user');
+        }
 
         // Start re-indexing process
         console.log('Starting reindexing process...');
-        const reindexResponse = await fetch('/rag/reindex', { method: 'POST' });
+        const reindexResponse = await fetch('/rag/reindex', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: `tier-change-${currentTier}-to-${tier}` })
+        });
         if (!reindexResponse.ok) {
           throw new Error('Failed to start reindexing');
         }

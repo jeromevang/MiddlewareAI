@@ -129,10 +129,10 @@ async function processChunk(chunkId, content, filePath, modelVersion, language =
     throwIfAborted(signal);
     try {
         fallbackLogInfo(`[Processing] Processing chunk ${chunkId}...`);
-        const { embeddingVector, failed } = await embedText(content);
+        const { embeddingVector, failed, error } = await embedText(content);
         throwIfAborted(signal);
         if (!embeddingVector || failed) {
-            fallbackLogWarning(`[Embedding] Skipping chunk ${chunkId} due to embedding failure.`);
+            fallbackLogError(`[Embedding] Skipping chunk ${chunkId} due to embedding failure: ${error || 'Unknown error'}`);
             return;
         }
         fallbackLogInfo(`[Embedding] Generated for chunk ${chunkId}`);

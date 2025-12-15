@@ -29,20 +29,20 @@ const RAG_PIPELINE_TIERS = {
         description: 'Fast indexing, lightweight code-aware embeddings',
         targetGPU: 'RTX 3060 / 8GB VRAM',
         embedder: {
-            model_name: 'jinaai/jina-embeddings-v2-small-en',
-            identifier: 'jinaai/jina-embeddings-v2-small-en',
+            model_name: 'nomic-ai/nomic-embed-text-v1.5',
+            identifier: 'text-embedding-nomic-embed-text-v1.5@q4_k_m',
             engine: 'local',
-            dimension: 512,  // Fast, lightweight semantic resolution
-            context_length: 8192,
+            dimension: 768,  // Good semantic resolution
+            context_length: 2048,
             description: 'Lightweight embeddings with good code understanding',
             locked: true
         },
         ragSummarizer: {
-            model_name: 'microsoft/phi-2',
-            identifier: 'microsoft/phi-2',
+            model_name: 'Phi 3.1 Mini 128k Instruct',
+            identifier: 'phi-3.1-mini-128k-instruct',
             context_length: 2048,
             description: 'Efficient code summarizer with strong function awareness',
-            sizeGB: 2.7
+            sizeGB: 2.23
         },
         indexingSpeed: 'fast',
         summaryQuality: 'good'
@@ -53,20 +53,20 @@ const RAG_PIPELINE_TIERS = {
         description: 'Balanced quality and speed for code RAG',
         targetGPU: 'RTX 4070 / 12GB VRAM',
         embedder: {
-            model_name: 'jinaai/jina-embeddings-v2-base-en',
-            identifier: 'jinaai/jina-embeddings-v2-base-en',
+            model_name: 'nomic-ai/nomic-embed-text-v1.5',
+            identifier: 'text-embedding-nomic-embed-text-v1.5@q8_0',
             engine: 'local',
             dimension: 768,  // Balanced semantic resolution
-            context_length: 8192,
-            description: 'High-quality code-aware embeddings',
+            context_length: 2048,
+            description: 'High-quality embeddings for code understanding',
             locked: true
         },
         ragSummarizer: {
-            model_name: 'codellama/CodeLlama-7b-Instruct-hf',
-            identifier: 'codellama/CodeLlama-7b-Instruct-hf',
+            model_name: 'Qwen2.5 Coder 1.5B Instruct',
+            identifier: 'qwen2.5-coder-1.5b-instruct',
             context_length: 4096,
             description: 'Specialized code summarizer with excellent function analysis',
-            sizeGB: 7.0
+            sizeGB: 0.92
         },
         indexingSpeed: 'moderate',
         summaryQuality: 'excellent'
@@ -77,20 +77,20 @@ const RAG_PIPELINE_TIERS = {
         description: 'Maximum code understanding and summarization quality',
         targetGPU: 'RTX 5080 / 16GB VRAM',
         embedder: {
-            model_name: 'thenlper/gte-large',
-            identifier: 'thenlper/gte-large',
+            model_name: 'nomic-ai/nomic-embed-text-v1.5',
+            identifier: 'text-embedding-nomic-embed-text-v1.5@q8_0',
             engine: 'local',
-            dimension: 1024,  // Maximum semantic resolution
-            context_length: 8192,
-            description: 'Premium embeddings with deep semantic understanding',
+            dimension: 768,  // High quality semantic resolution
+            context_length: 2048,
+            description: 'Premium embeddings with excellent semantic understanding',
             locked: true
         },
         ragSummarizer: {
-            model_name: 'codellama/CodeLlama-13b-Instruct-hf',
-            identifier: 'codellama/CodeLlama-13b-Instruct-hf',
+            model_name: 'Qwen2.5 7B Instruct 1M',
+            identifier: 'qwen2.5-7b-instruct-1m',
             context_length: 4096,
             description: 'Professional-grade code summarizer with comprehensive analysis',
-            sizeGB: 13.0
+            sizeGB: 4.36
         },
         indexingSpeed: 'slow',
         summaryQuality: 'premium'
