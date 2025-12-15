@@ -365,15 +365,16 @@ function RoleSelector({
           onChange={(e) => onSelect(e.target.value)}
           className={clsx(
             "flex-1 px-3 py-2 rounded-lg text-sm",
-            "bg-white/5 border border-white/20 text-white",
-            "focus:outline-none focus:ring-2 focus:ring-accent-primary/50"
+            "bg-gray-800 border border-white/20 text-white",
+            "focus:outline-none focus:ring-2 focus:ring-accent-primary/50",
+            "[&>option]:bg-gray-800 [&>option]:text-white"
           )}
         >
-          <option value="" disabled>
+          <option value="" disabled className="bg-gray-800 text-white/50">
             Select a model...
           </option>
           {options.map((model) => (
-            <option key={model.id} value={model.id}>
+            <option key={model.id} value={model.id} className="bg-gray-800 text-white">
               {model.name || model.id}
               {model.sizeGB ? ` (${model.sizeGB.toFixed(1)}GB)` : ""}
             </option>

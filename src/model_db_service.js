@@ -781,34 +781,27 @@ function getActiveDownloads() {
 }
 
 /**
- * Check if a model is available by fuzzy matching against downloaded models
+ * Check if a model is available by matching against downloaded models
+ * Uses exact modelKey matching (from model_sync) with fallback to partial matching
  * @param {string} modelId - The model ID to check
- * @param {Array} downloadedModels - List of downloaded models
+ * @param {Array} downloadedModels - List of downloaded models (with modelKey property)
  * @returns {boolean} - Whether the model is available
  */
 function isModelDownloaded(modelId, downloadedModels) {
     if (!modelId) return false;
     
-    const normalizedTarget = normalizeModelIdForMatching(modelId);
-    const targetTokens = extractModelTokens(modelId);
+    const normalizedTarget = modelId.toLowerCase();
     
     for (const model of downloadedModels) {
-        const downloadedId = model.id || model.path || '';
-        const normalizedDownloaded = normalizeModelIdForMatching(downloadedId);
+        const downloadedKey = (model.modelKey || model.id || '').toLowerCase();
         
-        // Exact normalized match
-        if (normalizedTarget === normalizedDownloaded) {
+        // Exact match on modelKey (preferred)
+        if (downloadedKey === normalizedTarget) {
             return true;
         }
         
-        // Check if one contains the other (for partial matches)
-        if (normalizedDownloaded.includes(normalizedTarget) || normalizedTarget.includes(normalizedDownloaded)) {
-            return true;
-        }
-        
-        // Token-based fuzzy matching with higher threshold
-        const score = tokenOverlapScore(modelId, downloadedId);
-        if (score >= 0.6) {  // At least 60% token overlap
+        // Partial match (one contains the other)
+        if (downloadedKey.includes(normalizedTarget) || normalizedTarget.includes(downloadedKey)) {
             return true;
         }
     }
