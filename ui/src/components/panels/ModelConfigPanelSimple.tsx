@@ -3,7 +3,7 @@
 // =============================================================================
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
@@ -16,32 +16,13 @@ import clsx from "clsx";
 import type { RagTier } from './model-config/types';
 import { RAG_TIERS, getModelDisplayName } from './model-config/constants';
 
-
 export default function ModelConfigPanel() {
-  const queryClient = useQueryClient();
-
   // Basic state
   const [mode, setMode] = useState<"local" | "cloud">("local");
   const [quality, setQuality] = useState<"high" | "medium" | "low" | "custom">("high");
   const [showModelDiscovery, setShowModelDiscovery] = useState(false);
   const [ragTier, setRagTier] = useState<RagTier>('low');
   const [pendingTierChange, setPendingTierChange] = useState<RagTier | null>(null);
-
-  // Fetch available models for Custom Preset panel
-  const { data: availableModelsData } = useQuery({
-    queryKey: ['availableModels'],
-    queryFn: async () => {
-      const response = await fetch('/models/available');
-      if (!response.ok) throw new Error('Failed to fetch available models');
-      return response.json();
-    },
-    staleTime: 30000, // 30 seconds
-    enabled: quality === 'custom', // Only fetch when custom preset is selected
-  });
-
-  const refetchModelStatus = () => {
-    queryClient.invalidateQueries({ queryKey: ['modelStatus'] });
-  };
 
   // RAG Tier Change Mutation
   const changeRagTierMutation = useMutation({
@@ -169,14 +150,9 @@ export default function ModelConfigPanel() {
           {/* Custom Preset Panel */}
           {quality === 'custom' && (
             <CustomPresetPanel
-              availableModels={availableModelsData?.models || []}
-              onConfigChange={() => {
-                // Refresh after config change
-                queryClient.invalidateQueries({ queryKey: ['presets'] });
-              }}
-              onModelDownloaded={() => {
-                refetchModelStatus();
-              }}
+              availableModels={[]}
+              onConfigChange={() => {}}
+              onModelDownloaded={() => {}}
             />
           )}
 

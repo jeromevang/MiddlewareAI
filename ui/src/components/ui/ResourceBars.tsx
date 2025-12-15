@@ -148,6 +148,19 @@ export function ResourceBars({
         <span className="text-[10px] text-white/40">Live</span>
       </div>
 
+      {/* Hardware Detection Info */}
+      {data.vram && (
+        <div className="text-xs text-white/70 bg-white/5 rounded px-3 py-2 border border-white/10">
+          <div className="font-medium text-white mb-1">Detected Hardware</div>
+          <div className="flex items-center gap-2">
+            <span className="text-emerald-400">🎮</span>
+            <span>{data.vram.name}</span>
+            <span className="text-white/50">•</span>
+            <span>{data.vram.totalGB} GB VRAM</span>
+          </div>
+        </div>
+      )}
+
       <ProgressBar
         label="CPU"
         icon="⚡"

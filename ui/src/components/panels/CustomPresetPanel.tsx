@@ -11,65 +11,11 @@ import {
   type ModelLock,
   type CustomPresetConfig,
 } from "../../lib/api";
-import { VRAMProgressBar } from "../ui/VRAMProgressBar";
 import { StarRating, getStarRatingFromSize } from "../ui/StarRating";
 import { LockButton } from "../ui/LockButton";
 import { Badge } from "../ui/Badge";
 import { ModelSearch } from "../ui/ModelSearch";
-import { ResourceBars } from "../ui/ResourceBars";
 
-// =============================================================================
-// RAG PIPELINE TIERS (Closed System - matches rag_pipeline_config.js)
-// =============================================================================
-const RAG_TIERS = {
-  low: {
-    name: "Low",
-    description: "Fast indexing, good for quick iterations",
-    targetGPU: "RTX 3060 / 8GB VRAM",
-    embedder: {
-      name: "Jina Code v2",
-      sizeGB: 0.3,
-      contextLength: 8192,
-    },
-    ragSummarizer: {
-      name: "Qwen2.5-Coder 0.5B",
-      identifier: "qwen2.5-coder-0.5b-instruct",
-      sizeGB: 0.4,
-    },
-  },
-  medium: {
-    name: "Medium",
-    description: "Balanced quality and speed",
-    targetGPU: "RTX 4070 / 12GB VRAM",
-    embedder: {
-      name: "Jina Code v2",
-      sizeGB: 0.3,
-      contextLength: 8192,
-    },
-    ragSummarizer: {
-      name: "Qwen2.5-Coder 1.5B",
-      identifier: "qwen2.5-coder-1.5b-instruct",
-      sizeGB: 0.9,
-    },
-  },
-  high: {
-    name: "High",
-    description: "Best quality summaries, slower indexing",
-    targetGPU: "RTX 5080 / 16GB VRAM",
-    embedder: {
-      name: "Jina Code v2",
-      sizeGB: 0.3,
-      contextLength: 8192,
-    },
-    ragSummarizer: {
-      name: "Phi-3.1 Mini 128K",
-      identifier: "phi-3.1-mini-128k-instruct",
-      sizeGB: 2.2,
-    },
-  },
-};
-
-type RagTier = keyof typeof RAG_TIERS;
 
 // Role descriptions for the UI
 const ROLE_INFO = {
@@ -112,9 +58,6 @@ export function CustomPresetPanel({
   const queryClient = useQueryClient();
   
   // RAG Pipeline tier (closed system)
-  const [ragTier, setRagTier] = useState<RagTier>("medium");
-  const [pendingTierChange, setPendingTierChange] = useState<RagTier | null>(null);
-  
   // Show/hide model search
   const [showModelSearch, setShowModelSearch] = useState(false);
 
@@ -137,22 +80,6 @@ export function CustomPresetPanel({
     queryFn: getModelLocks,
   });
 
-  // Current RAG tier from server
-  const { data: ragTierData } = useQuery({
-    queryKey: ["ragTier"],
-    queryFn: async () => {
-      const res = await fetch("/rag/tier");
-      return res.json();
-    },
-    staleTime: 30000,
-  });
-
-  // Update local tier when server data arrives
-  useEffect(() => {
-    if (ragTierData?.currentTier) {
-      setRagTier(ragTierData.currentTier as RagTier);
-    }
-  }, [ragTierData]);
 
   // Toggle lock mutation
   const lockMutation = useMutation({
@@ -184,23 +111,6 @@ export function CustomPresetPanel({
   });
 
   // Change RAG tier (triggers re-index)
-  const tierChangeMutation = useMutation({
-    mutationFn: async (tier: RagTier) => {
-      const res = await fetch("/rag/tier", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier }),
-      });
-      return res.json();
-    },
-    onSuccess: (data) => {
-      if (data.status === "ok") {
-        setRagTier(data.newTier);
-        setPendingTierChange(null);
-        queryClient.invalidateQueries({ queryKey: ["ragTier"] });
-      }
-    },
-  });
 
   // Notify parent of config changes
   useEffect(() => {
@@ -209,42 +119,12 @@ export function CustomPresetPanel({
 
   const hardware = hardwareData?.hardware;
   const locks = locksData?.locks || {};
-  const currentTierConfig = RAG_TIERS[ragTier];
-
-  // Calculate VRAM usage
-  const getModelSize = (modelId: string | null): number => {
-    if (!modelId) return 0;
-    const model = availableModels.find((m) => m.id === modelId);
-    return model?.sizeGB || 0;
-  };
-
-  const vramBreakdown = {
-    main: getModelSize(config.main),
-    rollingSummarizer: getModelSize(config.rollingSummarizer),
-    embedder: currentTierConfig.embedder.sizeGB,
-    ragSummarizer: currentTierConfig.ragSummarizer.sizeGB,
-  };
-  const totalVRAM = 
-    vramBreakdown.main + 
-    vramBreakdown.rollingSummarizer + 
-    vramBreakdown.embedder + 
-    vramBreakdown.ragSummarizer;
 
   // Filter models
   const selectableModels = availableModels.filter(
     (m) => m.type !== "embedder" && m.type !== "embedding"
   );
 
-  const handleTierChange = (tier: RagTier) => {
-    if (tier === ragTier) return;
-    setPendingTierChange(tier);
-  };
-
-  const confirmTierChange = () => {
-    if (pendingTierChange) {
-      tierChangeMutation.mutate(pendingTierChange);
-    }
-  };
 
   const handleSave = () => {
     saveMutation.mutate(config);
@@ -302,120 +182,7 @@ export function CustomPresetPanel({
         </div>
       )}
 
-      {/* VRAM Progress Bar */}
-      <VRAMProgressBar
-        usedGB={totalVRAM}
-        totalGB={hardware?.gpu?.totalGB || 8}
-        breakdown={vramBreakdown}
-        showLabels
-        showBreakdown
-      />
 
-      {/* Real-time Resource Monitoring */}
-      <ResourceBars />
-
-      {/* =========================================== */}
-      {/* RAG PIPELINE TIER (Closed System) */}
-      {/* =========================================== */}
-      <div className="p-4 rounded-lg bg-gradient-to-r from-blue-900/20 to-purple-900/20 border border-blue-500/30">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-xl">🔒</span>
-          <h4 className="font-semibold text-white">RAG Pipeline Quality</h4>
-          <Badge tone="info">Closed System</Badge>
-        </div>
-        <p className="text-xs text-white/60 mb-4">
-          Embedder and RAG Summarizer are fixed per tier. Changing tier will re-index your codebase.
-        </p>
-
-        {/* Tier Selector */}
-        <div className="grid grid-cols-3 gap-2 mb-4">
-          {(Object.keys(RAG_TIERS) as RagTier[]).map((tier) => {
-            const tierConfig = RAG_TIERS[tier];
-            const isSelected = ragTier === tier;
-            const isPending = pendingTierChange === tier;
-
-            return (
-              <button
-                key={tier}
-                onClick={() => handleTierChange(tier)}
-                className={clsx(
-                  "p-3 rounded-lg text-left transition-all",
-                  isSelected
-                    ? "bg-blue-600/30 border-2 border-blue-500"
-                    : isPending
-                    ? "bg-yellow-600/20 border-2 border-yellow-500/50"
-                    : "bg-white/5 border border-white/20 hover:bg-white/10"
-                )}
-              >
-                <div className="font-medium text-white">{tierConfig.name}</div>
-                <div className="text-xs text-white/50 mt-1">
-                  {tierConfig.targetGPU}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-
-        {/* Pending Tier Change Confirmation */}
-        {pendingTierChange && (
-          <div className="p-3 rounded-lg bg-yellow-900/30 border border-yellow-500/50 mb-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm text-yellow-200">
-                  ⚠️ Change to <strong>{RAG_TIERS[pendingTierChange].name}</strong>?
-                </p>
-                <p className="text-xs text-yellow-200/70">
-                  This will re-index your entire codebase.
-                </p>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => setPendingTierChange(null)}
-                  className="px-3 py-1 rounded text-sm bg-white/10 text-white hover:bg-white/20"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmTierChange}
-                  disabled={tierChangeMutation.isPending}
-                  className="px-3 py-1 rounded text-sm bg-yellow-600 text-white hover:bg-yellow-500"
-                >
-                  {tierChangeMutation.isPending ? "Changing..." : "Confirm"}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Current Tier Config Display */}
-        <div className="grid grid-cols-2 gap-3">
-          {/* Embedder (Fixed) */}
-          <div className="p-3 rounded-lg bg-black/20 border border-white/10">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-lg">🔍</span>
-              <span className="text-sm font-medium text-white">Embedder</span>
-            </div>
-            <div className="text-xs text-white/80">{currentTierConfig.embedder.name}</div>
-            <div className="flex gap-2 mt-2">
-              <Badge tone="neutral">{currentTierConfig.embedder.contextLength / 1000}K ctx</Badge>
-              <Badge tone="neutral">{currentTierConfig.embedder.sizeGB}GB</Badge>
-            </div>
-          </div>
-
-          {/* RAG Summarizer (Fixed) */}
-          <div className="p-3 rounded-lg bg-black/20 border border-white/10">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-lg">📄</span>
-              <span className="text-sm font-medium text-white">RAG Summarizer</span>
-            </div>
-            <div className="text-xs text-white/80">{currentTierConfig.ragSummarizer.name}</div>
-            <div className="flex gap-2 mt-2">
-              <Badge tone="neutral">4K ctx</Badge>
-              <Badge tone="neutral">{currentTierConfig.ragSummarizer.sizeGB}GB</Badge>
-            </div>
-          </div>
-        </div>
-      </div>
 
       {/* =========================================== */}
       {/* USER-SELECTABLE MODELS */}
