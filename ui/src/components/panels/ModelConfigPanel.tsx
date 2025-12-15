@@ -820,29 +820,45 @@ export default function ModelConfigPanel() {
               <div className="text-center py-8 text-white/60">Loading presets...</div>
             ) : (
               <div className="grid gap-4 md:grid-cols-3">
-                {(Object.entries(presets) as [string, QualityPreset][]).map(([key, preset]) => (
-                  <div
-                    key={key}
-                    className={`p-4 border rounded-lg cursor-pointer transition-all ${
-                      quality === key
-                        ? 'border-cyan-400 bg-cyan-400/10 shadow-[0_0_20px_rgba(44,212,250,0.1)]'
-                        : 'border-white/15 bg-white/5 hover:border-white/30'
-                    }`}
-                    onClick={() => {
-                      setQuality(key as "high" | "medium" | "low");
-                      loadPresetModelsMutation.mutate(key);
-                    }}
-                  >
-                    <h3 className="font-semibold text-white mb-1">{preset.name}</h3>
-                    <p className="text-sm text-white/70">{preset.description}</p>
-                    <div className="mt-2 text-xs text-white/50">
-                      {preset.mainOptions?.length || 0} main models available
+                {(Object.entries(presets) as [string, QualityPreset][]).map(([key, preset]) => {
+                  const isLoading = loadPresetModelsMutation.isPending;
+                  const isSelected = quality === key;
+                  const isDisabled = isLoading || isSelected;
+                  
+                  return (
+                    <div
+                      key={key}
+                      className={`p-4 border rounded-lg transition-all ${
+                        isSelected
+                          ? 'border-cyan-400 bg-cyan-400/10 shadow-[0_0_20px_rgba(44,212,250,0.1)]'
+                          : isDisabled
+                            ? 'border-white/10 bg-white/3 opacity-50 cursor-not-allowed'
+                            : 'border-white/15 bg-white/5 hover:border-white/30 cursor-pointer'
+                      }`}
+                      onClick={() => {
+                        // Prevent duplicate clicks while loading or if already selected
+                        if (isDisabled) return;
+                        setQuality(key as "high" | "medium" | "low");
+                        loadPresetModelsMutation.mutate(key);
+                      }}
+                    >
+                      <h3 className="font-semibold text-white mb-1">{preset.name}</h3>
+                      <p className="text-sm text-white/70">{preset.description}</p>
+                      <div className="mt-2 text-xs text-white/50">
+                        {preset.mainOptions?.length || 0} main models available
+                      </div>
+                      {isSelected && !isLoading && (
+                        <div className="mt-2 text-xs text-cyan-400 font-semibold">✓ Selected</div>
+                      )}
+                      {isLoading && isSelected && (
+                        <div className="mt-2 text-xs text-amber-400 font-semibold flex items-center gap-1">
+                          <div className="w-3 h-3 border border-amber-400 border-t-transparent rounded-full animate-spin"></div>
+                          Loading models...
+                        </div>
+                      )}
                     </div>
-                    {quality === key && (
-                      <div className="mt-2 text-xs text-cyan-400 font-semibold">✓ Selected</div>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </Card>

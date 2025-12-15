@@ -53,7 +53,8 @@ async function isModelLoadedRemote(identifier) {
 async function ensureModelLoaded(modelOrId) {
     const { identifier, engine } = resolveModelNames(modelOrId);
     if (!identifier) return;
-    if (loadedModels.has(identifier)) return;
+    
+    // Skip if we're already loading this model
     if (loadingModels.has(identifier)) {
         await loadingModels.get(identifier);
         return;
@@ -62,6 +63,19 @@ async function ensureModelLoaded(modelOrId) {
     if (engine === 'local') {
         loadedModels.add(identifier);
         return;
+    }
+
+    // Always verify with LM Studio if model is actually loaded
+    // The in-memory cache may be stale due to identifier mismatches during unload
+    try {
+        const actuallyLoaded = await isModelLoadedRemote(identifier);
+        if (actuallyLoaded) {
+            loadedModels.add(identifier);
+            console.log(`[LM Studio] Model already loaded (verified): ${identifier}`);
+            return;
+        }
+    } catch (err) {
+        console.warn(`[LM Studio] Could not verify if model is loaded: ${err?.message || err}`);
     }
 
     const loadPromise = (async () => {
@@ -250,9 +264,16 @@ async function unloadModel(modelOrId) {
         console.log(`[LM Studio Unload] Unloading model: ${identifier}`);
         const { stdout, stderr } = await execAsync(`"${getLMStudioCLIPath()}" unload "${identifier}"`);
 
-        // Remove from our tracking
+        // Remove from our tracking - also clear any matching entries (due to identifier format differences)
         loadedModels.delete(identifier);
         loadingModels.delete(identifier);
+        
+        // Also remove any entries that match via normalized comparison
+        for (const cached of [...loadedModels]) {
+            if (modelIdMatches(identifier, cached)) {
+                loadedModels.delete(cached);
+            }
+        }
 
         console.log(`[LM Studio Unload] Successfully unloaded model: ${identifier}`);
         console.log(`[LM Studio Unload] CLI output: ${stdout.trim()}`);

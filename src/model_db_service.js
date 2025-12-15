@@ -984,12 +984,32 @@ function extractModelTokens(name) {
 }
 
 /**
+ * Extract size token from model name (e.g., "7b", "32b", "1.5b")
+ */
+function extractSizeToken(name) {
+    if (!name) return null;
+    const normalized = name.toLowerCase();
+    // Match patterns like 7b, 32b, 1.5b, 0.5b, 70b, etc.
+    const sizeMatch = normalized.match(/\b(\d+(?:\.\d+)?b)\b/);
+    return sizeMatch ? sizeMatch[1] : null;
+}
+
+/**
  * Calculate token overlap score between two model names
+ * Now with size-aware matching to prevent 7b matching 32b
  */
 function tokenOverlapScore(name1, name2) {
     const tokens1 = new Set(extractModelTokens(name1));
     const tokens2 = new Set(extractModelTokens(name2));
     if (tokens1.size === 0 || tokens2.size === 0) return 0;
+    
+    // CRITICAL: Check if sizes match - if both have sizes and they differ, heavily penalize
+    const size1 = extractSizeToken(name1);
+    const size2 = extractSizeToken(name2);
+    if (size1 && size2 && size1 !== size2) {
+        // Size mismatch - return very low score to prevent incorrect matching
+        return 0.1;
+    }
     
     let overlap = 0;
     for (const t of tokens1) {
@@ -1044,9 +1064,18 @@ async function findLMStudioModelId(presetModelId) {
         let bestMatch = null;
         let bestScore = 0;
         
+        // Extract size from preset for comparison
+        const presetSize = extractSizeToken(presetModelId);
+        
         for (const model of downloadedModels) {
             const modelId = model.id || model.path || model.name;
             const normalizedModel = normalizeModelIdForMatching(modelId);
+            
+            // CRITICAL: Skip if sizes don't match
+            const modelSize = extractSizeToken(modelId);
+            if (presetSize && modelSize && presetSize !== modelSize) {
+                continue; // Size mismatch - skip this model
+            }
             
             // Check if one contains the other (partial match)
             if (normalizedModel.includes(normalizedPreset) || normalizedPreset.includes(normalizedModel)) {
@@ -1064,9 +1093,16 @@ async function findLMStudioModelId(presetModelId) {
             return bestMatch;
         }
         
-        // Fallback: Try token-based fuzzy matching
+        // Fallback: Try token-based fuzzy matching (size check is in tokenOverlapScore)
         for (const model of downloadedModels) {
             const modelId = model.id || model.path || model.name;
+            
+            // Extra size check before even computing score
+            const modelSize = extractSizeToken(modelId);
+            if (presetSize && modelSize && presetSize !== modelSize) {
+                continue; // Size mismatch - skip
+            }
+            
             const score = tokenOverlapScore(presetModelId, modelId);
             if (score > bestScore && score > 0.6) {
                 bestScore = score;
