@@ -117,3 +117,55 @@ The middleware now implements dual-mode context-aware summarization to prevent c
 
 - **Engine ON (turn-based)**: Use with larger models that have smaller context. Proactively summarizes to keep inference fast.
 - **Engine OFF (context-based)**: Use with smaller models that have larger context. Maximizes context until overflow.
+
+## Custom Preset & Model Locking
+
+### Model Lock Service (`model_lock_service.js`)
+
+Manages lock states to prevent unwanted model changes:
+
+| Lock Type | Behavior |
+|-----------|----------|
+| **Loaded Lock** | Prevents model from being unloaded during preset switches |
+| **Preset Lock** | Prevents model from being replaced during auto-discovery/bootstrap |
+
+Lock data stored in `data/model_locks.json`.
+
+### Custom Preset
+
+Allows users to manually select models for each role (Main, Summarizer, Embedder) with:
+- VRAM usage visualization with overflow indicator
+- Star ratings (1-5) based on model size
+- Lock icons to protect models from automatic changes
+- Role descriptions explaining what each model does
+
+### Model Optimizer (`model_optimizer.js`)
+
+LLM-powered optimization that:
+1. Detects hardware (GPU, VRAM, RAM)
+2. Loads a small model (TinyAgent-1.1B or similar) temporarily
+3. Asks it to select optimal models for the hardware
+4. Falls back to heuristics if no LLM available
+5. Unloads the optimizer model when done
+
+### Hugging Face Integration (`huggingface_service.js`)
+
+Search and download models from Hugging Face:
+- `GET /models/search` - Search HF for GGUF models
+- `GET /models/search/:id/quants` - Get quantization options
+- `POST /models/download-hf` - Download and sync with LM Studio
+- Auto-syncs downloaded models to get exact `modelKey`
+
+### API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/hardware` | GET | Detect GPU/RAM |
+| `/hardware/check-fit` | POST | Check if models fit in VRAM |
+| `/models/locks` | GET | Get all locked models |
+| `/models/lock/:id` | POST/DELETE | Lock/unlock a model |
+| `/models/lock/:id/toggle` | POST | Toggle lock state |
+| `/presets/custom` | GET/POST | Get/save custom preset |
+| `/presets/optimize` | POST | Run LLM optimization |
+| `/models/search` | GET | Search Hugging Face |
+| `/models/download-hf` | POST | Download from HF |

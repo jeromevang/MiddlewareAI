@@ -14,6 +14,7 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const axios = require('axios');
 const { getLMStudioCLIPath } = require('./lmstudio_manager.js');
+const { isPresetLocked, getPresetLockedModels } = require('./model_lock_service.js');
 
 const execAsync = promisify(exec);
 
@@ -273,11 +274,18 @@ function analyzeModelHeuristic(modelInfo) {
  * Update models.json presets with analyzed models
  * Only adds main models (with tool use) to mainOptions
  * Uses exact modelKey from LM Studio
+ * Respects preset locks - locked models are not replaced
  */
 async function updatePresetsWithModels(analyzedModels, modelDbService) {
     updateBootstrapStatus({ message: 'Updating presets...', progress: 80 });
     
     const db = modelDbService.loadModelDatabase();
+    
+    // Get list of models that are locked and should be preserved
+    const lockedModels = getPresetLockedModels();
+    if (lockedModels.length > 0) {
+        console.log(`[Bootstrap] Preserving ${lockedModels.length} locked models:`, lockedModels.join(', '));
+    }
     
     // Categorize by tier AND function
     const highMainModels = [];
@@ -356,27 +364,36 @@ async function updatePresetsWithModels(analyzedModels, modelDbService) {
         });
     };
     
-    // Update presets with sorted models (max 10 per tier)
+    // Helper to preserve locked models when updating presets
+    const updatePresetWithLocks = (tier, newModels) => {
+        const sorted = sortModels(newModels, analyzedModels);
+        const existing = db.presets[tier].mainOptions || [];
+        
+        // Locked models always stay at the beginning (preserved)
+        const locked = existing.filter(id => isPresetLocked(id));
+        
+        // Unlocked models can be replaced
+        const unlocked = existing.filter(id => !isPresetLocked(id) && sorted.includes(id));
+        
+        // New models not in existing
+        const newOnes = sorted.filter(id => !existing.includes(id));
+        
+        // Combine: locked first, then unlocked existing, then new
+        const combined = [...new Set([...locked, ...unlocked, ...newOnes])];
+        return combined.slice(0, 10);
+    };
+    
+    // Update presets with sorted models (max 10 per tier), respecting locks
     if (highMainModels.length > 0) {
-        const sorted = sortModels(highMainModels, analyzedModels);
-        const existing = db.presets.high.mainOptions || [];
-        // Keep existing that are still valid, add new ones
-        const combined = [...new Set([...existing.filter(id => sorted.includes(id)), ...sorted])];
-        db.presets.high.mainOptions = combined.slice(0, 10);
+        db.presets.high.mainOptions = updatePresetWithLocks('high', highMainModels);
     }
     
     if (mediumMainModels.length > 0) {
-        const sorted = sortModels(mediumMainModels, analyzedModels);
-        const existing = db.presets.medium.mainOptions || [];
-        const combined = [...new Set([...existing.filter(id => sorted.includes(id)), ...sorted])];
-        db.presets.medium.mainOptions = combined.slice(0, 10);
+        db.presets.medium.mainOptions = updatePresetWithLocks('medium', mediumMainModels);
     }
     
     if (lowMainModels.length > 0) {
-        const sorted = sortModels(lowMainModels, analyzedModels);
-        const existing = db.presets.low.mainOptions || [];
-        const combined = [...new Set([...existing.filter(id => sorted.includes(id)), ...sorted])];
-        db.presets.low.mainOptions = combined.slice(0, 10);
+        db.presets.low.mainOptions = updatePresetWithLocks('low', lowMainModels);
     }
     
     db.lastBootstrap = new Date().toISOString();

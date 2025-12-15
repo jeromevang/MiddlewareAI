@@ -1723,6 +1723,319 @@ app.post('/models/bootstrap', async (req, res) => {
     }
 });
 
+// =========================
+// Hardware Detection Endpoint
+// =========================
+
+const { detectHardware, checkModelsWillFit } = require('./hardware_detector.js');
+const { optimizeForHardware, getOptimizationStatus } = require('./model_optimizer.js');
+
+/**
+ * GET /hardware - Detect system hardware (GPU, RAM)
+ */
+app.get('/hardware', async (req, res) => {
+    try {
+        const forceRefresh = req.query.refresh === 'true';
+        const hardware = await detectHardware(forceRefresh);
+        res.json({ status: 'ok', hardware });
+    } catch (error) {
+        console.error('[API] Failed to detect hardware:', error.message);
+        res.status(500).json({ error: 'Failed to detect hardware', details: error.message });
+    }
+});
+
+/**
+ * POST /hardware/check-fit - Check if models will fit in available VRAM
+ * Body: { models: [{ sizeGB: number }] }
+ */
+app.post('/hardware/check-fit', async (req, res) => {
+    try {
+        const { models = [] } = req.body || {};
+        const result = await checkModelsWillFit(models);
+        res.json({ status: 'ok', ...result });
+    } catch (error) {
+        console.error('[API] Failed to check fit:', error.message);
+        res.status(500).json({ error: 'Failed to check fit', details: error.message });
+    }
+});
+
+// =========================
+// Custom Preset & Optimization Endpoints
+// =========================
+
+// In-memory custom preset config (persisted in config.json)
+let customPresetConfig = {
+    main: null,
+    summarizer: null,
+    embedder: null
+};
+
+/**
+ * GET /presets/custom - Get custom preset configuration
+ */
+app.get('/presets/custom', (req, res) => {
+    try {
+        // Try to load from config
+        const config = getConfig();
+        const customConfig = config.customPreset || customPresetConfig;
+        res.json({ status: 'ok', config: customConfig });
+    } catch (error) {
+        console.error('[API] Failed to get custom preset:', error.message);
+        res.status(500).json({ error: 'Failed to get custom preset', details: error.message });
+    }
+});
+
+/**
+ * POST /presets/custom - Save custom preset configuration
+ */
+app.post('/presets/custom', async (req, res) => {
+    try {
+        const { main, summarizer, embedder } = req.body || {};
+        
+        customPresetConfig = {
+            main: main || null,
+            summarizer: summarizer || null,
+            embedder: embedder || null
+        };
+        
+        // Persist to config.json
+        updateConfig({ customPreset: customPresetConfig });
+        
+        appendLog(`Custom preset updated: main=${main}, summarizer=${summarizer}, embedder=${embedder}`, 'info');
+        res.json({ status: 'ok', config: customPresetConfig });
+    } catch (error) {
+        console.error('[API] Failed to save custom preset:', error.message);
+        res.status(500).json({ error: 'Failed to save custom preset', details: error.message });
+    }
+});
+
+/**
+ * POST /presets/optimize - Run LLM-powered optimization
+ */
+app.post('/presets/optimize', async (req, res) => {
+    try {
+        appendLog('Starting model optimization...', 'info');
+        const result = await optimizeForHardware();
+        
+        if (result.success) {
+            appendLog(`Optimization complete: ${result.recommendation.main}`, 'info');
+            res.json({ status: 'ok', recommendation: result.recommendation, hardware: result.hardware });
+        } else {
+            appendLog(`Optimization failed: ${result.error}`, 'warn');
+            res.status(400).json({ error: result.error });
+        }
+    } catch (error) {
+        console.error('[API] Optimization failed:', error.message);
+        res.status(500).json({ error: 'Optimization failed', details: error.message });
+    }
+});
+
+/**
+ * GET /presets/optimize/status - Get optimization status
+ */
+app.get('/presets/optimize/status', (req, res) => {
+    try {
+        const status = getOptimizationStatus();
+        res.json({ status: 'ok', ...status });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get optimization status' });
+    }
+});
+
+// =========================
+// Hugging Face Integration Endpoints
+// =========================
+
+const hfService = require('./huggingface_service.js');
+
+/**
+ * GET /models/search - Search Hugging Face for models
+ * Query params: q (search query), limit, role (main|summarizer|embedder)
+ */
+app.get('/models/search', async (req, res) => {
+    try {
+        const { q, limit = 20, role } = req.query;
+        
+        if (!q && !role) {
+            return res.status(400).json({ error: 'Provide q (query) or role parameter' });
+        }
+        
+        let results;
+        if (role) {
+            results = await hfService.searchModelsForRole(role, { limit: parseInt(limit) });
+        } else {
+            results = await hfService.searchModels(q, { limit: parseInt(limit) });
+        }
+        
+        res.json({ status: 'ok', results, count: results.length });
+    } catch (error) {
+        console.error('[API] Model search failed:', error.message);
+        res.status(500).json({ error: 'Search failed', details: error.message });
+    }
+});
+
+/**
+ * GET /models/search/:modelId/quants - Get available quantizations for a model
+ */
+app.get('/models/search/:modelId(*)/quants', async (req, res) => {
+    try {
+        const modelId = req.params.modelId;
+        const quantizations = await hfService.getModelQuantizations(modelId);
+        res.json({ status: 'ok', modelId, quantizations });
+    } catch (error) {
+        console.error('[API] Failed to get quantizations:', error.message);
+        res.status(500).json({ error: 'Failed to get quantizations', details: error.message });
+    }
+});
+
+/**
+ * POST /models/download-hf - Download a model from Hugging Face
+ * Body: { modelId: string, quantization?: string }
+ */
+app.post('/models/download-hf', async (req, res) => {
+    try {
+        const { modelId, quantization } = req.body || {};
+        
+        if (!modelId) {
+            return res.status(400).json({ error: 'modelId is required' });
+        }
+        
+        appendLog(`Downloading from HuggingFace: ${modelId}${quantization ? `@${quantization}` : ''}`, 'info');
+        
+        const result = await hfService.downloadModel(modelId, quantization);
+        
+        if (result.success) {
+            appendLog(`Downloaded successfully: ${result.modelKey}`, 'info');
+            res.json({ status: 'ok', ...result });
+        } else {
+            appendLog(`Download failed: ${result.error}`, 'warn');
+            res.status(400).json({ error: result.error });
+        }
+    } catch (error) {
+        console.error('[API] HF download failed:', error.message);
+        res.status(500).json({ error: 'Download failed', details: error.message });
+    }
+});
+
+/**
+ * GET /models/downloads - Get active downloads status
+ */
+app.get('/models/downloads', (req, res) => {
+    try {
+        const downloads = hfService.getActiveDownloads();
+        res.json({ status: 'ok', downloads });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to get downloads status' });
+    }
+});
+
+/**
+ * GET /models/check-hf/:modelId - Check if a HF model is already downloaded
+ */
+app.get('/models/check-hf/:modelId(*)', async (req, res) => {
+    try {
+        const modelId = req.params.modelId;
+        const downloaded = await hfService.isModelDownloaded(modelId);
+        res.json({ status: 'ok', modelId, downloaded });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to check model status' });
+    }
+});
+
+// =========================
+// Model Lock API Endpoints
+// =========================
+
+const lockService = require('./model_lock_service.js');
+
+/**
+ * GET /models/locks - Get all locked models
+ */
+app.get('/models/locks', (req, res) => {
+    try {
+        const locks = lockService.getAllLocks();
+        res.json({ status: 'ok', locks });
+    } catch (error) {
+        console.error('[API] Failed to get locks:', error.message);
+        res.status(500).json({ error: 'Failed to get locks', details: error.message });
+    }
+});
+
+/**
+ * GET /models/lock/:id - Get lock state for a specific model
+ */
+app.get('/models/lock/:id(*)', (req, res) => {
+    try {
+        const modelId = req.params.id;
+        const lock = lockService.getModelLock(modelId);
+        res.json({ status: 'ok', modelId, lock });
+    } catch (error) {
+        console.error('[API] Failed to get lock:', error.message);
+        res.status(500).json({ error: 'Failed to get lock', details: error.message });
+    }
+});
+
+/**
+ * POST /models/lock/:id - Lock a model
+ * Body: { loaded?: boolean, preset?: boolean }
+ */
+app.post('/models/lock/:id(*)', (req, res) => {
+    try {
+        const modelId = req.params.id;
+        const { loaded = true, preset = true } = req.body || {};
+        
+        const lock = lockService.lockModel(modelId, { loaded, preset });
+        appendLog(`Locked model: ${modelId} (loaded=${loaded}, preset=${preset})`, 'info');
+        
+        res.json({ status: 'ok', modelId, lock });
+    } catch (error) {
+        console.error('[API] Failed to lock model:', error.message);
+        res.status(500).json({ error: 'Failed to lock model', details: error.message });
+    }
+});
+
+/**
+ * DELETE /models/lock/:id - Unlock a model
+ * Body: { loaded?: boolean, preset?: boolean }
+ */
+app.delete('/models/lock/:id(*)', (req, res) => {
+    try {
+        const modelId = req.params.id;
+        const { loaded = true, preset = true } = req.body || {};
+        
+        const lock = lockService.unlockModel(modelId, { loaded, preset });
+        appendLog(`Unlocked model: ${modelId} (loaded=${loaded}, preset=${preset})`, 'info');
+        
+        res.json({ status: 'ok', modelId, lock });
+    } catch (error) {
+        console.error('[API] Failed to unlock model:', error.message);
+        res.status(500).json({ error: 'Failed to unlock model', details: error.message });
+    }
+});
+
+/**
+ * POST /models/lock/:id/toggle - Toggle lock for a model
+ * Body: { lockType?: 'loaded' | 'preset' | 'both' }
+ */
+app.post('/models/lock/:id(*)/toggle', (req, res) => {
+    try {
+        const modelId = req.params.id;
+        const { lockType = 'both' } = req.body || {};
+        
+        const lock = lockService.toggleLock(modelId, lockType);
+        appendLog(`Toggled lock for model: ${modelId} (type=${lockType})`, 'info');
+        
+        res.json({ status: 'ok', modelId, lock });
+    } catch (error) {
+        console.error('[API] Failed to toggle lock:', error.message);
+        res.status(500).json({ error: 'Failed to toggle lock', details: error.message });
+    }
+});
+
+// =========================
+// Processing Config Endpoints
+// =========================
+
 app.patch('/processing/summary-keep', (req, res) => {
     const { keepRecentTurns } = req.body || {};
     const parsed = Number(keepRecentTurns);

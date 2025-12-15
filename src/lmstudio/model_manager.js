@@ -7,6 +7,7 @@ const execAsync = promisify(exec);
 const { getLMStudioCLIPath } = require('../lmstudio_manager.js');
 const { setMainModelMaxContext } = require('../processing_state.js');
 const { LM_STUDIO_URL, LM_STUDIO_TIMEOUT_MS, MAX_RETRIES, loadedModels, loadingModels, withLMStudioLock, generateRequestId, setLastLoadedSnapshot, getLastLoadedSnapshot } = require('./state.js');
+const { isLoadLocked } = require('../model_lock_service.js');
 
 /**
  * Normalize a model ID for comparison purposes
@@ -332,10 +333,16 @@ async function openModel(modelOrId, options = {}) {
     }
 }
 
-async function unloadModel(modelOrId) {
+async function unloadModel(modelOrId, options = {}) {
     const { identifier } = resolveModelNames(modelOrId);
     if (!identifier) {
         throw new Error('Model identifier is required for unloading');
+    }
+
+    // Check if model is locked for unloading (unless force is specified)
+    if (!options.force && isLoadLocked(identifier)) {
+        console.log(`[LM Studio Unload] Model is locked, skipping unload: ${identifier}`);
+        return { success: false, locked: true, message: 'Model is locked' };
     }
 
     try {
@@ -729,12 +736,23 @@ async function ensurePresetModelsLoaded(presetName) {
 
     console.log(`[LM Studio] Smart unloading: unload ${modelsToUnload.length}, keep ${modelsToKeep.length}, load ${modelsToLoad.length}`);
 
-    // Unload models not needed by new preset
+    // Unload models not needed by new preset (respecting locks)
     for (const modelId of modelsToUnload) {
+        // Check if model is locked before attempting to unload
+        if (isLoadLocked(modelId)) {
+            console.log(`[LM Studio] Model is locked, keeping loaded: ${modelId}`);
+            result.kept.push(modelId);
+            continue;
+        }
+        
         try {
             console.log(`[LM Studio] Unloading unused model: ${modelId}`);
-            await unloadModel(modelId);
-            result.unloaded.push(modelId);
+            const unloadResult = await unloadModel(modelId);
+            if (unloadResult?.locked) {
+                result.kept.push(modelId);
+            } else {
+                result.unloaded.push(modelId);
+            }
         } catch (error) {
             console.warn(`[LM Studio] Failed to unload ${modelId}:`, error.message);
         }

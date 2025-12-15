@@ -504,3 +504,292 @@ export interface QuantOptionsResponse {
 export async function getQuantOptions(): Promise<QuantOptionsResponse> {
   return request<QuantOptionsResponse>("/models/quant-options");
 }
+
+// =============================================================================
+// Hardware Detection APIs
+// =============================================================================
+
+export interface HardwareInfo {
+  gpu: {
+    name: string;
+    totalGB: number;
+    freeGB: number;
+    usedGB: number;
+  } | null;
+  ram: {
+    totalGB: number;
+    freeGB: number;
+  };
+  suggestedPreset: "low" | "medium" | "high";
+  cpuCores: number;
+  platform: string;
+  timestamp: number;
+}
+
+export interface HardwareResponse {
+  status: string;
+  hardware: HardwareInfo;
+}
+
+export interface CheckFitResponse {
+  status: string;
+  fits: boolean;
+  totalRequired: number;
+  available: number;
+  percentage: number;
+  overflow: number;
+  status_label: "good" | "warning" | "overflow";
+}
+
+/**
+ * Detect system hardware (GPU, RAM)
+ */
+export async function detectHardware(forceRefresh = false): Promise<HardwareResponse> {
+  const url = forceRefresh ? "/hardware?refresh=true" : "/hardware";
+  return request<HardwareResponse>(url);
+}
+
+/**
+ * Check if models will fit in available VRAM
+ */
+export async function checkModelsFit(models: { sizeGB: number }[]): Promise<CheckFitResponse> {
+  return request<CheckFitResponse>("/hardware/check-fit", {
+    method: "POST",
+    body: JSON.stringify({ models }),
+  });
+}
+
+// =============================================================================
+// Model Lock APIs
+// =============================================================================
+
+export interface ModelLock {
+  loaded?: boolean;
+  preset?: boolean;
+  lockedAt?: string;
+}
+
+export interface LocksResponse {
+  status: string;
+  locks: Record<string, ModelLock>;
+}
+
+export interface LockResponse {
+  status: string;
+  modelId: string;
+  lock: ModelLock | null;
+}
+
+/**
+ * Get all locked models
+ */
+export async function getModelLocks(): Promise<LocksResponse> {
+  return request<LocksResponse>("/models/locks");
+}
+
+/**
+ * Get lock state for a specific model
+ */
+export async function getModelLock(modelId: string): Promise<LockResponse> {
+  return request<LockResponse>(`/models/lock/${encodeURIComponent(modelId)}`);
+}
+
+/**
+ * Lock a model
+ */
+export async function lockModel(
+  modelId: string,
+  options: { loaded?: boolean; preset?: boolean } = { loaded: true, preset: true }
+): Promise<LockResponse> {
+  return request<LockResponse>(`/models/lock/${encodeURIComponent(modelId)}`, {
+    method: "POST",
+    body: JSON.stringify(options),
+  });
+}
+
+/**
+ * Unlock a model
+ */
+export async function unlockModel(
+  modelId: string,
+  options: { loaded?: boolean; preset?: boolean } = { loaded: true, preset: true }
+): Promise<LockResponse> {
+  return request<LockResponse>(`/models/lock/${encodeURIComponent(modelId)}`, {
+    method: "DELETE",
+    body: JSON.stringify(options),
+  });
+}
+
+/**
+ * Toggle lock for a model
+ */
+export async function toggleModelLock(
+  modelId: string,
+  lockType: "loaded" | "preset" | "both" = "both"
+): Promise<LockResponse> {
+  return request<LockResponse>(`/models/lock/${encodeURIComponent(modelId)}/toggle`, {
+    method: "POST",
+    body: JSON.stringify({ lockType }),
+  });
+}
+
+// =============================================================================
+// Custom Preset APIs
+// =============================================================================
+
+export interface CustomPresetConfig {
+  main: string | null;
+  summarizer: string | null;
+  embedder: string | null;
+}
+
+export interface CustomPresetResponse {
+  status: string;
+  config: CustomPresetConfig;
+}
+
+export interface OptimizeResponse {
+  status: string;
+  recommendation: {
+    main: string;
+    summarizer: string;
+    embedder: string;
+    reasoning: string;
+    estimatedVRAM: number;
+  };
+}
+
+/**
+ * Get custom preset configuration
+ */
+export async function getCustomPreset(): Promise<CustomPresetResponse> {
+  return request<CustomPresetResponse>("/presets/custom");
+}
+
+/**
+ * Save custom preset configuration
+ */
+export async function saveCustomPreset(config: CustomPresetConfig): Promise<CustomPresetResponse> {
+  return request<CustomPresetResponse>("/presets/custom", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
+/**
+ * Run LLM-powered optimization to get best model configuration for hardware
+ */
+export async function optimizePreset(): Promise<OptimizeResponse> {
+  return request<OptimizeResponse>("/presets/optimize", {
+    method: "POST",
+  });
+}
+
+// =============================================================================
+// Hugging Face Model Search APIs
+// =============================================================================
+
+export interface HFModelResult {
+  id: string;
+  modelId: string;
+  author: string;
+  name: string;
+  downloads: number;
+  likes: number;
+  tags: string[];
+  lastModified: string;
+  pipeline_tag: string;
+  isGGUF: boolean;
+}
+
+export interface HFQuantization {
+  filename: string;
+  size: number;
+  sizeGB: number | null;
+  quantization: string;
+}
+
+export interface HFSearchResponse {
+  status: string;
+  results: HFModelResult[];
+  count: number;
+}
+
+export interface HFQuantsResponse {
+  status: string;
+  modelId: string;
+  quantizations: HFQuantization[];
+}
+
+export interface HFDownloadResponse {
+  status: string;
+  success: boolean;
+  downloadId: string;
+  modelKey?: string;
+  message?: string;
+  error?: string;
+}
+
+export interface ActiveDownloadsResponse {
+  status: string;
+  downloads: Record<string, {
+    status: string;
+    startedAt: number;
+    modelId: string;
+    quantization: string | null;
+    elapsedMs: number;
+  }>;
+}
+
+/**
+ * Search Hugging Face for models
+ */
+export async function searchHuggingFace(
+  query: string,
+  options: { limit?: number; role?: "main" | "summarizer" | "embedder" } = {}
+): Promise<HFSearchResponse> {
+  const params = new URLSearchParams();
+  if (query) params.set("q", query);
+  if (options.limit) params.set("limit", options.limit.toString());
+  if (options.role) params.set("role", options.role);
+  
+  return request<HFSearchResponse>(`/models/search?${params.toString()}`);
+}
+
+/**
+ * Get available quantizations for a HuggingFace model
+ */
+export async function getHFQuantizations(modelId: string): Promise<HFQuantsResponse> {
+  return request<HFQuantsResponse>(`/models/search/${encodeURIComponent(modelId)}/quants`);
+}
+
+/**
+ * Download a model from Hugging Face
+ */
+export async function downloadHFModel(
+  modelId: string,
+  quantization?: string
+): Promise<HFDownloadResponse> {
+  return request<HFDownloadResponse>("/models/download-hf", {
+    method: "POST",
+    body: JSON.stringify({ modelId, quantization }),
+  });
+}
+
+/**
+ * Get active downloads status
+ */
+export async function getActiveDownloads(): Promise<ActiveDownloadsResponse> {
+  return request<ActiveDownloadsResponse>("/models/downloads");
+}
+
+/**
+ * Check if a HuggingFace model is already downloaded
+ */
+export async function checkHFModelDownloaded(modelId: string): Promise<{
+  status: string;
+  modelId: string;
+  downloaded: boolean;
+}> {
+  return request(`/models/check-hf/${encodeURIComponent(modelId)}`);
+}
