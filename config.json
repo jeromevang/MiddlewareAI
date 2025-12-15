@@ -39,7 +39,7 @@
     },
     "perQualityMainModels": {
       "high": "qwen/qwen3-14b",
-      "medium": "qwen/qwen3-8b",
+      "medium": "mungert/osmosis-mcp-4b",
       "low": "qwen/qwen3-4b-2507"
     }
   },

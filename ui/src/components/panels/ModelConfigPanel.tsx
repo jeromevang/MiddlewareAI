@@ -513,9 +513,12 @@ export default function ModelConfigPanel() {
   });
 
   const loadModelsMutation = useMutation({
-    mutationFn: () => loadRequiredModels(),
+    mutationFn: () => {
+      // Load custom preset when in custom mode, otherwise load required models
+      return quality === 'custom' ? loadPresetModels('custom') : loadRequiredModels();
+    },
     onSuccess: () => {
-      setMessage("✅ Required models loaded successfully");
+      setMessage(`✅ ${quality === 'custom' ? 'Custom preset' : 'Required'} models loaded successfully`);
       // Refresh health status and model list after loading
       setTimeout(() => {
         healthCheckMutation.mutate();
@@ -524,7 +527,7 @@ export default function ModelConfigPanel() {
       setTimeout(() => setMessage(""), 3000);
     },
     onError: (error: any) => {
-      setMessage(`❌ Failed to load required models: ${error.message || error}`);
+      setMessage(`❌ Failed to load ${quality === 'custom' ? 'custom preset' : 'required'} models: ${error.message || error}`);
       setTimeout(() => setMessage(""), 5000);
     },
   });
@@ -1437,7 +1440,7 @@ export default function ModelConfigPanel() {
                 variant="primary"
                 disabled={!lmStudioHealth.ready}
               >
-                Load Required Models
+                Load {quality === 'custom' ? 'Custom' : 'Required'} Models
               </Button>
               <Button
                 onClick={() => refreshContextMutation.mutate()}
