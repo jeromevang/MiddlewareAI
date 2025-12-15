@@ -112,74 +112,6 @@ export default function ModelConfigPanel() {
 
       {mode === "local" ? (
         <>
-          {/* Real-time Resource Monitoring - Always Visible */}
-          <ResourceBars />
-
-          {/* Quality Presets */}
-          <Card title="Quality Presets" subtitle="Select a preset to automatically configure optimal models">
-            <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-              {(['high', 'medium', 'low', 'custom'] as const).map((key) => {
-                const presetMeta = {
-                  high: { name: 'High Quality', description: 'Best for 12GB+ VRAM', color: 'cyan' },
-                  medium: { name: 'Balanced', description: 'Good for 8GB VRAM', color: 'purple' },
-                  low: { name: 'Fast & Light', description: 'Works on 4GB VRAM', color: 'green' },
-                  custom: { name: 'Custom', description: 'Manual selection', color: 'amber' },
-                };
-                const meta = presetMeta[key];
-                const colorClasses = {
-                  cyan: 'border-cyan-400 bg-cyan-400/10',
-                  purple: 'border-purple-400 bg-purple-400/10',
-                  green: 'border-green-400 bg-green-400/10',
-                  amber: 'border-amber-400 bg-amber-400/10',
-                };
-
-                return (
-                  <div
-                    key={key}
-                    className={`p-4 border rounded-lg transition-all ${
-                      quality === key
-                        ? colorClasses[meta.color as keyof typeof colorClasses]
-                        : 'border-white/15 bg-white/5 hover:border-white/30 cursor-pointer'
-                    }`}
-                    onClick={() => {
-                      setQuality(key);
-                      if (key !== 'custom' && key !== quality) {
-                        // Update RAG tier to match the preset quality
-                        const ragTierMap = { high: 'high', medium: 'medium', low: 'low' };
-                        if (ragTierMap[key as keyof typeof ragTierMap]) {
-                          changeRagTierMutation.mutate(ragTierMap[key as keyof typeof ragTierMap]);
-                        }
-                      }
-                    }}
-                  >
-                    <h3 className="font-semibold text-white mb-1">{meta.name}</h3>
-                    <p className="text-sm text-white/70">{meta.description}</p>
-                    <div className="mt-2 text-xs text-white/50">
-                      {key === 'custom' ? 'Configure below' : '3 models'}
-                    </div>
-                    {quality === key && (
-                      <div className="mt-2 text-xs text-green-400 font-semibold">✓ Selected</div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-
-          {/* Custom Preset Panel */}
-          {quality === 'custom' && (
-            <CustomPresetPanel
-              availableModels={availableModelsData?.models || []}
-              onConfigChange={() => {
-                // Refresh after config change
-                queryClient.invalidateQueries({ queryKey: ['presets'] });
-              }}
-              onModelDownloaded={() => {
-                refetchModelStatus();
-              }}
-            />
-          )}
-
           {/* RAG Pipeline Quality - only for standard presets */}
           {quality !== 'custom' && (
             <Card title="RAG Pipeline Quality" subtitle="Fixed models per quality tier - changing tier re-indexes codebase">
@@ -260,6 +192,74 @@ export default function ModelConfigPanel() {
                 </div>
               </div>
             </Card>
+          )}
+
+          {/* Real-time Resource Monitoring - Always Visible */}
+          <ResourceBars />
+
+          {/* Quality Presets */}
+          <Card title="Quality Presets" subtitle="Select a preset to automatically configure optimal models">
+            <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+              {(['high', 'medium', 'low', 'custom'] as const).map((key) => {
+                const presetMeta = {
+                  high: { name: 'High Quality', description: 'Best for 12GB+ VRAM', color: 'cyan' },
+                  medium: { name: 'Balanced', description: 'Good for 8GB VRAM', color: 'purple' },
+                  low: { name: 'Fast & Light', description: 'Works on 4GB VRAM', color: 'green' },
+                  custom: { name: 'Custom', description: 'Manual selection', color: 'amber' },
+                };
+                const meta = presetMeta[key];
+                const colorClasses = {
+                  cyan: 'border-cyan-400 bg-cyan-400/10',
+                  purple: 'border-purple-400 bg-purple-400/10',
+                  green: 'border-green-400 bg-green-400/10',
+                  amber: 'border-amber-400 bg-amber-400/10',
+                };
+
+                return (
+                  <div
+                    key={key}
+                    className={`p-4 border rounded-lg transition-all ${
+                      quality === key
+                        ? colorClasses[meta.color as keyof typeof colorClasses]
+                        : 'border-white/15 bg-white/5 hover:border-white/30 cursor-pointer'
+                    }`}
+                    onClick={() => {
+                      setQuality(key);
+                      if (key !== 'custom' && key !== quality) {
+                        // Update RAG tier to match the preset quality
+                        const ragTierMap = { high: 'high', medium: 'medium', low: 'low' };
+                        if (ragTierMap[key as keyof typeof ragTierMap]) {
+                          changeRagTierMutation.mutate(ragTierMap[key as keyof typeof ragTierMap]);
+                        }
+                      }
+                    }}
+                  >
+                    <h3 className="font-semibold text-white mb-1">{meta.name}</h3>
+                    <p className="text-sm text-white/70">{meta.description}</p>
+                    <div className="mt-2 text-xs text-white/50">
+                      {key === 'custom' ? 'Configure below' : '3 models'}
+                    </div>
+                    {quality === key && (
+                      <div className="mt-2 text-xs text-green-400 font-semibold">✓ Selected</div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </Card>
+
+          {/* Custom Preset Panel */}
+          {quality === 'custom' && (
+            <CustomPresetPanel
+              availableModels={availableModelsData?.models || []}
+              onConfigChange={() => {
+                // Refresh after config change
+                queryClient.invalidateQueries({ queryKey: ['presets'] });
+              }}
+              onModelDownloaded={() => {
+                refetchModelStatus();
+              }}
+            />
           )}
 
           {/* Model Discovery & Re-analyze */}
