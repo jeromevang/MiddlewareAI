@@ -26,28 +26,45 @@ function getModelDisplayName(modelId: string): string {
     .replace(/-chat$/i, ' Chat');
 }
 
-function DownloadButton({ 
-  modelId, 
-  isDownloading, 
+// Utility functions for download button styling
+function getDownloadButtonClasses(color: string): string {
+  const colorMap: Record<string, string> = {
+    amber: 'bg-amber-500/20 hover:bg-amber-500/30 text-amber-400',
+    purple: 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-400',
+  };
+  return colorMap[color] || colorMap.amber;
+}
+
+function getDownloadSpinnerClasses(color: string): string {
+  const colorMap: Record<string, string> = {
+    amber: 'border-amber-400',
+    purple: 'border-purple-400',
+  };
+  return colorMap[color] || colorMap.amber;
+}
+
+function DownloadButton({
+  modelId,
+  isDownloading,
   onDownload,
   color = 'amber'
-}: { 
-  modelId: string; 
-  isDownloading: boolean; 
+}: {
+  modelId: string;
+  isDownloading: boolean;
   onDownload: () => void;
   color?: string;
 }) {
   if (!modelId) return null;
-  
+
   return (
     <button
       onClick={onDownload}
       disabled={isDownloading}
-      className={`mt-2 text-xs px-2 py-1 bg-${color}-500/20 hover:bg-${color}-500/30 text-${color}-400 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1`}
+      className={`mt-2 text-xs px-2 py-1 ${getDownloadButtonClasses(color)} rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1`}
     >
       {isDownloading ? (
         <>
-          <div className={`w-3 h-3 border border-${color}-400 border-t-transparent rounded-full animate-spin`}></div>
+          <div className={`w-3 h-3 border ${getDownloadSpinnerClasses(color)} border-t-transparent rounded-full animate-spin`}></div>
           Downloading...
         </>
       ) : (

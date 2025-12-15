@@ -638,18 +638,24 @@ async function switchMainModel(newModelId, previousModelId = null) {
         return result;
     }
 
-    // Unload previous main model if specified and different
+    // Unload previous main model if specified and different, but only if not still needed
     if (previousModelId && previousModelId !== newModelId) {
         const actualPrevId = await findLMStudioModelId(previousModelId);
         if (actualPrevId) {
             const prevLoaded = currentlyLoaded.some(id => modelIdMatches(actualPrevId, id));
             if (prevLoaded) {
-                try {
-                    console.log(`[LM Studio] Unloading previous main model: ${actualPrevId}`);
-                    await unloadModel(actualPrevId);
-                    result.unloaded = actualPrevId;
-                } catch (error) {
-                    console.warn(`[LM Studio] Failed to unload previous model: ${error.message}`);
+                // Check if previous model is still needed for other purposes (RAG/rolling summarizer)
+                const isStillNeeded = await isModelStillNeeded(previousModelId, currentlyLoaded);
+                if (!isStillNeeded) {
+                    try {
+                        console.log(`[LM Studio] Unloading previous main model: ${actualPrevId}`);
+                        await unloadModel(actualPrevId);
+                        result.unloaded = actualPrevId;
+                    } catch (error) {
+                        console.warn(`[LM Studio] Failed to unload previous model: ${error.message}`);
+                    }
+                } else {
+                    console.log(`[LM Studio] Keeping previous model ${actualPrevId} as it's still needed for summarization`);
                 }
             }
         }
