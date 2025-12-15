@@ -9,7 +9,6 @@ import {
   getPresets,
   optimizePreset,
   saveCustomPreset,
-  type HardwareInfo,
   type ModelLock,
   type CustomPresetConfig,
 } from "../../lib/api";
@@ -74,7 +73,7 @@ export function CustomPresetPanel({
   });
 
   // Hardware detection
-  const { data: hardwareData, isLoading: hardwareLoading } = useQuery({
+  const { data: hardwareData } = useQuery({
     queryKey: ["hardware"],
     queryFn: () => detectHardware(),
     staleTime: 60000, // Cache for 1 minute
@@ -303,7 +302,7 @@ export function CustomPresetPanel({
             Search Hugging Face
           </h4>
           <ModelSearch
-            onModelDownloaded={(modelKey) => {
+            onModelDownloaded={() => {
               queryClient.invalidateQueries({ queryKey: ["presets"] });
               onModelDownloaded?.();
             }}
@@ -330,7 +329,7 @@ interface RoleSelectorProps {
 }
 
 function RoleSelector({
-  role,
+  role: _role,
   info,
   value,
   options,
@@ -338,6 +337,7 @@ function RoleSelector({
   onSelect,
   onToggleLock,
 }: RoleSelectorProps) {
+  // _role is available for future use (e.g., role-specific styling)
   const selectedModel = options.find((m) => m.id === value);
   const { stars, label } = selectedModel?.sizeGB
     ? getStarRatingFromSize(selectedModel.sizeGB)
