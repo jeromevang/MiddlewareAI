@@ -1562,10 +1562,11 @@ app.post('/lmstudio/models/load-preset/:preset', async (req, res) => {
             } catch (e) {}
             
             // Determine what to load
+            // Note: Only main and rollingSummarizer are user-configurable in custom preset.
+            // Embedder and RAG summarizer are fixed per RAG pipeline tier.
             const modelsToLoad = [
                 { role: 'main', id: customConfig.main },
-                { role: 'summarizer', id: customConfig.rollingSummarizer },
-                { role: 'embedder', id: customConfig.embedder }
+                { role: 'summarizer', id: customConfig.rollingSummarizer }
             ].filter(m => m.id);
             
             const neededIds = new Set();
