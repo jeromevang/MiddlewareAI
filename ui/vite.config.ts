@@ -21,6 +21,8 @@ const proxiedRoutes = [
   "/v1",
   "/chat",
   "/models",
+  "/presets",
+  "/hardware",
 ];
 
 export default defineConfig(({ command }) => {

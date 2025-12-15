@@ -32,8 +32,8 @@
       "identifier": "qwen2.5-coder-0.5b-instruct"
     },
     "main": {
-      "model_name": "qwen/qwen3-4b-2507",
-      "identifier": "qwen/qwen3-4b-2507"
+      "model_name": "qwen/qwen3-8b",
+      "identifier": "qwen/qwen3-8b"
     }
   },
   "processing": {
