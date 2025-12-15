@@ -31,6 +31,7 @@ const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js
 const { getProcessingConfig, getModelConfig, getConfig, getLMStudioConfig, getStorageConfig, getSessionConfig, updateConfigFile } = require('./config.js');
 const { getRuntimeMode, isCloudMode, requireModeHealthCheck } = require('./runtime.js');
 const { main: runIndexer } = require('./middleware.js'); // to trigger reindex
+const { getIndexingStatus } = require('./indexer/indexer.js');
 const { logDebugEvent, isTelemetryEnabled, setTelemetryOverride, getTelemetryOverride } = require('./debug_logger.js');
 const { createRagService } = require('./services/rag_service.js');
 const {
@@ -2361,6 +2362,61 @@ app.post('/rag/reindex', async (req, res) => {
         appendLog(`RAG reindex failed: ${error.message}`, 'error');
         console.error('[API] Failed to start RAG reindex:', error.message);
         res.status(500).json({ error: 'Failed to start reindexing', details: error.message });
+    }
+});
+
+/**
+ * GET /rag/indexing-status - Get current RAG indexing status and progress
+ */
+app.get('/rag/indexing-status', async (req, res) => {
+    try {
+        if (!isRagFeatureEnabled()) {
+            return res.json({
+                isIndexing: false,
+                status: 'disabled',
+                filesProcessed: 0,
+                totalFiles: 0,
+                chunksProcessed: 0,
+                totalChunks: 0
+            });
+        }
+
+        // Get indexer status from middleware
+        const indexerStatus = await getIndexingStatus();
+
+        // Get database stats
+        const dbStats = await sqliteCacheManager.getStats();
+        const faissStats = {
+            entries: faissIndexManager.idMap?.length || 0,
+            dim: faissIndexManager.dim || 0
+        };
+
+        res.json({
+            isIndexing: indexerStatus.isActive,
+            currentFile: indexerStatus.currentFile,
+            filesProcessed: indexerStatus.filesProcessed,
+            totalFiles: indexerStatus.totalFiles,
+            chunksProcessed: dbStats.totalChunks || 0,
+            totalChunks: dbStats.totalChunks || 0,
+            startTime: indexerStatus.startTime,
+            estimatedTimeRemaining: indexerStatus.estimatedTimeRemaining,
+            status: indexerStatus.status,
+            error: indexerStatus.error,
+            dbStats,
+            faissStats
+        });
+    } catch (error) {
+        console.error('[API] Failed to get indexing status:', error.message);
+        res.status(500).json({
+            error: 'Failed to get indexing status',
+            details: error.message,
+            isIndexing: false,
+            status: 'error',
+            filesProcessed: 0,
+            totalFiles: 0,
+            chunksProcessed: 0,
+            totalChunks: 0
+        });
     }
 });
 

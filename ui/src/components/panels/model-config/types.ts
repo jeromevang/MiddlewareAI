@@ -29,4 +29,13 @@ export interface RagTierConfig {
   name: string;
   description: string;
   targetGPU: string;
+  embedder: {
+    model_name: string;
+    identifier: string;
+    dimension: number;
+  };
+  ragSummarizer: {
+    model_name: string;
+    identifier: string;
+  };
 }

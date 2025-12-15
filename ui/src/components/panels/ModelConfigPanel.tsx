@@ -11,11 +11,12 @@ import { DownloadProgress } from "../ui/DownloadProgress";
 import { ResourceBars } from "../ui/ResourceBars";
 import { CustomPresetPanel } from "./CustomPresetPanel";
 import { MainModelSelector } from "./MainModelSelector";
+import { RagIndexingStatus } from "../ui/RagIndexingStatus";
 import clsx from "clsx";
 
 // Import from split files
 import type { RagTier } from './model-config/types';
-import { RAG_TIERS, getModelDisplayName } from './model-config/constants';
+import { RAG_TIERS } from './model-config/constants';
 import { saveQualityPresetModel, saveQualityPresetSummarizer, downloadModel } from '../../lib/api';
 
 
@@ -302,14 +303,17 @@ export default function ModelConfigPanel() {
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <span className="text-white/60">Embedder:</span>
-                      <span className="ml-2 text-white">{getModelDisplayName('jinaai/jina-embeddings-v2-base-code')}</span>
+                      <span className="ml-2 text-white">{RAG_TIERS[ragTier].embedder.model_name}</span>
                     </div>
                     <div>
                       <span className="text-white/60">RAG Summarizer:</span>
-                      <span className="ml-2 text-white">{getModelDisplayName('microsoft/phi-3.1-mini-128k-instruct')}</span>
+                      <span className="ml-2 text-white">{RAG_TIERS[ragTier].ragSummarizer.model_name}</span>
                     </div>
                   </div>
                 </div>
+
+                {/* RAG Indexing Status */}
+                <RagIndexingStatus />
               </div>
             </Card>
           )}

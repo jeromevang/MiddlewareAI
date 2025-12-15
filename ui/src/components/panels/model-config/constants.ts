@@ -13,16 +13,43 @@ export const RAG_TIERS: Record<RagTier, RagTierConfig> = {
     name: "Low",
     description: "Fast indexing, good for quick iterations",
     targetGPU: "RTX 3060 / 8GB VRAM",
+    embedder: {
+      model_name: "jinaai/jina-embeddings-v2-small-en",
+      identifier: "jinaai/jina-embeddings-v2-small-en",
+      dimension: 512
+    },
+    ragSummarizer: {
+      model_name: "microsoft/phi-2",
+      identifier: "microsoft/phi-2"
+    }
   },
   medium: {
     name: "Medium",
     description: "Balanced quality and speed",
     targetGPU: "RTX 4070 / 12GB VRAM",
+    embedder: {
+      model_name: "jinaai/jina-embeddings-v2-base-en",
+      identifier: "jinaai/jina-embeddings-v2-base-en",
+      dimension: 768
+    },
+    ragSummarizer: {
+      model_name: "codellama/CodeLlama-7b-Instruct-hf",
+      identifier: "codellama/CodeLlama-7b-Instruct-hf"
+    }
   },
   high: {
     name: "High",
     description: "Best quality summaries, slower indexing",
     targetGPU: "RTX 5080 / 16GB VRAM",
+    embedder: {
+      model_name: "thenlper/gte-large",
+      identifier: "thenlper/gte-large",
+      dimension: 1024
+    },
+    ragSummarizer: {
+      model_name: "codellama/CodeLlama-13b-Instruct-hf",
+      identifier: "codellama/CodeLlama-13b-Instruct-hf"
+    }
   }
 };
 

@@ -19,6 +19,41 @@ const MAX_CHUNK_SIZE = Math.min(processingConfig.max_chunk_size || 400, 400);
 const CONCURRENCY_LIMIT = 1;
 const CACHE_INVALIDATION_DAYS = processingConfig.cache_invalidation_days || 7;
 
+// Global indexing status tracking
+let indexingStatus = {
+    isActive: false,
+    status: 'idle', // 'idle', 'scanning', 'processing', 'embedding', 'saving', 'completed', 'error'
+    currentFile: null,
+    filesProcessed: 0,
+    totalFiles: 0,
+    chunksProcessed: 0,
+    startTime: null,
+    error: null,
+    estimatedTimeRemaining: null
+};
+
+function updateIndexingStatus(updates) {
+    indexingStatus = { ...indexingStatus, ...updates };
+}
+
+function getIndexingStatus() {
+    return { ...indexingStatus };
+}
+
+function resetIndexingStatus() {
+    indexingStatus = {
+        isActive: false,
+        status: 'idle',
+        currentFile: null,
+        filesProcessed: 0,
+        totalFiles: 0,
+        chunksProcessed: 0,
+        startTime: null,
+        error: null,
+        estimatedTimeRemaining: null
+    };
+}
+
 let storesInitialized = false;
 async function ensureStoresInitialized() {
     if (storesInitialized) return;
@@ -117,6 +152,12 @@ async function processChunk(chunkId, content, filePath, modelVersion, language =
             chunkSize,
             chunkStartLine
         );
+
+        // Update chunk counter
+        updateIndexingStatus({
+            chunksProcessed: indexingStatus.chunksProcessed + 1
+        });
+
     } catch (e) {
         rethrowIfAbort(e);
         fallbackLogError(`[Processing] Failed to process chunk ${chunkId}:`, e);
@@ -184,19 +225,37 @@ async function runIndexer({ modelVersion = ragSummarizationModel.identifier, sig
         return;
     }
 
-    await ensureStoresInitialized();
-    throwIfAborted(signal);
-    const resolvedVersion = modelVersion || ragSummarizationModel.identifier;
-    fallbackLogInfo(`[Middleware] Processing files using model version: ${resolvedVersion}`);
+    // Initialize indexing status
+    resetIndexingStatus();
+    updateIndexingStatus({
+        isActive: true,
+        status: 'scanning',
+        startTime: new Date().toISOString()
+    });
 
-    await cleanupDeletedChunks(signal);
+    try {
+        await ensureStoresInitialized();
+        throwIfAborted(signal);
+        const resolvedVersion = modelVersion || ragSummarizationModel.identifier;
+        fallbackLogInfo(`[Middleware] Processing files using model version: ${resolvedVersion}`);
 
-    const files = walkFiles(path.join(__dirname, '../'), ['.js', '.ts', '.py'], undefined, signal);
-    fallbackLogInfo(`[Scanning] Found ${files.length} files to process.`);
+        await cleanupDeletedChunks(signal);
+
+        const files = walkFiles(path.join(__dirname, '../'), ['.js', '.ts', '.py'], undefined, signal);
+        fallbackLogInfo(`[Scanning] Found ${files.length} files to process.`);
+
+        updateIndexingStatus({
+            totalFiles: files.length,
+            status: 'processing'
+        });
 
     const workers = [];
     for (const filePath of files) {
         throwIfAborted(signal);
+        updateIndexingStatus({
+            currentFile: filePath,
+            status: 'processing'
+        });
         try {
             if (workers.length >= CONCURRENCY_LIMIT) {
                 fallbackLogInfo('[Scanning] Waiting for active workers to complete...');
@@ -283,11 +342,40 @@ async function runIndexer({ modelVersion = ragSummarizationModel.identifier, sig
             rethrowIfAbort(error);
             fallbackLogError(`[Scanning] Failed to process file ${filePath}:`, error);
         }
+
+        // Update file counter
+        updateIndexingStatus({
+            filesProcessed: indexingStatus.filesProcessed + 1
+        });
     }
 
     if (workers.length) {
         await Promise.all(workers);
     }
+
+    // Mark indexing as completed
+    updateIndexingStatus({
+        isActive: false,
+        status: 'completed',
+        currentFile: null
+    });
+
+    fallbackLogInfo('[Middleware] Indexing completed successfully.');
+    } catch (error) {
+    updateIndexingStatus({
+        isActive: false,
+        status: 'error',
+        error: error.message,
+        currentFile: null
+    });
+
+    if (isAbortError(error)) {
+        fallbackLogInfo('[Middleware] Indexing aborted by user.');
+    } else {
+        fallbackLogError('[Middleware] Indexing failed:', error);
+    }
+    throw error;
+    }
 }
 
-module.exports = { runIndexer };
+module.exports = { runIndexer, getIndexingStatus };
