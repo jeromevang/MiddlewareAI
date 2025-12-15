@@ -10,11 +10,13 @@ import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { DownloadProgress } from "../ui/DownloadProgress";
 import { ResourceBars } from "../ui/ResourceBars";
 import { CustomPresetPanel } from "./CustomPresetPanel";
+import { MainModelSelector } from "./MainModelSelector";
 import clsx from "clsx";
 
 // Import from split files
 import type { RagTier } from './model-config/types';
 import { RAG_TIERS, getModelDisplayName } from './model-config/constants';
+import { saveQualityPresetModel, downloadModel } from '../../lib/api';
 
 
 export default function ModelConfigPanel() {
@@ -27,6 +29,17 @@ export default function ModelConfigPanel() {
   const [ragTier, setRagTier] = useState<RagTier>('low');
   const [pendingTierChange, setPendingTierChange] = useState<RagTier | null>(null);
 
+  // Fetch presets from API
+  const { data: presetsData, isLoading: presetsLoading } = useQuery({
+    queryKey: ['presets'],
+    queryFn: async () => {
+      const response = await fetch('/models/presets');
+      if (!response.ok) throw new Error('Failed to fetch presets');
+      return response.json();
+    },
+    staleTime: 30000, // 30 seconds
+  });
+
   // Fetch available models for Custom Preset panel
   const { data: availableModelsData } = useQuery({
     queryKey: ['availableModels'],
@@ -38,6 +51,23 @@ export default function ModelConfigPanel() {
     staleTime: 30000, // 30 seconds
     enabled: quality === 'custom', // Only fetch when custom preset is selected
   });
+
+  // Fetch current config
+  const { data: configData } = useQuery({
+    queryKey: ['config'],
+    queryFn: async () => {
+      const response = await fetch('/api/config');
+      if (!response.ok) throw new Error('Failed to fetch config');
+      return response.json();
+    },
+  });
+
+  // Prepare presets data
+  const presets = presetsData?.presets || {
+    high: { name: 'High Quality', description: 'Loading...', embedding: '', ragSummarizer: '', rollingSummarizer: '', mainOptions: [] },
+    medium: { name: 'Balanced', description: 'Loading...', embedding: '', ragSummarizer: '', rollingSummarizer: '', mainOptions: [] },
+    low: { name: 'Fast & Lightweight', description: 'Loading...', embedding: '', ragSummarizer: '', rollingSummarizer: '', mainOptions: [] },
+  };
 
   const refetchModelStatus = () => {
     queryClient.invalidateQueries({ queryKey: ['modelStatus'] });
@@ -53,6 +83,36 @@ export default function ModelConfigPanel() {
       });
       if (!res.ok) throw new Error('Failed to change RAG tier');
       return res.json();
+    },
+  });
+
+  // Handle main model selection for quality presets
+  const handleMainModelChange = useMutation({
+    mutationFn: async (modelId: string) => {
+      return saveQualityPresetModel({ quality: quality as 'high' | 'medium' | 'low', modelId });
+    },
+    onSuccess: (result) => {
+      console.log('Quality preset model saved:', result);
+      queryClient.invalidateQueries({ queryKey: ['presets'] });
+    },
+    onError: (err) => {
+      console.error('Failed to save quality preset model:', err);
+      alert(`Failed to save model selection: ${err.message}`);
+    },
+  });
+
+  // Handle model download
+  const handleDownloadModel = useMutation({
+    mutationFn: async (modelId: string) => {
+      return downloadModel(modelId);
+    },
+    onSuccess: (result) => {
+      console.log('Download started:', result);
+      refetchModelStatus(); // Refresh model status to show download progress
+    },
+    onError: (err) => {
+      console.error('Failed to start download:', err);
+      alert(`Failed to start download: ${err.message}`);
     },
   });
 
@@ -199,54 +259,98 @@ export default function ModelConfigPanel() {
 
           {/* Quality Presets */}
           <Card title="Quality Presets" subtitle="Select a preset to automatically configure optimal models">
-            <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
-              {(['high', 'medium', 'low', 'custom'] as const).map((key) => {
-                const presetMeta = {
-                  high: { name: 'High Quality', description: 'Best for 12GB+ VRAM', color: 'cyan' },
-                  medium: { name: 'Balanced', description: 'Good for 8GB VRAM', color: 'purple' },
-                  low: { name: 'Fast & Light', description: 'Works on 4GB VRAM', color: 'green' },
-                  custom: { name: 'Custom', description: 'Manual selection', color: 'amber' },
-                };
-                const meta = presetMeta[key];
-                const colorClasses = {
-                  cyan: 'border-cyan-400 bg-cyan-400/10',
-                  purple: 'border-purple-400 bg-purple-400/10',
-                  green: 'border-green-400 bg-green-400/10',
-                  amber: 'border-amber-400 bg-amber-400/10',
-                };
+            {presetsLoading ? (
+              <div className="text-center py-8 text-white/60">Loading presets...</div>
+            ) : (
+              <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+                {(['high', 'medium', 'low', 'custom'] as const).map((key) => {
+                  const preset = presets[key];
+                  const isCustom = key === 'custom';
 
-                return (
-                  <div
-                    key={key}
-                    className={`p-4 border rounded-lg transition-all ${
-                      quality === key
-                        ? colorClasses[meta.color as keyof typeof colorClasses]
-                        : 'border-white/15 bg-white/5 hover:border-white/30 cursor-pointer'
-                    }`}
-                    onClick={() => {
-                      setQuality(key);
-                      if (key !== 'custom' && key !== quality) {
-                        // Update RAG tier to match the preset quality
-                        const ragTierMap = { high: 'high', medium: 'medium', low: 'low' };
-                        if (ragTierMap[key as keyof typeof ragTierMap]) {
-                          changeRagTierMutation.mutate(ragTierMap[key as keyof typeof ragTierMap]);
+                  const presetMeta = {
+                    high: { name: preset?.name || 'High Quality', description: preset?.description || 'Loading...', color: 'cyan' },
+                    medium: { name: preset?.name || 'Balanced', description: preset?.description || 'Loading...', color: 'purple' },
+                    low: { name: preset?.name || 'Fast & Light', description: preset?.description || 'Loading...', color: 'green' },
+                    custom: { name: 'Custom', description: 'Manual selection', color: 'amber' },
+                  };
+                  const meta = presetMeta[key];
+                  const colorClasses = {
+                    cyan: 'border-cyan-400 bg-cyan-400/10',
+                    purple: 'border-purple-400 bg-purple-400/10',
+                    green: 'border-green-400 bg-green-400/10',
+                    amber: 'border-amber-400 bg-amber-400/10',
+                  };
+
+                  return (
+                    <div
+                      key={key}
+                      className={`p-4 border rounded-lg transition-all ${
+                        quality === key
+                          ? colorClasses[meta.color as keyof typeof colorClasses]
+                          : 'border-white/15 bg-white/5 hover:border-white/30 cursor-pointer'
+                      }`}
+                      onClick={() => {
+                        setQuality(key);
+                        if (!isCustom && key !== quality) {
+                          // Update RAG tier to match the preset quality
+                          const ragTierMap = { high: 'high', medium: 'medium', low: 'low' };
+                          if (ragTierMap[key as keyof typeof ragTierMap]) {
+                            changeRagTierMutation.mutate(ragTierMap[key as keyof typeof ragTierMap]);
+                          }
                         }
-                      }
-                    }}
-                  >
-                    <h3 className="font-semibold text-white mb-1">{meta.name}</h3>
-                    <p className="text-sm text-white/70">{meta.description}</p>
-                    <div className="mt-2 text-xs text-white/50">
-                      {key === 'custom' ? 'Configure below' : '3 models'}
+                      }}
+                    >
+                      <h3 className="font-semibold text-white mb-1">{meta.name}</h3>
+                      <p className="text-sm text-white/70 mb-2">{meta.description}</p>
+
+                      {isCustom ? (
+                        <div className="text-xs text-white/60">
+                          Configure below
+                        </div>
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="text-xs text-white/50 font-medium">
+                            Recommended models:
+                          </div>
+                          <div className="space-y-0.5">
+                            {preset?.mainOptions?.slice(0, 3).map((modelId: string) => (
+                              <div key={modelId} className="text-xs text-white/70 truncate">
+                                • {getModelDisplayName(modelId)}
+                              </div>
+                            ))}
+                            {preset?.mainOptions && preset.mainOptions.length > 3 && (
+                              <div className="text-xs text-white/50">
+                                +{preset.mainOptions.length - 3} more...
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {quality === key && (
+                        <div className="mt-2 text-xs text-green-400 font-semibold">✓ Selected</div>
+                      )}
                     </div>
-                    {quality === key && (
-                      <div className="mt-2 text-xs text-green-400 font-semibold">✓ Selected</div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+                  );
+                })}
+              </div>
+            )}
           </Card>
+
+          {/* Preset Model Selection */}
+          {quality !== 'custom' && (
+            <Card title={`Select ${presets[quality]?.name || quality} Model`} subtitle="Choose your preferred model for this quality tier">
+              <div className="space-y-4">
+                <MainModelSelector
+                  quality={quality}
+                  preset={presets[quality]}
+                  selectedModel={configData?.models.perQualityMainModels?.[quality] || null}
+                  onModelSelect={(modelId) => handleMainModelChange.mutate(modelId)}
+                  onModelDownload={(modelId) => handleDownloadModel.mutate(modelId)}
+                />
+              </div>
+            </Card>
+          )}
 
           {/* Custom Preset Panel */}
           {quality === 'custom' && (

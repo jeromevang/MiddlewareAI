@@ -760,6 +760,24 @@ export async function saveCustomPreset(config: CustomPresetConfig): Promise<Cust
   });
 }
 
+export interface QualityModelConfig {
+  quality: 'high' | 'medium' | 'low';
+  modelId: string;
+}
+
+export interface QualityModelResponse {
+  status: string;
+  quality: string;
+  modelId: string;
+}
+
+export async function saveQualityPresetModel(config: QualityModelConfig): Promise<QualityModelResponse> {
+  return request<QualityModelResponse>("/presets/quality-model", {
+    method: "POST",
+    body: JSON.stringify(config),
+  });
+}
+
 /**
  * Run LLM-powered optimization to get best model configuration for hardware
  */

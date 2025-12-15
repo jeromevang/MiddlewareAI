@@ -2107,6 +2107,38 @@ app.post('/presets/custom', async (req, res) => {
     }
 });
 
+/**
+ * POST /presets/quality-model - Save selected model for a quality preset
+ */
+app.post('/presets/quality-model', async (req, res) => {
+    try {
+        const { quality, modelId } = req.body || {};
+
+        if (!quality || !modelId) {
+            return res.status(400).json({ error: 'Missing quality or modelId' });
+        }
+
+        if (!['high', 'medium', 'low'].includes(quality)) {
+            return res.status(400).json({ error: 'Invalid quality tier' });
+        }
+
+        // Update the perQualityMainModels in config
+        updateConfigFile(config => {
+            if (!config.models.perQualityMainModels) {
+                config.models.perQualityMainModels = {};
+            }
+            config.models.perQualityMainModels[quality] = modelId;
+            return config;
+        });
+
+        appendLog(`Quality preset model updated: ${quality}=${modelId}`, 'info');
+        res.json({ status: 'ok', quality, modelId });
+    } catch (error) {
+        console.error('[API] Failed to save quality preset model:', error.message);
+        res.status(500).json({ error: 'Failed to save quality preset model', details: error.message });
+    }
+});
+
 // =========================
 // RAG Pipeline Tier Management (Closed System)
 // =========================
