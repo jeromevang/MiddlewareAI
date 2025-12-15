@@ -1,5 +1,4 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
 import clsx from "clsx";
 import { RefreshCw, Database, FileText, CheckCircle, AlertCircle } from "lucide-react";
 
@@ -25,7 +24,7 @@ async function fetchIndexingStatus(): Promise<IndexingStatus> {
 }
 
 export function RagIndexingStatus() {
-  const [isVisible, setIsVisible] = useState(false);
+  console.log('RagIndexingStatus component rendered');
 
   const { data: status, isLoading, error, refetch } = useQuery<IndexingStatus>({
     queryKey: ['rag-indexing-status'],
@@ -33,36 +32,42 @@ export function RagIndexingStatus() {
     refetchInterval: (data) => {
       // Poll more frequently when indexing is active
       if (data && typeof data === 'object' && 'isIndexing' in data && data.isIndexing) {
-        setIsVisible(true);
         return 2000; // Every 2 seconds when active
       }
-      // Poll less frequently when idle, but still show if recently completed
-      if (data && typeof data === 'object' && 'status' in data && data.status === 'completed') {
-        setIsVisible(true);
-        return 10000; // Every 10 seconds when completed
-      }
-      // Show if there was recent activity (files processed > 0)
-      if (data && typeof data === 'object' && 'filesProcessed' in data && typeof data.filesProcessed === 'number' && data.filesProcessed > 0) {
-        setIsVisible(true);
-        return 30000; // Every 30 seconds when idle but has data
-      }
-      setIsVisible(false);
-      return 30000; // Every 30 seconds when idle
+      // Poll less frequently when idle
+      return 10000; // Every 10 seconds when idle
     },
     staleTime: 1000,
   });
 
-  // Auto-hide completed status after 2 minutes (increased for testing)
-  useEffect(() => {
-    if (status?.status === 'completed' && !status?.isIndexing) {
-      const timer = setTimeout(() => setIsVisible(false), 120000); // 2 minutes
-      return () => clearTimeout(timer);
-    }
-  }, [status?.status, status?.isIndexing]);
 
-  if (!isVisible || isLoading || error || !status) {
-    return null;
+  // DEBUG: Always show for testing
+  // if (!isVisible || isLoading || error || !status) {
+  //   return null;
+  // }
+
+  if (isLoading || !status) {
+    return (
+      <div className="mt-4 p-4 rounded-lg border border-blue-500/50 bg-blue-900/20">
+        <div className="flex items-center gap-2">
+          <div className="animate-spin h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full"></div>
+          <span className="text-white">Loading indexing status...</span>
+        </div>
+      </div>
+    );
   }
+
+  if (error) {
+    return (
+      <div className="mt-4 p-4 rounded-lg border border-red-500/50 bg-red-900/20">
+        <div className="flex items-center gap-2">
+          <span className="text-red-400">❌ Error loading indexing status</span>
+        </div>
+      </div>
+    );
+  }
+
+  console.log('RagIndexingStatus status:', status);
 
   const progress = status.totalFiles > 0 ? (status.filesProcessed / status.totalFiles) * 100 : 0;
   const isActive = status.isIndexing;

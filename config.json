@@ -20,7 +20,7 @@
     "filterBelowMinContext": true
   },
   "ragPipeline": {
-    "tier": "low",
+    "tier": "medium",
     "locked": true,
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },
