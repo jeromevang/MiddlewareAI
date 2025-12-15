@@ -2111,6 +2111,7 @@ app.post('/presets/custom', async (req, res) => {
  * POST /presets/quality-model - Save selected model for a quality preset
  */
 app.post('/presets/quality-model', async (req, res) => {
+    console.log('[API] /presets/quality-model called with:', req.body);
     try {
         const { quality, modelId } = req.body || {};
 
@@ -2143,6 +2144,7 @@ app.post('/presets/quality-model', async (req, res) => {
  * POST /presets/quality-summarizer - Save selected summarizer model for a quality preset
  */
 app.post('/presets/quality-summarizer', async (req, res) => {
+    console.log('[API] /presets/quality-summarizer called with:', req.body);
     try {
         const { quality, summarizerId } = req.body || {};
 

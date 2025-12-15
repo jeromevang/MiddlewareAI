@@ -110,9 +110,9 @@ export function MainModelSelector({
                     ? 'border-cyan-400 bg-cyan-400/10'
                     : available
                     ? 'border-white/20 bg-white/5 hover:bg-white/10 cursor-pointer'
-                    : 'border-white/10 bg-white/5'
+                    : 'border-amber-500/20 bg-amber-500/5 hover:bg-amber-500/10 cursor-pointer'
                 }`}
-                onClick={() => available && onSelect(modelId)}
+                onClick={() => available ? onSelect(modelId) : onModelDownload(modelId)}
               >
                 <div className="flex items-center gap-3">
                   {/* Status indicator */}
@@ -122,9 +122,9 @@ export function MainModelSelector({
                     } else if (available) {
                       return <div className="h-4 w-4 flex-shrink-0" />;
                     } else if (downloading) {
-                      return <Loader2 className="h-4 w-4 text-yellow-400 animate-spin flex-shrink-0" />;
+                      return <Loader2 className="h-4 w-4 text-amber-400 animate-spin flex-shrink-0" />;
                     } else {
-                      return <Download className="h-4 w-4 text-white/40 flex-shrink-0" />;
+                      return <Download className="h-4 w-4 text-amber-400 flex-shrink-0" />;
                     }
                   })()}
 
@@ -152,6 +152,26 @@ export function MainModelSelector({
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {/* Download button for unavailable models */}
+                  {!available && !downloading && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onModelDownload(modelId);
+                      }}
+                      className="px-2 py-1 rounded text-xs bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 flex items-center gap-1 border border-amber-500/30"
+                    >
+                      <Download className="h-3 w-3" />
+                      Download
+                    </button>
+                  )}
+                  {downloading && (
+                    <span className="text-xs text-yellow-400 flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Downloading...
+                    </span>
+                  )}
+
                   {/* Details button */}
                   <button
                     onClick={(e) => {
@@ -159,26 +179,12 @@ export function MainModelSelector({
                       setShowDetails(showDetails === modelId ? null : modelId);
                     }}
                     className="p-1 rounded hover:bg-white/10"
+                    title="Show details"
                   >
                     <Info className="h-4 w-4 text-white/60" />
                   </button>
 
-                  {/* Action button */}
-                  {!available && !downloading && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onModelDownload(modelId);
-                      }}
-                      className="px-3 py-1 rounded text-sm bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 flex items-center gap-1"
-                    >
-                      <Download className="h-3 w-3" />
-                      Download
-                    </button>
-                  )}
-                  {downloading && (
-                    <span className="text-xs text-yellow-400">Downloading...</span>
-                  )}
+                  {/* Selection status */}
                   {isSelected && available && (
                     <span className="text-xs text-cyan-400 font-semibold">Selected</span>
                   )}

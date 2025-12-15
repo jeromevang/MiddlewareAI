@@ -17,7 +17,9 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     headers.set("Content-Type", "application/json");
   }
 
+  console.log('[API] Making request to:', path, 'with options:', options);
   const res = await fetch(path, { ...options, headers });
+  console.log('[API] Response status:', res.status, 'for URL:', res.url);
   if (!res.ok) {
     const payload = await safeJson(res);
     const message = (payload && (payload.error as string)) || res.statusText || "Request failed";
@@ -783,6 +785,7 @@ export interface QualitySummarizerResponse {
 }
 
 export async function saveQualityPresetModel(config: QualityModelConfig): Promise<QualityModelResponse> {
+  console.log('[API] saveQualityPresetModel called with:', config);
   return request<QualityModelResponse>("/presets/quality-model", {
     method: "POST",
     body: JSON.stringify(config),
@@ -790,6 +793,7 @@ export async function saveQualityPresetModel(config: QualityModelConfig): Promis
 }
 
 export async function saveQualityPresetSummarizer(config: QualitySummarizerConfig): Promise<QualitySummarizerResponse> {
+  console.log('[API] saveQualityPresetSummarizer called with:', config);
   return request<QualitySummarizerResponse>("/presets/quality-summarizer", {
     method: "POST",
     body: JSON.stringify(config),

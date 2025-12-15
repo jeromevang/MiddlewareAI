@@ -38,12 +38,12 @@
       "userSelectable": true
     },
     "perQualityMainModels": {
-      "high": "qwen/qwen3-14b",
+      "high": "cursorcore-qw2.5-7b",
       "medium": "mungert/osmosis-mcp-4b",
       "low": "qwen/qwen3-4b-2507"
     },
     "perQualityRollingSummarizers": {
-      "high": "qwen2.5-coder-1.5b-instruct",
+      "high": "qwen2.5-7b-instruct-1m",
       "medium": "qwen2.5-coder-1.5b-instruct",
       "low": "qwen2.5-coder-0.5b-instruct"
     }
