@@ -23,6 +23,7 @@ const proxiedRoutes = [
   "/models",
   "/presets",
   "/hardware",
+  "/summary",
 ];
 
 export default defineConfig(({ command }) => {

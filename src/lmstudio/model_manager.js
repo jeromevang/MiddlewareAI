@@ -121,10 +121,43 @@ async function ensureModelLoaded(modelOrId, options = {}) {
         }
     }
 
+    // Calculate optimal context length if not explicitly provided
+    if (!loadOptions.contextLength && options.role) {
+        try {
+            const { calculateOptimalContext } = require('../hardware_detector.js');
+            const { getModelByKey } = require('./model_sync.js');
+            
+            // Try to get model info for size and max context
+            const modelInfo = await getModelByKey(identifier);
+            if (modelInfo) {
+                const result = await calculateOptimalContext({
+                    modelSizeGB: modelInfo.sizeGB || 4,
+                    modelMaxContext: modelInfo.maxContextLength || 32768,
+                    role: options.role
+                });
+                
+                loadOptions.contextLength = result.context;
+                
+                if (result.warning) {
+                    console.warn(`[LM Studio] Context warning: ${result.warning}`);
+                }
+                console.log(`[LM Studio] Calculated optimal context for ${options.role}: ${result.context} tokens`);
+            }
+        } catch (err) {
+            console.warn(`[LM Studio] Could not calculate optimal context:`, err?.message);
+        }
+    }
+
     const loadPromise = (async () => {
         try {
             await withLMStudioLock(() => openModel(modelOrId, loadOptions));
             loadedModels.add(identifier);
+            
+            // Track context length for this model
+            if (loadOptions.contextLength) {
+                const { setModelContextLength } = require('../processing_state.js');
+                setModelContextLength(identifier, loadOptions.contextLength);
+            }
         } catch (err) {
             console.warn(`[LM Studio] Failed to open model ${identifier}:`, err?.message || err);
         } finally {

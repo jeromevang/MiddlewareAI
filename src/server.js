@@ -1859,6 +1859,41 @@ app.post('/hardware/check-fit', async (req, res) => {
     }
 });
 
+/**
+ * GET /hardware/realtime - Get real-time CPU, RAM, VRAM usage
+ */
+app.get('/hardware/realtime', async (req, res) => {
+    try {
+        const { getRealtimeResources } = require('./hardware_detector.js');
+        const resources = await getRealtimeResources();
+        res.json({ status: 'ok', ...resources });
+    } catch (error) {
+        console.error('[API] Failed to get realtime resources:', error.message);
+        res.status(500).json({ error: 'Failed to get resources', details: error.message });
+    }
+});
+
+/**
+ * POST /hardware/calculate-context - Calculate optimal context for a model
+ * Body: { modelSizeGB: number, modelMaxContext: number, role: string }
+ */
+app.post('/hardware/calculate-context', async (req, res) => {
+    try {
+        const { calculateOptimalContext } = require('./hardware_detector.js');
+        const { modelSizeGB, modelMaxContext, role } = req.body || {};
+        
+        if (!modelSizeGB || !role) {
+            return res.status(400).json({ error: 'modelSizeGB and role are required' });
+        }
+        
+        const result = await calculateOptimalContext({ modelSizeGB, modelMaxContext, role });
+        res.json({ status: 'ok', ...result });
+    } catch (error) {
+        console.error('[API] Failed to calculate context:', error.message);
+        res.status(500).json({ error: 'Failed to calculate context', details: error.message });
+    }
+});
+
 // =========================
 // Custom Preset & Optimization Endpoints
 // =========================
@@ -2198,6 +2233,114 @@ app.post('/summary/reprocess', async (req, res) => {
         res.json({ status: 'ok', processed: processed.length, keepRecentTurns, details: processed });
     } catch (error) {
         console.error('[Server] /summary/reprocess error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// Track last known RAG summarizer model for change detection
+let lastKnownRagSummarizer = null;
+
+/**
+ * GET /summary/status - Check if summaries are current or need regeneration
+ */
+app.get('/summary/status', async (req, res) => {
+    try {
+        const currentModel = ragSummarizationModel?.identifier || 'unknown';
+        
+        // Initialize tracking on first call
+        if (lastKnownRagSummarizer === null) {
+            lastKnownRagSummarizer = currentModel;
+        }
+        
+        const modelChanged = lastKnownRagSummarizer !== currentModel;
+        const rollingSummaryCount = await sqliteCacheManager.getAllConversationIds();
+        
+        res.json({
+            status: 'ok',
+            currentModel,
+            previousModel: modelChanged ? lastKnownRagSummarizer : null,
+            modelChanged,
+            regenerationNeeded: modelChanged,
+            summaryCount: rollingSummaryCount?.length || 0,
+            message: modelChanged 
+                ? `RAG summarizer changed from ${lastKnownRagSummarizer} to ${currentModel}. Summaries may be inconsistent.`
+                : 'Summaries are current.'
+        });
+    } catch (error) {
+        console.error('[Server] /summary/status error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /summary/acknowledge-change - Acknowledge that the model changed, reset tracking
+ */
+app.post('/summary/acknowledge-change', async (req, res) => {
+    try {
+        const currentModel = ragSummarizationModel?.identifier || 'unknown';
+        const previousModel = lastKnownRagSummarizer;
+        lastKnownRagSummarizer = currentModel;
+        
+        appendLog(`RAG summarizer change acknowledged: ${previousModel} -> ${currentModel}`, 'info');
+        
+        res.json({
+            status: 'ok',
+            message: 'Model change acknowledged. Existing summaries may use the old model.',
+            previousModel,
+            currentModel
+        });
+    } catch (error) {
+        console.error('[Server] /summary/acknowledge-change error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /summary/regenerate - Trigger full summary regeneration with current model
+ */
+app.post('/summary/regenerate', async (req, res) => {
+    try {
+        const currentModel = ragSummarizationModel?.identifier || 'unknown';
+        const keepRecentTurns = getSummaryKeepRecentTurns();
+        const conversationIds = await sqliteCacheManager.getAllConversationIds();
+        
+        appendLog(`Starting summary regeneration with model: ${currentModel}`, 'info');
+        
+        // Reset tracking to current model
+        lastKnownRagSummarizer = currentModel;
+        
+        // Reprocess all summaries
+        const results = [];
+        for (const convId of conversationIds) {
+            if (!convId) continue;
+            try {
+                const summary = await recomputeRollingSummary(convId, keepRecentTurns);
+                results.push({
+                    conversationId: convId,
+                    success: true,
+                    turnCount: summary?.turnCount || 0
+                });
+            } catch (err) {
+                results.push({
+                    conversationId: convId,
+                    success: false,
+                    error: err?.message
+                });
+            }
+        }
+        
+        const successCount = results.filter(r => r.success).length;
+        appendLog(`Summary regeneration complete: ${successCount}/${results.length} sessions`, 'info');
+        
+        res.json({
+            status: 'ok',
+            model: currentModel,
+            totalSessions: results.length,
+            successCount,
+            results
+        });
+    } catch (error) {
+        console.error('[Server] /summary/regenerate error:', error);
         res.status(500).json({ error: error.message });
     }
 });

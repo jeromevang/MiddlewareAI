@@ -46,11 +46,26 @@ The old fuzzy matching system (`normalizeModelIdForMatching`, `tokenOverlapScore
 
 ```javascript
 {
-  main: { temperature: 0.4, topP: 0.9, gpu: "max" },
-  summarizer: { temperature: 0, topP: 0.5, gpu: 0.3, maxTokens: 500 },
-  embedder: { gpu: "off" }
+  main: { temperature: 0.4, topP: 0.9, gpu: "max", contextLength: "VRAM-aware (8K min)" },
+  summarizer: { temperature: 0, topP: 0.5, gpu: 0.3, maxTokens: 500, contextLength: 4096 },
+  embedder: { gpu: "off", contextLength: "model's native" }
 }
 ```
+
+## Context Length Management
+
+### VRAM-Aware Calculation
+Context length for main model is calculated based on available VRAM:
+- Minimum: 8192 tokens (8K)
+- Formula: `availableVRAM - 2GB headroom - modelSize`
+- Larger models get smaller context to fit VRAM
+
+### Fixed Context for Other Roles
+- **Summarizer**: Fixed 4096 tokens (small, fast - its job is to compress)
+- **Embedder**: Model's native limit (Jina is 8K)
+
+### Token-Based Truncation
+All inputs to summarizers use token-based truncation (not character-based) to prevent context overflow errors. See `tokenizer.js:truncateToTokenLimit()`.
 
 ## Key Functions
 

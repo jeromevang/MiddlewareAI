@@ -17,6 +17,16 @@ import { StarRating, getStarRatingFromSize } from "../ui/StarRating";
 import { LockButton } from "../ui/LockButton";
 import { Badge } from "../ui/Badge";
 import { ModelSearch } from "../ui/ModelSearch";
+import { ResourceBars } from "../ui/ResourceBars";
+
+// Fixed embedder configuration (system-wide, code-aware)
+const FIXED_EMBEDDER = {
+  id: "jinaai/jina-embeddings-v2-base-code",
+  name: "Jina Code Embeddings v2",
+  description: "Code-aware embeddings optimized for programming languages",
+  contextLength: 8192,
+  sizeGB: 0.3,
+};
 
 // Role descriptions for the UI
 const ROLE_INFO = {
@@ -25,18 +35,21 @@ const ROLE_INFO = {
     description: "Handles chat completions and tool calling. This is the primary AI that responds to your queries.",
     recommended: "Models with tool use capability (Qwen, Llama, etc.)",
     icon: "🤖",
+    selectable: true,
   },
   summarizer: {
     name: "Summarizer",
     description: "Compresses conversation history to maintain context without exceeding token limits.",
     recommended: "Smaller, fast models (1-3B params)",
     icon: "📝",
+    selectable: true,
   },
   embedder: {
     name: "Embedder",
-    description: "Creates vector embeddings for semantic search in RAG (Retrieval-Augmented Generation).",
-    recommended: "Embedding models (MiniLM, Nomic)",
+    description: "Creates vector embeddings for semantic search in RAG. Fixed to code-aware model for best results.",
+    recommended: "Jina Code v2 (8K context, code-optimized)",
     icon: "🔍",
+    selectable: false, // Fixed system-wide
   },
 };
 
@@ -107,7 +120,7 @@ export function CustomPresetPanel({
         setConfig({
           main: data.recommendation.main,
           summarizer: data.recommendation.summarizer,
-          embedder: data.recommendation.embedder,
+          embedder: FIXED_EMBEDDER.id, // Always use fixed embedder
         });
       }
     },
@@ -121,14 +134,14 @@ export function CustomPresetPanel({
     },
   });
 
-  // Initialize with defaults from presets
+  // Initialize with defaults from presets (embedder is always fixed)
   useEffect(() => {
     if (presetsData?.presets?.low) {
       const lowPreset = presetsData.presets.low;
       setConfig({
         main: lowPreset.mainOptions?.[0] || null,
         summarizer: lowPreset.rollingSummarizer || null,
-        embedder: lowPreset.embedding || null,
+        embedder: FIXED_EMBEDDER.id, // Always use fixed embedder
       });
     }
   }, [presetsData]);
@@ -151,7 +164,7 @@ export function CustomPresetPanel({
   const vramBreakdown = {
     main: getModelSize(config.main),
     summarizer: getModelSize(config.summarizer),
-    embedder: getModelSize(config.embedder),
+    embedder: FIXED_EMBEDDER.sizeGB, // Fixed embedder
   };
   const totalVRAM = vramBreakdown.main + vramBreakdown.summarizer + vramBreakdown.embedder;
 
@@ -162,9 +175,7 @@ export function CustomPresetPanel({
   const summarizerModels = availableModels.filter(
     (m) => m.type !== "embedder" && m.type !== "embedding"
   );
-  const embedderModels = availableModels.filter(
-    (m) => m.type === "embedder" || m.type === "embedding"
-  );
+  // Embedder models filtering removed - embedder is now fixed system-wide
 
   const handleSave = () => {
     saveMutation.mutate(config);
@@ -231,6 +242,9 @@ export function CustomPresetPanel({
         showBreakdown
       />
 
+      {/* Real-time Resource Monitoring */}
+      <ResourceBars className="p-3 rounded-lg bg-white/5 border border-white/10" />
+
       {/* Role Selectors */}
       <div className="space-y-4">
         <RoleSelector
@@ -253,15 +267,64 @@ export function CustomPresetPanel({
           onToggleLock={(id) => lockMutation.mutate({ modelId: id })}
         />
 
-        <RoleSelector
-          role="embedder"
-          info={ROLE_INFO.embedder}
-          value={config.embedder}
-          options={embedderModels}
-          locks={locks}
-          onSelect={(id) => setConfig((c) => ({ ...c, embedder: id }))}
-          onToggleLock={(id) => lockMutation.mutate({ modelId: id })}
-        />
+        {/* Embedder - Fixed (not selectable) */}
+        <div className="p-4 rounded-lg bg-white/5 border border-white/10">
+          <div className="flex items-start justify-between mb-3">
+            <div className="flex items-start gap-3">
+              <div className="text-2xl">{ROLE_INFO.embedder.icon}</div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h4 className="font-medium text-white">
+                    {ROLE_INFO.embedder.name}
+                  </h4>
+                  <Badge tone="info">
+                    Fixed
+                  </Badge>
+                </div>
+                <p className="text-xs text-white/50 mt-1">
+                  {ROLE_INFO.embedder.description}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <StarRating {...getStarRatingFromSize(FIXED_EMBEDDER.sizeGB)} />
+            </div>
+          </div>
+
+          {/* Fixed embedder display */}
+          <div className="flex items-center gap-3">
+            <div className="flex-1 px-3 py-2 rounded-lg text-sm bg-gray-700/50 border border-white/10 text-white/70">
+              <div className="flex items-center justify-between">
+                <span>{FIXED_EMBEDDER.name}</span>
+                <span className="text-white/40 text-xs">
+                  {FIXED_EMBEDDER.sizeGB}GB • {FIXED_EMBEDDER.contextLength / 1000}K ctx
+                </span>
+              </div>
+            </div>
+            <div className="text-white/30">
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
+              </svg>
+            </div>
+          </div>
+
+          {/* Info badges */}
+          <div className="flex flex-wrap gap-2 mt-2">
+            <Badge tone="neutral">
+              🧬 Code-Aware
+            </Badge>
+            <Badge tone="neutral">
+              {FIXED_EMBEDDER.contextLength / 1000}K Context
+            </Badge>
+            <Badge tone="neutral">
+              ~{FIXED_EMBEDDER.sizeGB} GB
+            </Badge>
+          </div>
+
+          <p className="text-xs text-white/40 mt-2 italic">
+            Embedder is fixed system-wide. Changing requires re-indexing all code.
+          </p>
+        </div>
       </div>
 
       {/* Optimization result message */}

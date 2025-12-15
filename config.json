@@ -20,20 +20,25 @@
     },
     "embedding": {
       "engine": "local",
-      "model_name": "Xenova/all-MiniLM-L6-v2",
-      "identifier": "all-MiniLM-L6-v2"
+      "model_name": "jinaai/jina-embeddings-v2-base-code",
+      "identifier": "jina-embeddings-v2-base-code",
+      "context_length": 8192,
+      "locked": true,
+      "description": "Code-aware embeddings optimized for programming languages (8K context)"
     },
     "ragSummarization": {
       "model_name": "qwen2.5-coder-1.5b-instruct",
-      "identifier": "qwen2.5-coder-1.5b-instruct"
+      "identifier": "qwen2.5-coder-1.5b-instruct",
+      "context_length": 4096
     },
     "rollingSummarization": {
       "model_name": "qwen2.5-coder-0.5b-instruct",
-      "identifier": "qwen2.5-coder-0.5b-instruct"
+      "identifier": "qwen2.5-coder-0.5b-instruct",
+      "context_length": 4096
     },
     "main": {
-      "model_name": "qwen/qwen3-8b",
-      "identifier": "qwen/qwen3-8b"
+      "model_name": "qwen/qwen3-4b-2507",
+      "identifier": "qwen/qwen3-4b-2507"
     }
   },
   "processing": {
@@ -49,7 +54,7 @@
   "storage": {
     "sqlite_db_path": "./data/summaries.db",
     "faiss_index_path": "./vector_db/embeddings.faiss",
-    "embedding_dimension": 384
+    "embedding_dimension": 768
   },
   "server": {
     "port": 4000,

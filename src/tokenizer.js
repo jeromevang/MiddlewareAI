@@ -79,10 +79,83 @@ async function countTotalTokens(messages) {
     return perMessage.reduce((sum, count) => sum + count, 0);
 }
 
+/**
+ * Truncate text to fit within a maximum token limit.
+ * Uses binary search for efficiency.
+ * @param {string} text - Text to truncate
+ * @param {number} maxTokens - Maximum number of tokens
+ * @returns {Promise<string>} - Truncated text
+ */
+async function truncateToTokenLimit(text, maxTokens) {
+    if (!text || !maxTokens || maxTokens <= 0) return text || '';
+    
+    const currentTokens = await countTokens(text);
+    if (currentTokens <= maxTokens) {
+        return text; // Already fits
+    }
+    
+    // Binary search for the optimal cut point
+    let low = 0;
+    let high = text.length;
+    let bestCut = 0;
+    
+    // Estimate initial cut point based on token ratio
+    const ratio = maxTokens / currentTokens;
+    let mid = Math.floor(text.length * ratio * 0.9); // Start slightly under
+    
+    // Refine with binary search (max 10 iterations)
+    for (let i = 0; i < 10; i++) {
+        mid = Math.floor((low + high) / 2);
+        if (mid <= 0) break;
+        
+        const truncated = text.slice(0, mid);
+        const tokens = await countTokens(truncated);
+        
+        if (tokens <= maxTokens) {
+            bestCut = mid;
+            low = mid + 1;
+        } else {
+            high = mid - 1;
+        }
+        
+        // Early exit if we're very close
+        if (Math.abs(tokens - maxTokens) <= 5) {
+            if (tokens <= maxTokens) bestCut = mid;
+            break;
+        }
+    }
+    
+    // Try to cut at a natural boundary (newline, period, space)
+    const result = text.slice(0, bestCut);
+    const lastNewline = result.lastIndexOf('\n');
+    const lastPeriod = result.lastIndexOf('. ');
+    const lastSpace = result.lastIndexOf(' ');
+    
+    const cutPoint = Math.max(lastNewline, lastPeriod, lastSpace);
+    if (cutPoint > bestCut * 0.8) {
+        return text.slice(0, cutPoint + 1);
+    }
+    
+    return result;
+}
+
+/**
+ * Quick token estimate without full tokenization (for pre-checks).
+ * Uses ~4 chars per token heuristic.
+ * @param {string} text - Text to estimate
+ * @returns {number} - Estimated token count
+ */
+function estimateTokens(text) {
+    if (!text) return 0;
+    return Math.ceil(text.length / 4);
+}
+
 module.exports = {
     getTokenizer,
     countTokens,
     countTokensPerMessage,
     countTotalTokens,
+    truncateToTokenLimit,
+    estimateTokens,
 };
 

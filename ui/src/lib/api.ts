@@ -559,6 +559,90 @@ export async function checkModelsFit(models: { sizeGB: number }[]): Promise<Chec
   });
 }
 
+/**
+ * Real-time resource usage response
+ */
+export interface RealtimeResourcesResponse {
+  status: string;
+  cpu: {
+    usagePercent: number;
+    cores: number;
+  };
+  ram: {
+    totalGB: number;
+    usedGB: number;
+    freeGB: number;
+    usagePercent: number;
+  };
+  vram: {
+    name: string;
+    totalGB: number;
+    usedGB: number;
+    freeGB: number;
+    usagePercent: number;
+  } | null;
+  timestamp: number;
+}
+
+/**
+ * Get real-time CPU, RAM, VRAM usage
+ */
+export async function getRealtimeResources(): Promise<RealtimeResourcesResponse> {
+  return request<RealtimeResourcesResponse>("/hardware/realtime");
+}
+
+// =============================================================================
+// Summary Management
+// =============================================================================
+
+export interface SummaryStatusResponse {
+  status: string;
+  currentModel: string;
+  previousModel: string | null;
+  modelChanged: boolean;
+  regenerationNeeded: boolean;
+  summaryCount: number;
+  message: string;
+}
+
+export interface SummaryRegenerateResponse {
+  status: string;
+  model: string;
+  totalSessions: number;
+  successCount: number;
+  results: Array<{
+    conversationId: string;
+    success: boolean;
+    turnCount?: number;
+    error?: string;
+  }>;
+}
+
+/**
+ * Check summary status and if regeneration is needed
+ */
+export async function getSummaryStatus(): Promise<SummaryStatusResponse> {
+  return request<SummaryStatusResponse>("/summary/status");
+}
+
+/**
+ * Acknowledge that the summarizer model changed
+ */
+export async function acknowledgeSummaryChange(): Promise<{ status: string; message: string }> {
+  return request<{ status: string; message: string }>("/summary/acknowledge-change", {
+    method: "POST",
+  });
+}
+
+/**
+ * Regenerate all summaries with the current model
+ */
+export async function regenerateSummaries(): Promise<SummaryRegenerateResponse> {
+  return request<SummaryRegenerateResponse>("/summary/regenerate", {
+    method: "POST",
+  });
+}
+
 // =============================================================================
 // Model Lock APIs
 // =============================================================================

@@ -5,6 +5,11 @@ const { getModelConfig } = require('../config.js');
 const { isCloudMode, getCloudMainConfig } = require('../runtime.js');
 const { ensureModelLoaded } = require('./model_manager.js');
 const { LM_STUDIO_URL, LM_STUDIO_TIMEOUT_MS, MAX_RETRIES, CLOUD_REQUEST_TIMEOUT_MS, withLMStudioLock, generateRequestId } = require('./state.js');
+const { truncateToTokenLimit, estimateTokens } = require('../tokenizer.js');
+
+// Reserve tokens for system prompt and model output
+const SYSTEM_PROMPT_RESERVE = 200;
+const OUTPUT_RESERVE = 500;
 
 function getCloudChatEndpoint() {
     const cfg = getCloudMainConfig();
@@ -34,7 +39,17 @@ async function summarizeChunk(text) {
     const requestId = generateRequestId();
     let retries = MAX_RETRIES;
     const ragModel = getModelConfig('ragSummarization');
-    const truncated = text && text.length > 4000 ? text.slice(0, 4000) : text;
+    
+    // Use model's configured context length, default to 4096
+    const modelContext = ragModel.context_length || 4096;
+    const maxInputTokens = modelContext - SYSTEM_PROMPT_RESERVE - OUTPUT_RESERVE;
+    
+    // Token-based truncation (not character-based!)
+    const truncated = await truncateToTokenLimit(text, maxInputTokens);
+    
+    if (estimateTokens(text) > maxInputTokens) {
+        console.log(`[RAG Summary] ${requestId} - Truncated input from ~${estimateTokens(text)} to ${maxInputTokens} tokens`);
+    }
 
     while (retries > 0) {
         try {
@@ -91,7 +106,17 @@ async function summarizeConversation(text) {
     const requestId = generateRequestId();
     let retries = MAX_RETRIES;
     const rollingModel = getModelConfig('rollingSummarization');
-    const truncated = text && text.length > 6000 ? text.slice(0, 6000) : text;
+    
+    // Use model's configured context length, default to 4096
+    const modelContext = rollingModel.context_length || 4096;
+    const maxInputTokens = modelContext - SYSTEM_PROMPT_RESERVE - OUTPUT_RESERVE;
+    
+    // Token-based truncation (not character-based!)
+    const truncated = await truncateToTokenLimit(text, maxInputTokens);
+    
+    if (estimateTokens(text) > maxInputTokens) {
+        console.log(`[Rolling Summary] ${requestId} - Truncated input from ~${estimateTokens(text)} to ${maxInputTokens} tokens`);
+    }
 
     while (retries > 0) {
         try {

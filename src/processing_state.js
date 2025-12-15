@@ -20,6 +20,9 @@ let contextModeDefault = null;
 let rawContextMarginPct = null;
 let mainModelMaxContext = DEFAULT_MAX_CONTEXT;
 
+// Per-model context tracking
+const loadedModelContexts = new Map();
+
 function normalizeKeepRecent(value) {
     const num = Number(value);
     if (!Number.isFinite(num) || num < 0) {
@@ -141,6 +144,52 @@ function setMainModelMaxContext(tokens) {
     }
 }
 
+// ============================================================================
+// Per-Model Context Tracking
+// ============================================================================
+
+/**
+ * Set the context length for a specific loaded model.
+ * @param {string} modelId - Model identifier
+ * @param {number} contextLength - Context length in tokens
+ */
+function setModelContextLength(modelId, contextLength) {
+    if (!modelId) return;
+    const parsed = Number(contextLength);
+    if (Number.isFinite(parsed) && parsed > 0) {
+        loadedModelContexts.set(modelId, parsed);
+        console.log(`[Context] Model ${modelId} context set to ${parsed} tokens`);
+    }
+}
+
+/**
+ * Get the context length for a specific loaded model.
+ * @param {string} modelId - Model identifier
+ * @returns {number|null} - Context length or null if not tracked
+ */
+function getModelContextLength(modelId) {
+    if (!modelId) return null;
+    return loadedModelContexts.get(modelId) || null;
+}
+
+/**
+ * Remove a model from context tracking (when unloaded).
+ * @param {string} modelId - Model identifier
+ */
+function clearModelContextLength(modelId) {
+    if (modelId) {
+        loadedModelContexts.delete(modelId);
+    }
+}
+
+/**
+ * Get all tracked model context lengths.
+ * @returns {Object} - Map of modelId to contextLength
+ */
+function getAllModelContexts() {
+    return Object.fromEntries(loadedModelContexts);
+}
+
 module.exports = {
     getSummaryKeepRecentTurns,
     setSummaryKeepRecentTurns,
@@ -151,4 +200,8 @@ module.exports = {
     refreshProcessingStateFromConfig,
     getMainModelMaxContext,
     setMainModelMaxContext,
+    setModelContextLength,
+    getModelContextLength,
+    clearModelContextLength,
+    getAllModelContexts,
 };

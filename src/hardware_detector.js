@@ -243,6 +243,139 @@ function invalidateHardwareCache() {
     hardwareCache = null;
 }
 
+// ============================================================================
+// VRAM-Aware Context Calculation
+// ============================================================================
+
+// Minimum context lengths by role
+const MIN_CONTEXT = {
+    main: 8192,        // 8K minimum for coding tasks
+    summarizer: 4096,  // 4K fixed for summarizers
+    embedder: 8192     // Model's native (Jina is 8K)
+};
+
+// Approximate VRAM per 8K context tokens (varies by model architecture)
+const VRAM_PER_8K_CONTEXT = 0.5; // ~0.5GB per 8K tokens
+
+/**
+ * Calculate optimal context length based on available VRAM.
+ * @param {Object} params - Calculation parameters
+ * @param {number} params.modelSizeGB - Model size in GB
+ * @param {number} params.modelMaxContext - Model's maximum supported context
+ * @param {string} params.role - 'main', 'summarizer', or 'embedder'
+ * @param {number} [params.availableVRAM] - Available VRAM in GB (auto-detected if not provided)
+ * @returns {Promise<{context: number, fits: boolean, warning?: string}>}
+ */
+async function calculateOptimalContext({ modelSizeGB, modelMaxContext, role, availableVRAM = null }) {
+    // Fixed context for summarizers and embedders
+    if (role === 'summarizer') {
+        return { context: MIN_CONTEXT.summarizer, fits: true };
+    }
+    if (role === 'embedder') {
+        return { context: modelMaxContext || MIN_CONTEXT.embedder, fits: true };
+    }
+    
+    // Main model: calculate based on VRAM
+    if (availableVRAM === null) {
+        const hw = await detectHardware();
+        availableVRAM = hw.gpu?.totalGB || 0;
+    }
+    
+    // Reserve: 2GB headroom + model size + space for other models
+    const reservedVRAM = 2 + modelSizeGB;
+    const availableForContext = Math.max(0, availableVRAM - reservedVRAM);
+    
+    // Calculate how much context we can afford
+    const contextChunks = Math.floor(availableForContext / VRAM_PER_8K_CONTEXT);
+    const calculatedContext = contextChunks * 8192;
+    
+    // Apply minimum and maximum bounds
+    const minContext = MIN_CONTEXT.main;
+    const maxContext = modelMaxContext || 128000;
+    
+    let finalContext = Math.max(minContext, Math.min(maxContext, calculatedContext));
+    let fits = true;
+    let warning = null;
+    
+    // Check if we can't even fit minimum context
+    if (calculatedContext < minContext) {
+        fits = false;
+        warning = `Model (${modelSizeGB.toFixed(1)}GB) is too large for ${availableVRAM.toFixed(1)}GB VRAM with minimum ${minContext} context. Consider a smaller model.`;
+        finalContext = minContext; // Still try with minimum
+    }
+    
+    return { context: finalContext, fits, warning };
+}
+
+// ============================================================================
+// Real-Time Resource Monitoring
+// ============================================================================
+
+/**
+ * Get current CPU usage percentage.
+ * Uses load average on Unix, processor time on Windows.
+ * @returns {number} - CPU usage percentage (0-100)
+ */
+function getCPUUsage() {
+    const cpus = os.cpus();
+    const numCPUs = cpus.length;
+    
+    // Calculate average idle time across all CPUs
+    let totalIdle = 0;
+    let totalTick = 0;
+    
+    for (const cpu of cpus) {
+        for (const type in cpu.times) {
+            totalTick += cpu.times[type];
+        }
+        totalIdle += cpu.times.idle;
+    }
+    
+    const idlePercent = (totalIdle / totalTick) * 100;
+    const usagePercent = 100 - idlePercent;
+    
+    return Math.round(usagePercent * 10) / 10;
+}
+
+/**
+ * Get real-time resource usage (CPU, RAM, VRAM).
+ * @returns {Promise<{cpu: Object, ram: Object, vram: Object}>}
+ */
+async function getRealtimeResources() {
+    // CPU
+    const cpuUsage = getCPUUsage();
+    const cpuCores = os.cpus().length;
+    
+    // RAM
+    const totalRAM = os.totalmem() / (1024 * 1024 * 1024);
+    const freeRAM = os.freemem() / (1024 * 1024 * 1024);
+    const usedRAM = totalRAM - freeRAM;
+    
+    // VRAM (refresh from nvidia-smi)
+    const gpu = await detectNvidiaGPU();
+    
+    return {
+        cpu: {
+            usagePercent: cpuUsage,
+            cores: cpuCores
+        },
+        ram: {
+            totalGB: Math.round(totalRAM * 10) / 10,
+            usedGB: Math.round(usedRAM * 10) / 10,
+            freeGB: Math.round(freeRAM * 10) / 10,
+            usagePercent: Math.round((usedRAM / totalRAM) * 1000) / 10
+        },
+        vram: gpu ? {
+            name: gpu.name,
+            totalGB: Math.round(gpu.totalGB * 10) / 10,
+            usedGB: Math.round(gpu.usedGB * 10) / 10,
+            freeGB: Math.round(gpu.freeGB * 10) / 10,
+            usagePercent: Math.round((gpu.usedGB / gpu.totalGB) * 1000) / 10
+        } : null,
+        timestamp: Date.now()
+    };
+}
+
 module.exports = {
     detectHardware,
     detectNvidiaGPU,
@@ -253,6 +386,10 @@ module.exports = {
     estimateConfigVRAM,
     getModelStarRating,
     getRoleDescriptions,
-    invalidateHardwareCache
+    invalidateHardwareCache,
+    calculateOptimalContext,
+    getCPUUsage,
+    getRealtimeResources,
+    MIN_CONTEXT
 };
 
