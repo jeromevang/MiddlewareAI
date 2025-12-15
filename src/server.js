@@ -41,7 +41,9 @@ const {
     setContextModeDefault,
     getRawContextMarginPct,
     setRawContextMarginPct,
+    getMainModelMaxContext,
 } = require('./processing_state.js');
+const { countTokensPerMessage } = require('./tokenizer.js');
 const {
     getEnginesSnapshot,
     isRagEnabled: isRagEngineEnabled,
@@ -959,6 +961,181 @@ async function recomputeRollingSummary(conversationId, keepRecentTurns) {
     } catch (err) {
         console.error('[Server] Failed to recompute rolling summary:', err?.message || err);
         throw err;
+    }
+}
+
+/**
+ * Run the summarization model on a list of messages.
+ * @param {Array<{role: string, content: string}>} messages - Messages to summarize
+ * @returns {Promise<string>} - Summary text
+ */
+async function runSummarizationModel(messages) {
+    if (!messages || messages.length === 0) {
+        return '';
+    }
+    
+    // Format messages into a transcript
+    const transcript = messages
+        .map(msg => {
+            const role = msg.role === 'user' ? 'User' : msg.role === 'assistant' ? 'Assistant' : msg.role;
+            return `${role}: ${msg.content || ''}`;
+        })
+        .filter(Boolean)
+        .join('\n\n');
+    
+    if (!transcript.trim()) {
+        return '';
+    }
+    
+    try {
+        const summaryRaw = await summarizeConversation(transcript);
+        return sanitizeSummaryText(summaryRaw);
+    } catch (err) {
+        console.error('[Summary] Failed to run summarization model:', err?.message || err);
+        throw err;
+    }
+}
+
+/**
+ * MODE 1: Turn-based summarization (engine ON)
+ * Summarizes oldest turns when conversation exceeds keep_recent_turns threshold.
+ * @param {Array<{role: string, content: string}>} messages - Chat messages
+ * @returns {Promise<Array<{role: string, content: string}>>} - Processed messages
+ */
+async function handleTurnBasedSummary(messages) {
+    const keepRecent = getSummaryKeepRecentTurns();
+    
+    // Count conversation messages (exclude system message at index 0)
+    const systemMsg = messages[0];
+    const conversationMsgs = messages.slice(1);
+    
+    // Calculate turns (user + assistant = 1 turn typically, but we count messages)
+    if (conversationMsgs.length <= keepRecent * 2) {
+        return messages; // Not enough turns yet
+    }
+    
+    // Calculate how many messages to keep (keepRecent turns = keepRecent * 2 messages)
+    const msgsToKeep = keepRecent * 2;
+    const cutIndex = conversationMsgs.length - msgsToKeep;
+    
+    if (cutIndex <= 0) {
+        return messages; // Nothing to summarize
+    }
+    
+    const toSummarize = conversationMsgs.slice(0, cutIndex);
+    const toKeep = conversationMsgs.slice(cutIndex);
+    
+    console.log(`[Summary] Turn-based: summarizing ${toSummarize.length} messages, keeping ${toKeep.length}`);
+    
+    try {
+        const summary = await runSummarizationModel(toSummarize);
+        
+        if (!summary) {
+            return messages; // Summarization failed, return original
+        }
+        
+        return [
+            systemMsg,
+            { role: 'system', content: `Previous conversation summary:\n${summary}` },
+            ...toKeep
+        ];
+    } catch (err) {
+        console.error('[Summary] Turn-based summarization failed:', err?.message || err);
+        return messages; // Return original on error
+    }
+}
+
+/**
+ * MODE 2: Context-based summarization (engine OFF)
+ * Summarizes oldest messages when context exceeds model's max context size.
+ * Goal: Maximize context while staying within model limits.
+ * @param {Array<{role: string, content: string}>} messages - Chat messages
+ * @returns {Promise<Array<{role: string, content: string}>>} - Processed messages
+ */
+async function handleContextBasedSummary(messages) {
+    const maxTokens = getMainModelMaxContext();
+    
+    // Count tokens for each message
+    const tokenCounts = await countTokensPerMessage(messages);
+    const totalTokens = tokenCounts.reduce((sum, count) => sum + count, 0);
+    
+    if (totalTokens <= maxTokens) {
+        return messages; // Already fits
+    }
+    
+    console.log(`[Summary] Context overflow: ${totalTokens} > ${maxTokens} tokens`);
+    
+    // Reserve tokens for summary message overhead (~50 tokens for "Previous conversation summary:" prefix)
+    const summaryOverhead = 50;
+    const systemTokens = tokenCounts[0] || 0;
+    let budget = maxTokens - systemTokens - summaryOverhead;
+    
+    if (budget <= 0) {
+        console.warn('[Summary] System message too large, cannot fit context');
+        return messages;
+    }
+    
+    // Find cut point: work backwards from newest, keep as many recent messages as fit
+    let cutIndex = messages.length;
+    for (let i = messages.length - 1; i >= 1; i--) {
+        if (budget >= tokenCounts[i]) {
+            budget -= tokenCounts[i];
+            cutIndex = i;
+        } else {
+            break;
+        }
+    }
+    
+    const toSummarize = messages.slice(1, cutIndex);
+    const toKeep = messages.slice(cutIndex);
+    
+    if (toSummarize.length === 0) {
+        console.log('[Summary] No messages to summarize');
+        return messages;
+    }
+    
+    console.log(`[Summary] Context-based: summarizing ${toSummarize.length} oldest messages, keeping ${toKeep.length} recent`);
+    
+    try {
+        const summary = await runSummarizationModel(toSummarize);
+        
+        if (!summary) {
+            console.warn('[Summary] Summarization returned empty, keeping original messages');
+            return messages;
+        }
+        
+        return [
+            messages[0], // System message
+            { role: 'system', content: `Previous conversation summary:\n${summary}` },
+            ...toKeep
+        ];
+    } catch (err) {
+        console.error('[Summary] Context-based summarization failed:', err?.message || err);
+        return messages; // Return original on error
+    }
+}
+
+/**
+ * Ensure messages fit within the model's context window.
+ * Uses different strategies based on whether summary engine is enabled:
+ * - Engine ON: Summarize after X turns (proactive, for smaller context models)
+ * - Engine OFF: Summarize only when context exceeds max (reactive, maximize context)
+ * @param {Array<{role: string, content: string}>} messages - Chat messages
+ * @returns {Promise<Array<{role: string, content: string}>>} - Processed messages
+ */
+async function ensureContextFitsModel(messages) {
+    if (!messages || messages.length === 0) {
+        return messages;
+    }
+    
+    if (isSummaryFeatureEnabled()) {
+        // MODE 1: Turn-based trigger (engine ON)
+        // Summarize after X turns for faster inference with larger models
+        return await handleTurnBasedSummary(messages);
+    } else {
+        // MODE 2: Context-based trigger (engine OFF)
+        // Summarize only when exceeding max context to maximize context usage
+        return await handleContextBasedSummary(messages);
     }
 }
 
@@ -1999,7 +2176,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         metrics.lastRagResults = ragPreview;
 
         // Build messages with enhanced context
-        const enhancedMessages = [];
+        let enhancedMessages = [];
         // Add system message with context
         enhancedMessages.push({
             role: 'system',
@@ -2010,6 +2187,14 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             enhancedMessages.push(messages[i]);
         }
         enhancedMessages.push({ role: 'user', content: userPrompt });
+
+        // Ensure context fits model - summarize if needed
+        // This handles both turn-based (engine ON) and context-based (engine OFF) summarization
+        try {
+            enhancedMessages = await ensureContextFitsModel(enhancedMessages);
+        } catch (summaryError) {
+            console.warn('[Summary] Context fitting failed, using original messages:', summaryError?.message || summaryError);
+        }
 
         // Call main model with enhanced context
         const mainModel = getModelConfig('main').identifier;

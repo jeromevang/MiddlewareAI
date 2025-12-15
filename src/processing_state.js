@@ -13,10 +13,12 @@ const DEFAULT_CONTEXT_MODE = 'raw';
 const DEFAULT_RAW_MARGIN = 0.1;
 const MIN_RAW_MARGIN = 0.01;
 const MAX_RAW_MARGIN = 0.5;
+const DEFAULT_MAX_CONTEXT = 4096;
 
 let summaryKeepRecentTurns = null;
 let contextModeDefault = null;
 let rawContextMarginPct = null;
+let mainModelMaxContext = DEFAULT_MAX_CONTEXT;
 
 function normalizeKeepRecent(value) {
     const num = Number(value);
@@ -117,6 +119,28 @@ function setRawContextMarginPct(value, { persist = true } = {}) {
     return rawContextMarginPct;
 }
 
+/**
+ * Get the current main model's max context size in tokens.
+ * @returns {number} - Max context tokens
+ */
+function getMainModelMaxContext() {
+    return mainModelMaxContext;
+}
+
+/**
+ * Set the main model's max context size (called when model is loaded).
+ * @param {number} tokens - Max context tokens for the loaded model
+ */
+function setMainModelMaxContext(tokens) {
+    const parsed = Number(tokens);
+    if (Number.isFinite(parsed) && parsed > 0) {
+        mainModelMaxContext = parsed;
+        console.log(`[Context] Main model max context updated: ${mainModelMaxContext} tokens`);
+    } else {
+        console.warn(`[Context] Invalid max context value: ${tokens}, keeping ${mainModelMaxContext}`);
+    }
+}
+
 module.exports = {
     getSummaryKeepRecentTurns,
     setSummaryKeepRecentTurns,
@@ -125,4 +149,6 @@ module.exports = {
     getRawContextMarginPct,
     setRawContextMarginPct,
     refreshProcessingStateFromConfig,
+    getMainModelMaxContext,
+    setMainModelMaxContext,
 };

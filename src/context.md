@@ -67,3 +67,52 @@
 - **Max Context Tokens**: 15000 (as defined in `.cursor/rules/module-context.mdc`).
 - **Summarization Rule**: If context exceeds 20k tokens, I will automatically summarized to approximately 5k tokens while preserving key details and relevance.
 - **Aggressive Summarization**: Enabled for large files or directories to ensure concise and actionable summaries.
+
+## Context-Aware Summarization
+
+The middleware now implements dual-mode context-aware summarization to prevent context overflow:
+
+### Two Modes
+
+| Mode | Trigger | Action |
+|------|---------|--------|
+| **Engine ON** | `turns > keep_recent_turns` | Summarize oldest turns, keep X recent |
+| **Engine OFF** | `tokens > maxContext` | Summarize minimum to fit max (maximize context) |
+
+### Key Components
+
+- **`src/tokenizer.js`**: Accurate token counting using @xenova/transformers AutoTokenizer
+- **`src/processing_state.js`**: Tracks main model max context (`getMainModelMaxContext()`, `setMainModelMaxContext()`)
+- **`src/lmstudio/model_manager.js`**: Updates max context when main model is loaded
+- **`src/server.js`**: 
+  - `handleTurnBasedSummary()` - Mode 1: Proactive summarization after X turns
+  - `handleContextBasedSummary()` - Mode 2: Reactive summarization when context overflows
+  - `ensureContextFitsModel()` - Entry point that selects the appropriate mode
+
+### Algorithm (Context-Based Mode)
+
+1. Count tokens for each message using the tokenizer
+2. If total <= max: no action needed
+3. Work backwards from newest messages, keeping as many as fit within budget
+4. Summarize all older messages
+5. Return: `[system, summary, recent_messages]`
+
+### Configuration
+
+```json
+{
+  "engines": {
+    "summary": {
+      "enabled": false  // false = context-based, true = turn-based
+    }
+  },
+  "processing": {
+    "summary_keep_recent_turns": 3  // For turn-based mode
+  }
+}
+```
+
+### Use Cases
+
+- **Engine ON (turn-based)**: Use with larger models that have smaller context. Proactively summarizes to keep inference fast.
+- **Engine OFF (context-based)**: Use with smaller models that have larger context. Maximizes context until overflow.

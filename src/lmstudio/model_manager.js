@@ -5,6 +5,7 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const execAsync = promisify(exec);
 const { getLMStudioCLIPath } = require('../lmstudio_manager.js');
+const { setMainModelMaxContext } = require('../processing_state.js');
 const { LM_STUDIO_URL, LM_STUDIO_TIMEOUT_MS, MAX_RETRIES, loadedModels, loadingModels, withLMStudioLock, generateRequestId, setLastLoadedSnapshot, getLastLoadedSnapshot } = require('./state.js');
 
 function normalizeModelId(id) {
@@ -324,6 +325,40 @@ async function listLoadedModels() {
     }
 }
 
+/**
+ * Get context length for a specific loaded model
+ * @param {string} modelId - Model identifier to look up
+ * @returns {Promise<number|null>} - Context length or null if not found
+ */
+async function getModelContextLength(modelId) {
+    if (!modelId) return null;
+    
+    try {
+        const loadedModels = await listLoadedModels();
+        const model = loadedModels.find(m => modelIdMatches(modelId, m.id));
+        
+        if (model && model.context_length) {
+            return model.context_length;
+        }
+        return null;
+    } catch (error) {
+        console.warn(`[LM Studio] Could not get context length for ${modelId}:`, error.message);
+        return null;
+    }
+}
+
+/**
+ * Update the main model max context after loading a model
+ * @param {string} modelId - The model ID that was loaded
+ */
+async function updateMainModelContext(modelId) {
+    const contextLength = await getModelContextLength(modelId);
+    if (contextLength) {
+        setMainModelMaxContext(contextLength);
+        console.log(`[LM Studio] Updated main model max context: ${contextLength} tokens`);
+    }
+}
+
 async function getServerStatus() {
     try {
         const { stdout } = await execAsync(`"${getLMStudioCLIPath()}" server status`);
@@ -616,15 +651,32 @@ async function ensurePresetModelsLoaded(presetName) {
     modelsToKeep.forEach(id => console.log(`[LM Studio] Keeping already loaded: ${id}`));
 
     // Load new models
+    let mainModelId = null;
     for (const model of modelsToLoad) {
         try {
             console.log(`[LM Studio] Loading model: ${model.actualId} (${model.type})`);
             await ensureModelLoaded({ identifier: model.actualId });
             result.loaded.push(model.actualId);
             console.log(`[LM Studio] Successfully loaded: ${model.actualId}`);
+            
+            // Track main model for context update
+            if (model.type === 'main') {
+                mainModelId = model.actualId;
+            }
         } catch (error) {
             console.error(`[LM Studio] Failed to load ${model.actualId}:`, error.message);
             result.failed.push(model.presetId);
+        }
+    }
+
+    // Update max context if main model was loaded or is being kept
+    if (mainModelId) {
+        await updateMainModelContext(mainModelId);
+    } else {
+        // Check if main model is in the kept models
+        const mainModel = resolvedModels.find(m => m.type === 'main');
+        if (mainModel && modelsToKeep.some(id => modelIdMatches(mainModel.actualId, id))) {
+            await updateMainModelContext(mainModel.actualId);
         }
     }
 
@@ -742,6 +794,9 @@ async function switchMainModel(newModelId, previousModelId = null) {
         result.success = true;
         result.loaded = actualNewId;
         console.log(`[LM Studio] Successfully switched to: ${actualNewId}`);
+        
+        // Update max context for the new main model
+        await updateMainModelContext(actualNewId);
     } catch (error) {
         result.error = `Failed to load model: ${error.message}`;
         console.error(`[LM Studio] Failed to load ${actualNewId}:`, error.message);
@@ -763,6 +818,8 @@ module.exports = {
     unloadModel,
     unloadAllModels,
     listLoadedModels,
+    getModelContextLength,
+    updateMainModelContext,
     getServerStatus,
     startLMStudioServer,
     stopLMStudioServer,
