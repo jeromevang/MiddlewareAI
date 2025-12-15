@@ -243,15 +243,6 @@ export function MainModelSelector({
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-center gap-2">
-        <HardDrive className="h-5 w-5 text-green-400" />
-        <div>
-          <h4 className="font-medium text-white">Model Selection</h4>
-          <p className="text-xs text-white/60">Choose your preferred models for this quality tier</p>
-        </div>
-      </div>
-
       {/* Side-by-side Model Selection */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Main Model Selection */}
