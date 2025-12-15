@@ -664,7 +664,7 @@ async function downloadModel(modelId, quantization = DEFAULT_QUANT) {
         console.log(`[ModelDB Download Error] ${modelId}: ${text.trim()}`);
     });
 
-    downloadProcess.on('close', (code) => {
+    downloadProcess.on('close', async (code) => {
         activeDownloads.delete(modelId);
         
         const dbUpdated = loadModelDatabase();
@@ -674,6 +674,22 @@ async function downloadModel(modelId, quantization = DEFAULT_QUANT) {
                 dbUpdated.modelSpecs[modelId].available = true;
                 dbUpdated.modelSpecs[modelId].downloadProgress = null;
                 saveModelDatabase(dbUpdated);
+            }
+            
+            // Auto-load the model after successful download
+            try {
+                console.log(`[ModelDB] Auto-loading downloaded model: ${modelId}`);
+                // Use lazy require to avoid circular dependency
+                const { ensureModelLoaded } = require('./lmstudio/model_manager.js');
+                const actualId = await findLMStudioModelId(modelId);
+                if (actualId) {
+                    await ensureModelLoaded({ identifier: actualId });
+                    console.log(`[ModelDB] Successfully loaded model after download: ${actualId}`);
+                } else {
+                    console.warn(`[ModelDB] Could not find LM Studio ID for downloaded model: ${modelId}`);
+                }
+            } catch (loadError) {
+                console.error(`[ModelDB] Failed to auto-load model after download:`, loadError.message);
             }
         } else {
             console.error(`[ModelDB] Download failed for ${modelId} with code ${code}`);

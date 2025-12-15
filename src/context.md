@@ -40,6 +40,7 @@
   - CLI command now uses `lms get model-name@quant -y` format
   - UI shows "Download Quality" dropdown in Model Configuration section
   - Default quantization is Q4_K_M (balanced size/quality)
+  - **Auto-load after download**: Models are automatically loaded into LM Studio after download completes
 - **Codebase Refactoring**:
   - Created `routes/` folder with modular route files (status, config, lmstudio, models, sessions, rag)
   - Created `models/` folder with split modules (database, presets, matcher, downloader)
