@@ -385,7 +385,7 @@ function TestResultCard({
       <div className="flex items-center gap-2 mb-2">
         <span className="text-lg">{icon}</span>
         <span className="font-medium text-white">{title}</span>
-        <Badge tone={status === "ok" ? "success" : "danger"}>
+        <Badge tone={status === "ok" ? "positive" : "danger"}>
           {status === "ok" ? "Success" : "Failed"}
         </Badge>
       </div>
