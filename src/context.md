@@ -5,6 +5,7 @@
 - Manages integration with LM Studio for embeddings and summarization.
 - Provides utilities for FAISS storage, SQLite caching, and file system operations.
 - Auto-starts background indexing on server startup to populate FAISS/SQLite.
+- Manages model database with curated presets, LLM discovery, and active model tracking.
 
 ## Entry Files
 - `middleware.js`: Main entry point for the rolling summaries + Mini-RAG logic.
@@ -12,6 +13,25 @@
 - `faiss_storage.js`: Manages embeddings using FAISS storage.
 - `sqlite_cache.js`: Handles caching of embeddings and summaries in SQLite.
 - `utils.js`: Contains utility functions like logging, chunk processing, and file system operations.
+- `model_db_service.js`: Manages model database with curated presets, LLM discovery, dynamic re-ranking, and startup validation.
+
+## Recent Changes
+- Added startup model validation that checks preset models against LM Studio downloads
+- Added `lms` CLI integration for model downloads (`lms get <model>`)
+- Models now have `available` flag synced at startup
+- Frontend shows availability badges and download buttons for missing models
+- Added model bootstrap system using TinyAgent-1.1B to analyze and categorize models
+- Bootstrap runs at startup and populates quality presets automatically
+- UI shows loading overlay during bootstrap with progress indicator
+- **Dual Summarizer Architecture**: Split single summarizer into:
+  - RAG Summarizer: Optimized for code chunk summarization during indexing
+  - Rolling Summarizer: Optimized for conversation memory compression
+- Config now has `ragSummarization` and `rollingSummarization` sections
+- UI shows 4 model cards: Embedding, RAG Summarizer, Rolling Summarizer, Main Model
+- **Model ID Matching**: Added intelligent matching between preset IDs and actual LM Studio identifiers
+  - `findLMStudioModelId()` matches preset IDs like `lmstudio-community/Qwen2.5-3B-Instruct-GGUF` to actual downloaded models like `qwen2.5-3b-instruct`
+  - Uses normalized matching, substring matching, and token-based fuzzy matching
+  - Enables selecting models in UI that get properly loaded in LM Studio
 
 ## Dependencies
 - **LM Studio**: For generating embeddings and summaries.

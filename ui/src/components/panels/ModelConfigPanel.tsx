@@ -1,63 +1,24 @@
 import { useState, useEffect } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, listLoadedModels, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels } from "../../lib/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, listLoadedModels, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels, getPresets, setActiveModel, getModelStatus, downloadModel, getBootstrapStatus, triggerBootstrap } from "../../lib/api";
+import type { QualityPreset, ModelAvailability } from "../../lib/api";
+import { SuggestedModelsPanel } from "../ui/SuggestedModelsPanel";
 import { useDashboardStore } from "../../state/dashboard-store";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
 import { ConfirmModal } from "../ui/ConfirmModal";
+import { Cpu, HardDrive, Zap, ChevronDown, ChevronUp, Check, Download, Loader2 } from "lucide-react";
 
-// Quality preset definitions
-const QUALITY_PRESETS = {
-  high: {
-    name: "High Quality",
-    description: "Best models for RTX 5080 - optimal performance and accuracy",
-    models: {
-      embedding: "jinaai/jina-embeddings-v2-base-code",
-      ragSummarizer: "microsoft/Phi-3-mini-4k-instruct",
-      rollingSummarizer: "Qwen/Qwen2.5-1.5B-Instruct",
-      main: ""
-    }
-  },
-  medium: {
-    name: "Balanced",
-    description: "Good performance on RTX 3060+ with reasonable speed",
-    models: {
-      embedding: "sentence-transformers/all-MiniLM-L12-v2",
-      ragSummarizer: "microsoft/Phi-2",
-      rollingSummarizer: "Qwen/Qwen2.5-1.5B-Instruct",
-      main: ""
-    }
-  },
-  low: {
-    name: "Fast & Lightweight",
-    description: "Works on any modern GPU with minimal resources",
-    models: {
-      embedding: "Xenova/all-MiniLM-L6-v2",
-      ragSummarizer: "microsoft/Phi-2",
-      rollingSummarizer: "Qwen/Qwen2.5-1.5B-Instruct",
-      main: ""
-    }
-  }
-};
-
-const AVAILABLE_MODELS = {
-  embedding: [
-    { value: "jinaai/jina-embeddings-v2-base-code", label: "Jina Embeddings v2 Base Code (High Quality)" },
-    { value: "sentence-transformers/all-MiniLM-L12-v2", label: "MiniLM L12 (Balanced)" },
-    { value: "Xenova/all-MiniLM-L6-v2", label: "MiniLM L6 (Fast)" },
-    { value: "nomic-ai/nomic-embed-text-v1.5", label: "Nomic Embed v1.5 (High Quality)" }
-  ],
-  ragSummarizer: [
-    { value: "microsoft/Phi-3-mini-4k-instruct", label: "Phi-3 Mini 4K (High Quality)" },
-    { value: "microsoft/Phi-2", label: "Phi-2 (Balanced)" },
-    { value: "Qwen/Qwen2.5-1.5B-Instruct", label: "Qwen 2.5 1.5B (Fast)" }
-  ],
-  rollingSummarizer: [
-    { value: "Qwen/Qwen2.5-1.5B-Instruct", label: "Qwen 2.5 1.5B (Recommended - Fast)" },
-    { value: "microsoft/Phi-2", label: "Phi-2 (Balanced)" },
-    { value: "microsoft/Phi-3-mini-4k-instruct", label: "Phi-3 Mini (High Quality)" }
-  ]
-};
+// Helper to get display name from model ID
+function getModelDisplayName(modelId: string): string {
+  const parts = modelId.split('/');
+  const name = parts[parts.length - 1];
+  return name
+    .replace(/-GGUF$/i, '')
+    .replace(/@.*$/, '')
+    .replace(/-instruct$/i, ' Instruct')
+    .replace(/-chat$/i, ' Chat');
+}
 
 interface ModelSelection {
   embedding: string;
@@ -87,13 +48,50 @@ export default function ModelConfigPanel() {
   const selectSession = useDashboardStore((s) => s.selectSession);
   const queryClient = useQueryClient();
 
+  // Fetch presets from API
+  const { data: presetsData, isLoading: presetsLoading } = useQuery({
+    queryKey: ['presets'],
+    queryFn: getPresets,
+    staleTime: 30000, // 30 seconds
+  });
+
+  // Fetch model availability status
+  const { data: modelStatusData, refetch: refetchModelStatus } = useQuery({
+    queryKey: ['modelStatus'],
+    queryFn: getModelStatus,
+    staleTime: 10000, // 10 seconds
+    refetchInterval: 15000, // Refresh every 15 seconds
+  });
+
+  const modelAvailability: Record<string, ModelAvailability> = modelStatusData?.availability || {};
+
+  // Fetch bootstrap status
+  const { data: bootstrapData } = useQuery({
+    queryKey: ['bootstrapStatus'],
+    queryFn: getBootstrapStatus,
+    staleTime: 2000, // 2 seconds
+    refetchInterval: (query) => query.state.data?.running ? 1000 : 10000, // Poll faster when running
+  });
+
+  const isBootstrapping = bootstrapData?.running ?? false;
+  const bootstrapProgress = bootstrapData?.progress ?? 0;
+  const bootstrapMessage = bootstrapData?.message ?? '';
+
+  const presets = presetsData?.presets || {
+    high: { name: 'High Quality', description: 'Loading...', embedding: '', ragSummarizer: '', rollingSummarizer: '', mainOptions: [] },
+    medium: { name: 'Balanced', description: 'Loading...', embedding: '', ragSummarizer: '', rollingSummarizer: '', mainOptions: [] },
+    low: { name: 'Fast & Lightweight', description: 'Loading...', embedding: '', ragSummarizer: '', rollingSummarizer: '', mainOptions: [] },
+  };
+  const lastActiveModel = presetsData?.lastActiveModel || '';
+
   const [mode, setMode] = useState<"local" | "cloud">("local");
   const [quality, setQuality] = useState<"high" | "medium" | "low">("high");
+  const [showModelDiscovery, setShowModelDiscovery] = useState(false);
   const [models, setModels] = useState<ModelSelection>({
-    embedding: QUALITY_PRESETS.high.models.embedding,
-    ragSummarizer: QUALITY_PRESETS.high.models.ragSummarizer,
-    rollingSummarizer: QUALITY_PRESETS.high.models.rollingSummarizer,
-    main: QUALITY_PRESETS.high.models.main
+    embedding: "",
+    ragSummarizer: "",
+    rollingSummarizer: "",
+    main: ""
   });
   const [cloudSettings, setCloudSettings] = useState<CloudSettings>({
     googleStudioKey: "",
@@ -126,17 +124,31 @@ export default function ModelConfigPanel() {
     retryable?: boolean;
   } | null>(null);
   const [autoStarting, setAutoStarting] = useState(false);
+  const [errorDismissed, setErrorDismissed] = useState(false);
 
-  // Update models when quality changes
+  // Update models when quality or presets change
   useEffect(() => {
-    const preset = QUALITY_PRESETS[quality];
-    setModels({
-      embedding: preset.models.embedding,
-      ragSummarizer: preset.models.ragSummarizer,
-      rollingSummarizer: preset.models.rollingSummarizer,
-      main: models.main // Keep user-defined main model
-    });
-  }, [quality]);
+    const preset = presets[quality];
+    if (preset && preset.embedding) {
+      setModels(prev => ({
+        embedding: preset.embedding,
+        ragSummarizer: preset.ragSummarizer,
+        rollingSummarizer: preset.rollingSummarizer,
+        main: prev.main || preset.mainOptions?.[0] || lastActiveModel || ''
+      }));
+    }
+  }, [quality, presets, lastActiveModel]);
+
+  // Set initial main model from last active or first option
+  useEffect(() => {
+    if (!models.main && presetsData) {
+      const preset = presets[quality];
+      const initialMain = lastActiveModel || preset?.mainOptions?.[0] || '';
+      if (initialMain) {
+        setModels(prev => ({ ...prev, main: initialMain }));
+      }
+    }
+  }, [presetsData]);
 
   // Load current config on mount
   useEffect(() => {
@@ -148,8 +160,11 @@ export default function ModelConfigPanel() {
       if (config.models?.embedding?.model_name) {
         setModels(prev => ({ ...prev, embedding: config.models.embedding.model_name }));
       }
-      if (config.models?.summarization?.model_name) {
-        setModels(prev => ({ ...prev, rollingSummarizer: config.models.summarization.model_name }));
+      if (config.models?.ragSummarization?.model_name) {
+        setModels(prev => ({ ...prev, ragSummarizer: config.models.ragSummarization.model_name }));
+      }
+      if (config.models?.rollingSummarization?.model_name) {
+        setModels(prev => ({ ...prev, rollingSummarizer: config.models.rollingSummarization.model_name }));
       }
       if (config.models?.main?.model_name) {
         setModels(prev => ({ ...prev, main: config.models.main.model_name }));
@@ -232,18 +247,20 @@ export default function ModelConfigPanel() {
 
   // Show error popup when LM Studio is not available and we haven't shown it recently
   useEffect(() => {
-    if (!lmStudioHealth.ready && lmStudioHealth.error && !lmStudioError) {
+    // Only show error if not dismissed by user
+    if (!lmStudioHealth.ready && lmStudioHealth.error && !lmStudioError && !errorDismissed) {
       setLMStudioError({
         title: "LM Studio Connection Issue",
         description: `Cannot connect to LM Studio: ${lmStudioHealth.error}`,
         action: "Ensure LM Studio is installed and running",
         retryable: true
       });
-    } else if (lmStudioHealth.ready && lmStudioError) {
-      // Clear error when connection is restored
+    } else if (lmStudioHealth.ready) {
+      // Clear error AND reset dismissed flag when connection is restored
       setLMStudioError(null);
+      setErrorDismissed(false);
     }
-  }, [lmStudioHealth.ready, lmStudioHealth.error, lmStudioError]);
+  }, [lmStudioHealth.ready, lmStudioHealth.error, lmStudioError, errorDismissed]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -489,6 +506,66 @@ export default function ModelConfigPanel() {
     },
   });
 
+  const setActiveModelMutation = useMutation({
+    mutationFn: (modelId: string) => setActiveModel(modelId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['presets'] });
+    },
+  });
+
+  // Download model mutation
+  const downloadModelMutation = useMutation({
+    mutationFn: downloadModel,
+    onSuccess: (data) => {
+      setMessage(`✅ ${data.message}`);
+      // Refresh model status after download
+      setTimeout(() => {
+        refetchModelStatus();
+        queryClient.invalidateQueries({ queryKey: ['modelStatus'] });
+      }, 2000);
+      setTimeout(() => setMessage(""), 5000);
+    },
+    onError: (error: Error) => {
+      setMessage(`❌ Download failed: ${error.message}`);
+      setTimeout(() => setMessage(""), 5000);
+    },
+  });
+
+  // Bootstrap mutation
+  const bootstrapMutation = useMutation({
+    mutationFn: triggerBootstrap,
+    onSuccess: () => {
+      setMessage("🔄 Model analysis started...");
+      queryClient.invalidateQueries({ queryKey: ['bootstrapStatus'] });
+      setTimeout(() => setMessage(""), 3000);
+    },
+    onError: (error: Error) => {
+      setMessage(`❌ Bootstrap failed: ${error.message}`);
+      setTimeout(() => setMessage(""), 5000);
+    },
+  });
+
+  const handleMainModelChange = (modelId: string) => {
+    setModels(prev => ({ ...prev, main: modelId }));
+    // Track the active model
+    setActiveModelMutation.mutate(modelId);
+  };
+
+  const handleDownloadModel = (modelId: string) => {
+    setMessage(`⏳ Downloading ${getModelDisplayName(modelId)}...`);
+    downloadModelMutation.mutate(modelId);
+  };
+
+  // Check if a model is available
+  const isModelAvailable = (modelId: string): boolean => {
+    return modelAvailability[modelId]?.available ?? false;
+  };
+
+  // Check if a model is currently downloading
+  const isModelDownloading = (modelId: string): boolean => {
+    return modelAvailability[modelId]?.downloading ?? downloadModelMutation.isPending;
+  };
+
   const handleSave = () => {
     if (!models.main.trim()) {
       setMessage("❌ Please specify a main chat model.");
@@ -508,7 +585,11 @@ export default function ModelConfigPanel() {
             api_key: cloudSettings.googleStudioKey,
             model_name: "text-embedding-3-small"
           },
-          summarization: {
+          ragSummarization: {
+            model_name: models.ragSummarizer,
+            identifier: models.ragSummarizer.split('/').pop()
+          },
+          rollingSummarization: {
             model_name: models.rollingSummarizer,
             identifier: models.rollingSummarizer.split('/').pop()
           },
@@ -535,7 +616,11 @@ export default function ModelConfigPanel() {
             model_name: models.embedding,
             identifier: models.embedding.split('/').pop()
           },
-          summarization: {
+          ragSummarization: {
+            model_name: models.ragSummarizer,
+            identifier: models.ragSummarizer.split('/').pop()
+          },
+          rollingSummarization: {
             model_name: models.rollingSummarizer,
             identifier: models.rollingSummarizer.split('/').pop()
           },
@@ -547,10 +632,6 @@ export default function ModelConfigPanel() {
       };
       mutation.mutate(config);
     }
-  };
-
-  const handleModelChange = (modelType: keyof ModelSelection, value: string) => {
-    setModels(prev => ({ ...prev, [modelType]: value }));
   };
 
   // Maintenance functions
@@ -593,6 +674,24 @@ export default function ModelConfigPanel() {
 
   return (
     <div className="space-y-6">
+      {/* Bootstrap Loading Overlay */}
+      {isBootstrapping && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-gray-900 border border-white/20 rounded-2xl p-8 max-w-md text-center">
+            <Loader2 className="h-12 w-12 animate-spin text-cyan-400 mx-auto" />
+            <h3 className="mt-4 text-xl font-semibold text-white">Analyzing Models</h3>
+            <p className="mt-2 text-sm text-white/70">{bootstrapMessage}</p>
+            <div className="mt-4 w-full bg-white/10 rounded-full h-2">
+              <div 
+                className="bg-cyan-400 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${bootstrapProgress}%` }}
+              />
+            </div>
+            <p className="mt-2 text-xs text-white/50">{bootstrapProgress}% complete</p>
+          </div>
+        </div>
+      )}
+
       {/* Mode Selection */}
       <Card title="Configuration Mode" subtitle="Choose between local models or cloud RAG">
         <div className="space-y-4">
@@ -631,91 +730,211 @@ export default function ModelConfigPanel() {
         <>
           {/* Quality Presets */}
           <Card title="Quality Presets" subtitle="Select a preset to automatically configure optimal models">
-            <div className="grid gap-4 md:grid-cols-3">
-              {Object.entries(QUALITY_PRESETS).map(([key, preset]) => (
-                <div
-                  key={key}
-                  className={`p-4 border rounded-lg cursor-pointer transition-all ${
-                    quality === key
-                      ? 'border-cyan-400 bg-cyan-400/10 shadow-[0_0_20px_rgba(44,212,250,0.1)]'
-                      : 'border-white/15 bg-white/5 hover:border-white/30'
-                  }`}
-                  onClick={() => setQuality(key as "high" | "medium" | "low")}
-                >
-                  <h3 className="font-semibold text-white mb-1">{preset.name}</h3>
-                  <p className="text-sm text-white/70">{preset.description}</p>
-                  {quality === key && (
-                    <div className="mt-2 text-xs text-cyan-400 font-semibold">✓ Selected</div>
-                  )}
+            {presetsLoading ? (
+              <div className="text-center py-8 text-white/60">Loading presets...</div>
+            ) : (
+              <div className="grid gap-4 md:grid-cols-3">
+                {(Object.entries(presets) as [string, QualityPreset][]).map(([key, preset]) => (
+                  <div
+                    key={key}
+                    className={`p-4 border rounded-lg cursor-pointer transition-all ${
+                      quality === key
+                        ? 'border-cyan-400 bg-cyan-400/10 shadow-[0_0_20px_rgba(44,212,250,0.1)]'
+                        : 'border-white/15 bg-white/5 hover:border-white/30'
+                    }`}
+                    onClick={() => setQuality(key as "high" | "medium" | "low")}
+                  >
+                    <h3 className="font-semibold text-white mb-1">{preset.name}</h3>
+                    <p className="text-sm text-white/70">{preset.description}</p>
+                    <div className="mt-2 text-xs text-white/50">
+                      {preset.mainOptions?.length || 0} main models available
+                    </div>
+                    {quality === key && (
+                      <div className="mt-2 text-xs text-cyan-400 font-semibold">✓ Selected</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {/* Model Configuration */}
+          <Card title="Model Configuration" subtitle="Auto-configured based on selected preset">
+            <div className="space-y-6">
+              {/* All 4 models in a grid */}
+              <div className="grid gap-4 md:grid-cols-2">
+                {/* Embedding Model */}
+                <div className="p-4 bg-white/5 border border-white/10 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Cpu className="h-4 w-4 text-cyan-400" />
+                    <label className="text-sm font-semibold text-white">Embedding</label>
+                    <span className="text-xs px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded">CPU</span>
+                  </div>
+                  <div className="text-sm text-white/80">{getModelDisplayName(presets[quality]?.embedding || 'Not set')}</div>
+                  <p className="text-xs text-white/50 mt-1">Vector search embeddings</p>
                 </div>
-              ))}
+
+                {/* RAG Summarizer */}
+                <div className="p-4 bg-white/5 border border-white/10 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Zap className="h-4 w-4 text-amber-400" />
+                    <label className="text-sm font-semibold text-white">RAG Summarizer</label>
+                    <span className="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded">Auto</span>
+                  </div>
+                  <div className="text-sm text-white/80">{getModelDisplayName(presets[quality]?.ragSummarizer || 'Not set')}</div>
+                  <p className="text-xs text-white/50 mt-1">Code chunk summaries</p>
+                </div>
+
+                {/* Rolling Summarizer */}
+                <div className="p-4 bg-white/5 border border-white/10 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Zap className="h-4 w-4 text-purple-400" />
+                    <label className="text-sm font-semibold text-white">Rolling Summarizer</label>
+                    <span className="text-xs px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded">Auto</span>
+                  </div>
+                  <div className="text-sm text-white/80">{getModelDisplayName(presets[quality]?.rollingSummarizer || 'Not set')}</div>
+                  <p className="text-xs text-white/50 mt-1">Conversation memory</p>
+                </div>
+
+                {/* Main Model - Active indicator */}
+                <div className="p-4 bg-gradient-to-r from-cyan-500/10 to-green-500/10 border border-cyan-500/30 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <HardDrive className="h-4 w-4 text-green-400" />
+                    <label className="text-sm font-semibold text-white">Main Model</label>
+                    <span className="text-xs px-2 py-0.5 bg-green-500/20 text-green-400 rounded">Active</span>
+                  </div>
+                  <div className="text-sm text-white font-medium">{getModelDisplayName(models.main || 'Not selected')}</div>
+                  <p className="text-xs text-white/50 mt-1">Chat completions</p>
+                </div>
+              </div>
+
+              {/* Main model selector (user choice) */}
+              <div className="p-4 bg-gradient-to-r from-cyan-500/10 to-purple-500/10 border border-cyan-500/20 rounded-lg">
+                <div className="flex items-center gap-2 mb-3">
+                  <HardDrive className="h-4 w-4 text-cyan-400" />
+                  <label className="text-sm font-semibold text-white">Main Chat Model</label>
+                  <span className="text-xs px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded">Your Choice</span>
+                </div>
+                
+                {/* Model list with availability */}
+                <div className="space-y-2">
+                  {(presets[quality]?.mainOptions || []).map((modelId: string) => {
+                    const available = isModelAvailable(modelId);
+                    const downloading = isModelDownloading(modelId);
+                    const isSelected = models.main === modelId;
+                    
+                    return (
+                      <div
+                        key={modelId}
+                        className={`flex items-center justify-between p-3 rounded-lg border transition-all ${
+                          isSelected
+                            ? 'border-cyan-400 bg-cyan-400/20'
+                            : available
+                            ? 'border-white/20 bg-white/5 hover:bg-white/10 cursor-pointer'
+                            : 'border-white/10 bg-white/5'
+                        }`}
+                        onClick={() => available && handleMainModelChange(modelId)}
+                      >
+                        <div className="flex items-center gap-3">
+                          {/* Status indicator */}
+                          {available ? (
+                            <Check className="h-4 w-4 text-green-400 flex-shrink-0" />
+                          ) : downloading ? (
+                            <Loader2 className="h-4 w-4 text-yellow-400 animate-spin flex-shrink-0" />
+                          ) : (
+                            <Download className="h-4 w-4 text-white/40 flex-shrink-0" />
+                          )}
+                          
+                          <div>
+                            <div className={`text-sm font-medium ${available ? 'text-white' : 'text-white/60'}`}>
+                              {getModelDisplayName(modelId)}
+                            </div>
+                            <div className="text-xs text-white/50">
+                              {modelId.split('/')[0]}
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Action button */}
+                        {!available && !downloading && (
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDownloadModel(modelId);
+                            }}
+                            className="text-xs"
+                          >
+                            <Download className="h-3 w-3 mr-1" />
+                            Download
+                          </Button>
+                        )}
+                        {downloading && (
+                          <span className="text-xs text-yellow-400">Downloading...</span>
+                        )}
+                        {isSelected && available && (
+                          <span className="text-xs text-cyan-400 font-semibold">Selected</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                
+                <p className="text-xs text-white/50 mt-3">
+                  {(presets[quality]?.mainOptions || []).filter((id: string) => isModelAvailable(id)).length} of{' '}
+                  {presets[quality]?.mainOptions?.length || 0} models available for {presets[quality]?.name || quality} tier
+                </p>
+                {models.main && (
+                  <div className="mt-2 text-xs text-green-400">
+                    ✓ Active: {getModelDisplayName(models.main)}
+                  </div>
+                )}
+              </div>
+
+              {/* Why these models? */}
+              <details className="group">
+                <summary className="cursor-pointer text-sm text-white/70 hover:text-white flex items-center gap-2">
+                  <ChevronDown className="h-4 w-4 group-open:hidden" />
+                  <ChevronUp className="h-4 w-4 hidden group-open:block" />
+                  Why these models?
+                </summary>
+                <div className="mt-3 p-4 bg-white/5 rounded-lg text-sm text-white/70 space-y-2">
+                  <p><strong>Embedding:</strong> Runs on CPU via Xenova transformers (no GPU needed). Same for all presets.</p>
+                  <p><strong>Summarizer:</strong> Balances speed and quality for chunk/conversation summaries.</p>
+                  <p><strong>Main:</strong> Your chat model. Pick based on your VRAM and quality needs.</p>
+                </div>
+              </details>
             </div>
           </Card>
 
-          {/* Model Dropdowns */}
-          <Card title="Model Configuration" subtitle="Customize individual models (presets auto-fill these)">
-            <div className="grid gap-6 md:grid-cols-2">
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-white">Embedding Model (RAG)</label>
-                <select
-                  value={models.embedding}
-                  onChange={(e) => handleModelChange("embedding", e.target.value)}
-                  className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white focus:border-cyan-400 focus:outline-none"
-                >
-                  {AVAILABLE_MODELS.embedding.map(model => (
-                    <option key={model.value} value={model.value}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-white/50">Used for semantic search and code understanding</p>
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-white">RAG Summarizer</label>
-                <select
-                  value={models.ragSummarizer}
-                  onChange={(e) => handleModelChange("ragSummarizer", e.target.value)}
-                  className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white focus:border-cyan-400 focus:outline-none"
-                >
-                  {AVAILABLE_MODELS.ragSummarizer.map(model => (
-                    <option key={model.value} value={model.value}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-white/50">Summarizes code chunks during indexing (offline)</p>
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-white">Rolling Summarizer</label>
-                <select
-                  value={models.rollingSummarizer}
-                  onChange={(e) => handleModelChange("rollingSummarizer", e.target.value)}
-                  className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white focus:border-cyan-400 focus:outline-none"
-                >
-                  {AVAILABLE_MODELS.rollingSummarizer.map(model => (
-                    <option key={model.value} value={model.value}>
-                      {model.label}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-xs text-white/50">Maintains conversation memory (real-time)</p>
-              </div>
-
-              <div className="space-y-2">
-                <label className="block text-sm font-semibold text-white">Main Chat Model</label>
-                <input
-                  type="text"
-                  value={models.main}
-                  onChange={(e) => handleModelChange("main", e.target.value)}
-                  className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white focus:border-cyan-400 focus:outline-none"
-                  placeholder="e.g., meta-llama/Llama-3.1-8B-Instruct"
-                />
-                <p className="text-xs text-white/50">Your primary conversational AI model</p>
-              </div>
+          {/* Model Discovery & Re-analyze */}
+          <div className="space-y-3">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => setShowModelDiscovery(!showModelDiscovery)}
+                className="flex items-center gap-2 text-sm text-white/70 hover:text-white transition-colors"
+              >
+                {showModelDiscovery ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                Model Discovery (Advanced)
+              </button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => bootstrapMutation.mutate()}
+                disabled={isBootstrapping || bootstrapMutation.isPending}
+                className="text-xs"
+              >
+                {isBootstrapping ? (
+                  <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                ) : (
+                  <Zap className="h-3 w-3 mr-1" />
+                )}
+                Re-analyze Models
+              </Button>
             </div>
-          </Card>
+            {showModelDiscovery && <SuggestedModelsPanel />}
+          </div>
         </>
       ) : (
         /* Cloud Configuration */
@@ -772,29 +991,35 @@ export default function ModelConfigPanel() {
               <h4 className="font-semibold text-white mb-4">Local Models (still needed)</h4>
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-2">
-                  <label className="block text-sm font-semibold text-white">Rolling Summarizer</label>
-                  <select
-                    value={models.rollingSummarizer}
-                    onChange={(e) => handleModelChange("rollingSummarizer", e.target.value)}
-                    className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white focus:border-cyan-400 focus:outline-none"
-                  >
-                    {AVAILABLE_MODELS.rollingSummarizer.map(model => (
-                      <option key={model.value} value={model.value}>
-                        {model.label}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="block text-sm font-semibold text-white">RAG Summarizer</label>
+                  <div className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white/70">
+                    {getModelDisplayName(presets[quality]?.ragSummarizer || 'Select a quality preset')}
+                  </div>
+                  <p className="text-xs text-white/50">Code chunk summaries</p>
                 </div>
 
                 <div className="space-y-2">
+                  <label className="block text-sm font-semibold text-white">Rolling Summarizer</label>
+                  <div className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white/70">
+                    {getModelDisplayName(presets[quality]?.rollingSummarizer || 'Select a quality preset')}
+                  </div>
+                  <p className="text-xs text-white/50">Conversation memory</p>
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
                   <label className="block text-sm font-semibold text-white">Main Chat Model</label>
-                  <input
-                    type="text"
+                  <select
                     value={models.main}
-                    onChange={(e) => handleModelChange("main", e.target.value)}
+                    onChange={(e) => handleMainModelChange(e.target.value)}
                     className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white focus:border-cyan-400 focus:outline-none"
-                    placeholder="e.g., meta-llama/Llama-3.1-8B-Instruct"
-                  />
+                  >
+                    <option value="">Select a model...</option>
+                    {(presets[quality]?.mainOptions || []).map((modelId: string) => (
+                      <option key={modelId} value={modelId}>
+                        {getModelDisplayName(modelId)}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
             </div>
@@ -1129,7 +1354,9 @@ export default function ModelConfigPanel() {
               setLMStudioError(null);
             }
           }}
-          onCancel={lmStudioError.retryable ? () => setLMStudioError(null) : () => setLMStudioError(null)}
+          onCancel={lmStudioError.retryable 
+            ? () => { setLMStudioError(null); setErrorDismissed(true); } 
+            : () => setLMStudioError(null)}
         />
       )}
     </div>

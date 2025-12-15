@@ -26,26 +26,30 @@ function getCloudHeaders() {
     };
 }
 
-async function summarize(text) {
+/**
+ * Summarize a code chunk for RAG indexing.
+ * Uses a model optimized for code understanding.
+ */
+async function summarizeChunk(text) {
     const requestId = generateRequestId();
     let retries = MAX_RETRIES;
-    const summarizationModel = getModelConfig('summarization');
+    const ragModel = getModelConfig('ragSummarization');
     const truncated = text && text.length > 4000 ? text.slice(0, 4000) : text;
 
     while (retries > 0) {
         try {
-            await ensureModelLoaded(summarizationModel.identifier);
-            console.log(`[LM Studio Request] ${requestId} - Generating summary via chat...`);
+            await ensureModelLoaded(ragModel.identifier);
+            console.log(`[LM Studio Request] ${requestId} - Generating RAG chunk summary...`);
             const response = await withLMStudioLock(() =>
                 axios.post(
                     `${LM_STUDIO_URL}/v1/chat/completions`,
                     {
-                        model: summarizationModel.identifier,
+                        model: ragModel.identifier,
                         messages: [
-                            { role: 'system', content: 'Summarize the following text concisely.' },
+                            { role: 'system', content: 'You are a code documentation expert. Summarize this code chunk concisely, focusing on its purpose, key functions, and important implementation details. Be technical and precise.' },
                             { role: 'user', content: truncated }
                         ],
-                        temperature: 0.2,
+                        temperature: 0.1,
                         stream: false
                     },
                     {
@@ -60,7 +64,7 @@ async function summarize(text) {
                 response.data?.summary;
 
             if (summary) {
-                console.log(`[LM Studio Success] ${requestId} - Summary generated successfully.`);
+                console.log(`[LM Studio Success] ${requestId} - RAG chunk summary generated.`);
                 return summary;
             }
 
@@ -78,6 +82,66 @@ async function summarize(text) {
         }
     }
 }
+
+/**
+ * Summarize conversation history for rolling memory.
+ * Uses a model optimized for context retention and dialogue understanding.
+ */
+async function summarizeConversation(text) {
+    const requestId = generateRequestId();
+    let retries = MAX_RETRIES;
+    const rollingModel = getModelConfig('rollingSummarization');
+    const truncated = text && text.length > 6000 ? text.slice(0, 6000) : text;
+
+    while (retries > 0) {
+        try {
+            await ensureModelLoaded(rollingModel.identifier);
+            console.log(`[LM Studio Request] ${requestId} - Generating rolling conversation summary...`);
+            const response = await withLMStudioLock(() =>
+                axios.post(
+                    `${LM_STUDIO_URL}/v1/chat/completions`,
+                    {
+                        model: rollingModel.identifier,
+                        messages: [
+                            { role: 'system', content: 'You are a conversation memory assistant. Summarize this conversation history, preserving key decisions, code changes discussed, user preferences, and important context. Focus on information that would be useful for continuing the conversation.' },
+                            { role: 'user', content: truncated }
+                        ],
+                        temperature: 0.2,
+                        stream: false
+                    },
+                    {
+                        timeout: LM_STUDIO_TIMEOUT_MS,
+                        headers: { 'Content-Type': 'application/json' },
+                    }
+                )
+            );
+
+            const summary =
+                response.data?.choices?.[0]?.message?.content ||
+                response.data?.summary;
+
+            if (summary) {
+                console.log(`[LM Studio Success] ${requestId} - Rolling summary generated.`);
+                return summary;
+            }
+
+            throw new Error('Invalid summary response format.');
+        } catch (error) {
+            retries--;
+            if (retries === 0) {
+                console.error(`[LM Studio Request Failed] ${requestId} - Max retries reached. Error:`, error.message);
+                throw error;
+            }
+
+            const delay = Math.pow(2, MAX_RETRIES - retries) * 1000;
+            console.log(`[LM Studio Retry] ${requestId} - Retrying in ${delay}ms...`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+}
+
+// Legacy alias for backwards compatibility
+const summarize = summarizeConversation;
 
 async function cloudCompletion({ prompt, systemPrompt = null, temperature = 0.2 }) {
     const cfg = getCloudMainConfig();
@@ -390,6 +454,8 @@ async function proxyChatCompletion(payload, resStream = null) {
 
 module.exports = {
     summarize,
+    summarizeChunk,
+    summarizeConversation,
     generateCompletion,
     proxyChatCompletion,
     cloudCompletion,

@@ -62,7 +62,7 @@ export async function triggerAction(action: "reindex" | "reset" | "lmstudio/rest
 }
 
 export async function saveConfig(payload: Record<string, unknown>) {
-  await request("/config", {
+  await request("/api/config", {
     method: "PATCH",
     body: JSON.stringify(payload),
   });
@@ -233,6 +233,235 @@ export async function refreshModelContext(): Promise<{
       context_budget_tokens: number;
     }
   }>("/lmstudio/context/refresh", {
+    method: "POST",
+  });
+}
+
+// =============================================================================
+// Model Database APIs
+// =============================================================================
+
+export interface ModelSpec {
+  id: string;
+  name: string;
+  author: string;
+  type: 'embedder' | 'summarizer' | 'main';
+  engine: 'cpu' | 'lmstudio';
+  size: string;
+  contextLength: number;
+  description: string;
+  requirements: {
+    vram: string;
+    recommendedHardware: string;
+  };
+  performance: {
+    speed: string;
+    reasoning: string;
+    coding: string;
+    memory: string;
+  };
+  capabilities: string[];
+  tags: string[];
+  suggestedTier?: string;
+  suggestedAt?: string;
+  status?: string;
+}
+
+export interface QualityPreset {
+  name: string;
+  description: string;
+  embedding: string;
+  ragSummarizer: string;
+  rollingSummarizer: string;
+  mainOptions: string[];
+}
+
+export interface PresetsResponse {
+  presets: {
+    high: QualityPreset;
+    medium: QualityPreset;
+    low: QualityPreset;
+  };
+  lastActiveModel: string | null;
+}
+
+export interface SuggestedModelsResponse {
+  suggested: ModelSpec[];
+}
+
+export interface DiscoveryResponse {
+  status: string;
+  discovered: number;
+  models: ModelSpec[];
+}
+
+/**
+ * Get all quality presets with their model options
+ */
+export async function getPresets(): Promise<PresetsResponse> {
+  return request<PresetsResponse>("/models/presets");
+}
+
+/**
+ * Get detailed spec for a specific model
+ */
+export async function getModelSpec(modelId: string): Promise<ModelSpec> {
+  return request<ModelSpec>(`/models/specs/${encodeURIComponent(modelId)}`);
+}
+
+/**
+ * Get models pending approval
+ */
+export async function getSuggestedModels(): Promise<SuggestedModelsResponse> {
+  return request<SuggestedModelsResponse>("/models/suggested");
+}
+
+/**
+ * Set the currently active main model
+ */
+export async function setActiveModel(modelId: string): Promise<{ status: string; lastActiveModel: string }> {
+  return request<{ status: string; lastActiveModel: string }>("/models/active", {
+    method: "POST",
+    body: JSON.stringify({ modelId }),
+  });
+}
+
+/**
+ * Trigger LLM discovery for new models
+ */
+export async function discoverModels(): Promise<DiscoveryResponse> {
+  return request<DiscoveryResponse>("/models/discover", {
+    method: "POST",
+  });
+}
+
+/**
+ * Approve a suggested model into a preset tier
+ */
+export async function approveModel(
+  modelId: string,
+  quality: 'high' | 'medium' | 'low'
+): Promise<{ status: string; preset: QualityPreset }> {
+  return request<{ status: string; preset: QualityPreset }>(
+    `/models/approve/${encodeURIComponent(modelId)}`,
+    {
+      method: "POST",
+      body: JSON.stringify({ quality }),
+    }
+  );
+}
+
+/**
+ * Dismiss a suggested model
+ */
+export async function dismissModel(modelId: string): Promise<{ status: string; remaining: number }> {
+  return request<{ status: string; remaining: number }>(
+    `/models/dismiss/${encodeURIComponent(modelId)}`,
+    {
+      method: "POST",
+    }
+  );
+}
+
+/**
+ * Trigger LLM to evaluate and re-rank models for a quality tier
+ */
+export async function evaluateModels(
+  quality: 'high' | 'medium' | 'low',
+  performanceData?: Record<string, { score: number }>
+): Promise<{ status: string; mainOptions: string[] }> {
+  return request<{ status: string; mainOptions: string[] }>("/models/evaluate", {
+    method: "POST",
+    body: JSON.stringify({ quality, performanceData }),
+  });
+}
+
+// =============================================================================
+// Model Download & Availability APIs
+// =============================================================================
+
+export interface ModelAvailability {
+  available: boolean;
+  downloading: boolean;
+}
+
+export interface ModelStatusResponse {
+  status: string;
+  availability: Record<string, ModelAvailability>;
+  activeDownloads: Record<string, { status: string; startedAt: number }>;
+}
+
+export interface DownloadResponse {
+  status: string;
+  message: string;
+}
+
+export interface ValidateResponse {
+  status: string;
+  available: string[];
+  missing: string[];
+  discovered: number;
+}
+
+/**
+ * Download a model via LM Studio CLI
+ */
+export async function downloadModel(modelId: string): Promise<DownloadResponse> {
+  return request<DownloadResponse>(
+    `/models/download/${encodeURIComponent(modelId)}`,
+    {
+      method: "POST",
+    }
+  );
+}
+
+/**
+ * Get availability status for all preset models
+ */
+export async function getModelStatus(): Promise<ModelStatusResponse> {
+  return request<ModelStatusResponse>("/models/status");
+}
+
+/**
+ * Re-validate all presets against downloaded models
+ */
+export async function validateModels(): Promise<ValidateResponse> {
+  return request<ValidateResponse>("/models/validate", {
+    method: "POST",
+  });
+}
+
+// =============================================================================
+// Bootstrap APIs
+// =============================================================================
+
+export interface BootstrapStatus {
+  status: string;
+  running: boolean;
+  progress: number;
+  message: string;
+  startedAt: number | null;
+  completedAt: number | null;
+  error: string | null;
+}
+
+export interface BootstrapResponse {
+  status: string;
+  message: string;
+}
+
+/**
+ * Get current bootstrap status
+ */
+export async function getBootstrapStatus(): Promise<BootstrapStatus> {
+  return request<BootstrapStatus>("/models/bootstrap-status");
+}
+
+/**
+ * Trigger model bootstrap process
+ */
+export async function triggerBootstrap(): Promise<BootstrapResponse> {
+  return request<BootstrapResponse>("/models/bootstrap", {
     method: "POST",
   });
 }

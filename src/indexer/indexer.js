@@ -5,7 +5,7 @@ const path = require('path');
 const { CodeChunkGenerator, logInfo: utilsLogInfo, logWarning: utilsLogWarning, logError: utilsLogError } = require('../utils.js');
 const { SQLiteCacheManager } = require('../sqlite_cache.js');
 const { FAISSIndexManager } = require('../faiss_storage.js');
-const { embedText, summarize } = require('../lmstudio_client.js');
+const { embedText, summarizeChunk } = require('../lmstudio_client.js');
 const { getProcessingConfig, getModelConfig } = require('../config.js');
 const { isCloudMode } = require('../runtime.js');
 const { generateChunkHash } = require('../chunk_utils.js');
@@ -13,7 +13,7 @@ const { generateChunkHash } = require('../chunk_utils.js');
 const sqliteCacheManager = new SQLiteCacheManager();
 const faissIndexManager = new FAISSIndexManager();
 const processingConfig = getProcessingConfig();
-const summarizationModel = getModelConfig('summarization');
+const ragSummarizationModel = getModelConfig('ragSummarization');
 
 const MAX_CHUNK_SIZE = Math.min(processingConfig.max_chunk_size || 400, 400);
 const CONCURRENCY_LIMIT = 1;
@@ -102,7 +102,7 @@ async function processChunk(chunkId, content, filePath, modelVersion, language =
         }
         fallbackLogInfo(`[Embedding] Generated for chunk ${chunkId}`);
 
-        const summaryText = await summarize(content);
+        const summaryText = await summarizeChunk(content);
         throwIfAborted(signal);
         fallbackLogInfo(`[Summary] Generated for chunk ${chunkId}`);
 
@@ -178,7 +178,7 @@ async function cleanupDeletedChunks(signal = null) {
     await faissIndexManager.rebuild(validEntries);
 }
 
-async function runIndexer({ modelVersion = summarizationModel.identifier, signal = null } = {}) {
+async function runIndexer({ modelVersion = ragSummarizationModel.identifier, signal = null } = {}) {
     if (isCloudMode()) {
         fallbackLogInfo('[Middleware] Cloud mode active; skipping indexing and FAISS updates.');
         return;
@@ -186,7 +186,7 @@ async function runIndexer({ modelVersion = summarizationModel.identifier, signal
 
     await ensureStoresInitialized();
     throwIfAborted(signal);
-    const resolvedVersion = modelVersion || summarizationModel.identifier;
+    const resolvedVersion = modelVersion || ragSummarizationModel.identifier;
     fallbackLogInfo(`[Middleware] Processing files using model version: ${resolvedVersion}`);
 
     await cleanupDeletedChunks(signal);

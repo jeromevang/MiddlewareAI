@@ -9,7 +9,7 @@ const proxiedRoutes = [
   "/metrics",
   "/logs",
   "/history",
-  "/config",
+  "/api/config",
   "/telemetry",
   "/sessions",
   "/engines",
@@ -20,6 +20,7 @@ const proxiedRoutes = [
   "/query",
   "/v1",
   "/chat",
+  "/models",
 ];
 
 export default defineConfig(({ command }) => {

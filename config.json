@@ -12,22 +12,22 @@
     }
   },
   "models": {
-    "force_model": false,
     "embedding": {
       "engine": "local",
       "model_name": "Xenova/all-MiniLM-L6-v2",
-      "identifier": "all-MiniLM-L6-v2",
-      "context_length": 512
+      "identifier": "all-MiniLM-L6-v2"
     },
-    "summarization": {
-      "model_name": "TheBloke/OpenHermes-2.5-Mistral-7B-GGUF",
-      "identifier": "openhermes-2.5-mistral-7b",
-      "context_length": 8192
+    "ragSummarization": {
+      "model_name": "lmstudio-community/Phi-3-mini-4k-instruct-GGUF",
+      "identifier": "Phi-3-mini-4k-instruct-GGUF"
+    },
+    "rollingSummarization": {
+      "model_name": "lmstudio-community/Qwen2.5-3B-Instruct-GGUF",
+      "identifier": "Qwen2.5-3B-Instruct-GGUF"
     },
     "main": {
       "model_name": "osmosis-ai/osmosis-mcp-4b",
-      "identifier": "osmosis-mcp-4b@q4_k_s",
-      "context_length": 15055
+      "identifier": "osmosis-mcp-4b"
     }
   },
   "processing": {
@@ -50,15 +50,7 @@
     "api_key": ""
   },
   "runtime": {
-    "mode": "local",
-    "mode_switch": {
-      "require_health": true
-    },
-    "cloud_main": {
-      "base_url": "https://api.openai.com/v1",
-      "api_key": "",
-      "model": "gpt-4o-mini"
-    }
+    "mode": "local"
   },
   "engines": {
     "rag": {

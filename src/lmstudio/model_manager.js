@@ -24,9 +24,11 @@ function resolveModelNames(modelOrId) {
     if (typeof modelOrId === 'string') {
         return { identifier: modelOrId, loadName: modelOrId, engine: 'lmstudio' };
     }
+    // Prioritize identifier (which may have been resolved to the actual LM Studio model ID)
+    const identifier = modelOrId.identifier || modelOrId.model_name || '';
     return {
-        identifier: modelOrId.identifier || modelOrId.model_name || '',
-        loadName: modelOrId.model_name || modelOrId.identifier || '',
+        identifier,
+        loadName: identifier, // Use identifier as loadName to ensure we use the resolved ID
         engine: modelOrId.engine || 'lmstudio',
     };
 }
@@ -336,22 +338,35 @@ async function checkLMStudioHealth() {
 
 async function ensureRequiredModelsLoaded() {
     const { getModelConfig } = require('../config.js');
+    const { findLMStudioModelId } = require('../model_db_service.js');
 
-    const requiredModels = [
-        getModelConfig('main'),
-        getModelConfig('summarization')
-    ].filter(model => model && model.identifier);
+    // Load all required models: main + both summarizers
+    const modelConfigs = [];
 
-    console.log('[LM Studio] Ensuring required models are loaded:', requiredModels.map(m => m.identifier));
+    try { modelConfigs.push({ type: 'main', config: getModelConfig('main') }); } catch (e) { console.warn('[LM Studio] Main model not configured'); }
+    try { modelConfigs.push({ type: 'ragSummarization', config: getModelConfig('ragSummarization') }); } catch (e) { console.warn('[LM Studio] RAG summarization model not configured'); }
+    try { modelConfigs.push({ type: 'rollingSummarization', config: getModelConfig('rollingSummarization') }); } catch (e) { console.warn('[LM Studio] Rolling summarization model not configured'); }
 
-    for (const model of requiredModels) {
+    const requiredModels = modelConfigs.filter(m => m.config && m.config.identifier);
+
+    console.log('[LM Studio] Ensuring required models are loaded:', requiredModels.map(m => m.config.identifier));
+
+    for (const { type, config } of requiredModels) {
         try {
-            console.log(`[LM Studio] Loading model: ${model.identifier}`);
-            await ensureModelLoaded(model);
-            console.log(`[LM Studio] Successfully loaded model: ${model.identifier}`);
+            // Find the actual LM Studio model ID
+            const actualId = await findLMStudioModelId(config.identifier);
+            
+            if (!actualId) {
+                console.warn(`[LM Studio] Could not find LM Studio model matching: ${config.identifier} (${type})`);
+                continue;
+            }
+            
+            console.log(`[LM Studio] Loading model: ${actualId} (from config: ${config.identifier})`);
+            await ensureModelLoaded({ ...config, identifier: actualId });
+            console.log(`[LM Studio] Successfully loaded model: ${actualId}`);
         } catch (error) {
-            console.error(`[LM Studio] Failed to load model ${model.identifier}:`, error.message);
-            throw error;
+            console.error(`[LM Studio] Failed to load model ${config.identifier}:`, error.message);
+            // Don't throw - continue loading other models
         }
     }
 

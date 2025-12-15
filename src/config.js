@@ -39,7 +39,7 @@ function validateConfig(config) {
         }
     }
 
-    const requiredModels = ['embedding', 'summarization', 'main'];
+    const requiredModels = ['embedding', 'ragSummarization', 'rollingSummarization', 'main'];
     for (const modelKey of requiredModels) {
         const model = config.models[modelKey];
         if (!model || !model.identifier) {

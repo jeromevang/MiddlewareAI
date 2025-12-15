@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { embedText: embedTextLMStudio } = require('./lmstudio/embeddings.js');
-const { summarize, generateCompletion, proxyChatCompletion } = require('./lmstudio/chat.js');
+const { summarize, summarizeChunk, summarizeConversation, generateCompletion, proxyChatCompletion } = require('./lmstudio/chat.js');
 const { warmModel, warmEmbeddingModel, waitForModelsLoaded, openModel, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, waitForServerReady, ensureRequiredModelsLoaded, initializeLMStudioWithModels } = require('./lmstudio/model_manager.js');
 const { embedTextLocal, embedTextCloud } = require('./embedder_local.js');
 const { getModelConfig } = require('./config.js');
@@ -27,6 +27,8 @@ async function embedText(text) {
 module.exports = {
     embedText,
     summarize,
+    summarizeChunk,
+    summarizeConversation,
     generateCompletion,
     proxyChatCompletion,
     warmModel,

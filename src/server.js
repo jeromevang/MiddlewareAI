@@ -24,7 +24,7 @@ const http = require('http');
 const crypto = require('crypto');
 const WebSocketLib = require('ws');
 const { WebSocketServer } = WebSocketLib;
-const { embedText, summarize, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, initializeLMStudioWithModels } = require('./lmstudio_client.js');
+const { embedText, summarizeConversation, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, initializeLMStudioWithModels } = require('./lmstudio_client.js');
 const { SQLiteCacheManager } = require('./sqlite_cache.js');
 const { FAISSIndexManager } = require('./faiss_storage.js');
 const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js');
@@ -51,6 +51,24 @@ const {
     incrementRagBypass,
     resetRagBypassCount,
 } = require('./engine_state.js');
+const {
+    getPresets,
+    getPreset,
+    getModelSpec,
+    getAllModelSpecs,
+    getLastActiveModel,
+    setActiveModel,
+    getSuggestedModels,
+    approveModel,
+    dismissSuggestedModel,
+    discoverAndAnalyzeModels,
+    reRankPresetModels,
+    initializeModelDatabase,
+    downloadModel: downloadModelFromDB,
+    getModelAvailability,
+    getActiveDownloads,
+} = require('./model_db_service.js');
+const { runBootstrap, getBootstrapStatus } = require('./model_bootstrap.js');
 
 // Global error logging to avoid silent crashes (opt-in via debug logger)
 process.on('unhandledRejection', (err) => {
@@ -86,7 +104,8 @@ app.use(express.json({ limit: '2mb' }));
 const sqliteCacheManager = new SQLiteCacheManager();
 const faissIndexManager = new FAISSIndexManager();
 const processingConfig = getProcessingConfig();
-const summarizationModel = getModelConfig('summarization');
+const ragSummarizationModel = getModelConfig('ragSummarization');
+const rollingSummarizationModel = getModelConfig('rollingSummarization');
 const serverConfig = (getConfig().server || {});
 const embeddingModelCfg = getModelConfig('embedding');
 const mainModelCfg = getModelConfig('main');
@@ -774,7 +793,8 @@ async function buildStatusPayload() {
         },
         models: {
             embedding: modelSummary(embeddingModelCfg, { embedding_dimension: storageCfg.embedding_dimension }),
-            summarization: modelSummary(summarizationModel),
+            ragSummarization: modelSummary(ragSummarizationModel),
+            rollingSummarization: modelSummary(rollingSummarizationModel),
             main: modelSummary(mainModelCfg),
         },
         storage: {
@@ -805,7 +825,8 @@ function buildMetricsPayload() {
         engines: getEnginesSnapshot(),
         models: {
             embedding: modelSummary(embeddingModelCfg, { embedding_dimension: storageCfg.embedding_dimension }),
-            summarization: modelSummary(summarizationModel),
+            ragSummarization: modelSummary(ragSummarizationModel),
+            rollingSummarization: modelSummary(rollingSummarizationModel),
             main: modelSummary(mainModelCfg),
         },
         storage: {
@@ -896,7 +917,7 @@ async function recomputeRollingSummary(conversationId, keepRecentTurns) {
         if (!eligibleTurns.length) {
             await sqliteCacheManager.saveRollingSummary(
                 '',
-                summarizationModel.identifier,
+                rollingSummarizationModel.identifier,
                 conversationId,
                 0
             );
@@ -918,18 +939,18 @@ async function recomputeRollingSummary(conversationId, keepRecentTurns) {
         if (!transcript) {
             await sqliteCacheManager.saveRollingSummary(
                 '',
-                summarizationModel.identifier,
+                rollingSummarizationModel.identifier,
                 conversationId,
                 eligibleTurns.length
             );
             return { summary: '', turnCount: eligibleTurns.length, totalTurns };
         }
 
-        const newSummaryRaw = await summarize(transcript);
+        const newSummaryRaw = await summarizeConversation(transcript);
         const cleanedSummary = sanitizeSummaryText(newSummaryRaw);
         await sqliteCacheManager.saveRollingSummary(
             cleanedSummary,
-            summarizationModel.identifier,
+            rollingSummarizationModel.identifier,
             conversationId,
             eligibleTurns.length
         );
@@ -966,11 +987,11 @@ app.get('/history', async (req, res) => {
     res.json(recentRequests.slice(-limit));
 });
 
-app.get('/config', async (_req, res) => {
+app.get('/api/config', async (_req, res) => {
     res.json(getRedactedConfig());
 });
 
-app.patch('/config', async (req, res) => {
+app.patch('/api/config', async (req, res) => {
     try {
         const cfgPath = path.join(__dirname, '../config.json');
         const current = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
@@ -1159,6 +1180,262 @@ app.post('/lmstudio/models/load-required', async (req, res) => {
     } catch (error) {
         console.error('[API] Failed to load required models:', error.message);
         res.status(500).json({ error: 'Failed to load required models', details: error.message });
+    }
+});
+
+// =============================================================================
+// Model Database API Endpoints
+// =============================================================================
+
+/**
+ * GET /models/presets - Get all quality presets with their model options
+ */
+app.get('/models/presets', async (req, res) => {
+    try {
+        const presets = getPresets();
+        const lastActive = getLastActiveModel();
+        res.json({ presets, lastActiveModel: lastActive });
+    } catch (error) {
+        console.error('[API] Failed to get presets:', error.message);
+        res.status(500).json({ error: 'Failed to get presets', details: error.message });
+    }
+});
+
+/**
+ * GET /models/specs/:id - Get detailed spec for a specific model
+ */
+app.get('/models/specs/:id', async (req, res) => {
+    try {
+        const modelId = decodeURIComponent(req.params.id);
+        const spec = getModelSpec(modelId);
+        if (!spec) {
+            return res.status(404).json({ error: 'Model not found', modelId });
+        }
+        res.json(spec);
+    } catch (error) {
+        console.error('[API] Failed to get model spec:', error.message);
+        res.status(500).json({ error: 'Failed to get model spec', details: error.message });
+    }
+});
+
+/**
+ * GET /models/suggested - Get models pending approval
+ */
+app.get('/models/suggested', async (req, res) => {
+    try {
+        const suggested = getSuggestedModels();
+        res.json({ suggested });
+    } catch (error) {
+        console.error('[API] Failed to get suggested models:', error.message);
+        res.status(500).json({ error: 'Failed to get suggested models', details: error.message });
+    }
+});
+
+/**
+ * POST /models/active - Set the currently active main model and load it in LM Studio
+ */
+app.post('/models/active', async (req, res) => {
+    try {
+        const { modelId } = req.body || {};
+        if (!modelId) {
+            return res.status(400).json({ error: 'modelId required' });
+        }
+
+        // Save to database (store the original modelId for display purposes)
+        const result = setActiveModel(modelId);
+        appendLog(`Active model set to: ${modelId}`, 'info');
+
+        // Find the actual LM Studio model ID (may differ from preset ID)
+        const { findLMStudioModelId } = require('./model_db_service.js');
+        const actualModelId = await findLMStudioModelId(modelId);
+        
+        if (!actualModelId) {
+            console.warn(`[API] Could not find LM Studio model matching: ${modelId}`);
+            return res.json({ 
+                status: 'ok', 
+                lastActiveModel: result,
+                warning: 'Model set but not found in LM Studio. It may need to be downloaded first.'
+            });
+        }
+
+        // Load the model in LM Studio using the actual ID
+        try {
+            const { ensureModelLoaded } = require('./lmstudio/model_manager.js');
+            console.log(`[API] Loading model in LM Studio: ${actualModelId} (from: ${modelId})`);
+            await ensureModelLoaded({ identifier: actualModelId });
+            appendLog(`Model loaded in LM Studio: ${actualModelId}`, 'info');
+        } catch (loadError) {
+            console.warn(`[API] Model set but failed to load in LM Studio: ${loadError.message}`);
+            return res.json({ 
+                status: 'ok', 
+                lastActiveModel: result,
+                warning: `Model set but failed to load: ${loadError.message}`
+            });
+        }
+
+        res.json({ status: 'ok', lastActiveModel: result, loadedModel: actualModelId });
+    } catch (error) {
+        console.error('[API] Failed to set active model:', error.message);
+        res.status(500).json({ error: 'Failed to set active model', details: error.message });
+    }
+});
+
+/**
+ * POST /models/discover - Trigger LLM discovery for new models
+ */
+app.post('/models/discover', async (req, res) => {
+    try {
+        appendLog('Starting model discovery...', 'info');
+        const newModels = await discoverAndAnalyzeModels(generateCompletion);
+        appendLog(`Model discovery complete. Found ${newModels.length} new models.`, 'info');
+        res.json({ status: 'ok', discovered: newModels.length, models: newModels });
+    } catch (error) {
+        console.error('[API] Model discovery failed:', error.message);
+        res.status(500).json({ error: 'Model discovery failed', details: error.message });
+    }
+});
+
+/**
+ * POST /models/approve/:id - Approve a suggested model into a preset tier
+ */
+app.post('/models/approve/:id', async (req, res) => {
+    try {
+        const modelId = decodeURIComponent(req.params.id);
+        const { quality } = req.body || {};
+        if (!quality || !['high', 'medium', 'low'].includes(quality)) {
+            return res.status(400).json({ error: 'quality must be "high", "medium", or "low"' });
+        }
+        const updatedPreset = approveModel(modelId, quality);
+        appendLog(`Model approved: ${modelId} for ${quality} tier`, 'info');
+        res.json({ status: 'ok', preset: updatedPreset });
+    } catch (error) {
+        console.error('[API] Failed to approve model:', error.message);
+        res.status(500).json({ error: 'Failed to approve model', details: error.message });
+    }
+});
+
+/**
+ * POST /models/dismiss/:id - Dismiss a suggested model
+ */
+app.post('/models/dismiss/:id', async (req, res) => {
+    try {
+        const modelId = decodeURIComponent(req.params.id);
+        const remaining = dismissSuggestedModel(modelId);
+        appendLog(`Suggested model dismissed: ${modelId}`, 'info');
+        res.json({ status: 'ok', remaining: remaining.length });
+    } catch (error) {
+        console.error('[API] Failed to dismiss model:', error.message);
+        res.status(500).json({ error: 'Failed to dismiss model', details: error.message });
+    }
+});
+
+/**
+ * POST /models/evaluate - Trigger LLM to evaluate and re-rank models
+ */
+app.post('/models/evaluate', async (req, res) => {
+    try {
+        const { quality, performanceData } = req.body || {};
+        if (!quality || !['high', 'medium', 'low'].includes(quality)) {
+            return res.status(400).json({ error: 'quality must be "high", "medium", or "low"' });
+        }
+        const reRanked = reRankPresetModels(quality, performanceData || {});
+        appendLog(`Models re-ranked for ${quality} tier`, 'info');
+        res.json({ status: 'ok', mainOptions: reRanked });
+    } catch (error) {
+        console.error('[API] Failed to evaluate models:', error.message);
+        res.status(500).json({ error: 'Failed to evaluate models', details: error.message });
+    }
+});
+
+/**
+ * POST /models/download/:id - Download a model via LM Studio CLI
+ */
+app.post('/models/download/:id', async (req, res) => {
+    try {
+        const modelId = decodeURIComponent(req.params.id);
+        appendLog(`Starting model download: ${modelId}`, 'info');
+        
+        // Start download (async, will complete in background)
+        const result = await downloadModelFromDB(modelId);
+        
+        if (result.success) {
+            appendLog(`Model download completed: ${modelId}`, 'info');
+            res.json({ status: 'ok', message: result.message });
+        } else {
+            appendLog(`Model download failed: ${modelId} - ${result.message}`, 'warn');
+            res.status(500).json({ error: 'Download failed', details: result.message });
+        }
+    } catch (error) {
+        console.error('[API] Failed to download model:', error.message);
+        res.status(500).json({ error: 'Failed to download model', details: error.message });
+    }
+});
+
+/**
+ * GET /models/status - Get availability status for all preset models
+ */
+app.get('/models/status', async (req, res) => {
+    try {
+        const availability = getModelAvailability();
+        const downloads = getActiveDownloads();
+        res.json({ status: 'ok', availability, activeDownloads: downloads });
+    } catch (error) {
+        console.error('[API] Failed to get model status:', error.message);
+        res.status(500).json({ error: 'Failed to get model status', details: error.message });
+    }
+});
+
+/**
+ * POST /models/validate - Re-validate all presets against downloaded models
+ */
+app.post('/models/validate', async (req, res) => {
+    try {
+        const { initializeModelDatabase: initDB } = require('./model_db_service.js');
+        const result = await initDB();
+        appendLog(`Model validation complete: ${result.available.length} available, ${result.missing.length} missing`, 'info');
+        res.json({ status: 'ok', ...result });
+    } catch (error) {
+        console.error('[API] Failed to validate models:', error.message);
+        res.status(500).json({ error: 'Failed to validate models', details: error.message });
+    }
+});
+
+/**
+ * GET /models/bootstrap-status - Get current bootstrap status
+ */
+app.get('/models/bootstrap-status', (req, res) => {
+    try {
+        const status = getBootstrapStatus();
+        res.json({ status: 'ok', ...status });
+    } catch (error) {
+        console.error('[API] Failed to get bootstrap status:', error.message);
+        res.status(500).json({ error: 'Failed to get bootstrap status', details: error.message });
+    }
+});
+
+/**
+ * POST /models/bootstrap - Trigger model bootstrap process
+ */
+app.post('/models/bootstrap', async (req, res) => {
+    try {
+        const modelDbService = require('./model_db_service.js');
+        appendLog('Starting model bootstrap...', 'info');
+        
+        // Run bootstrap in background, return immediately
+        runBootstrap(modelDbService).then(result => {
+            if (result.success) {
+                appendLog(`Bootstrap complete: ${result.message}`, 'info');
+            } else {
+                appendLog(`Bootstrap failed: ${result.message}`, 'warn');
+            }
+        }).catch(error => {
+            appendLog(`Bootstrap error: ${error.message}`, 'error');
+        });
+        
+        res.json({ status: 'ok', message: 'Bootstrap started' });
+    } catch (error) {
+        console.error('[API] Failed to start bootstrap:', error.message);
+        res.status(500).json({ error: 'Failed to start bootstrap', details: error.message });
     }
 });
 
@@ -1950,6 +2227,32 @@ async function start() {
         } catch (error) {
             console.warn('[Server] LM Studio initialization failed, continuing without models:', error.message);
             console.warn('[Server] You may need to start LM Studio manually and load models');
+        }
+
+        // Initialize model database (validate presets, check availability)
+        console.log('[Server] Initializing model database...');
+        try {
+            const { available, missing, discovered } = await initializeModelDatabase();
+            console.log(`[Server] Model database initialized: ${available.length} available, ${missing.length} missing, ${discovered} discovered`);
+            if (missing.length > 0) {
+                console.log('[Server] Missing models:', missing.slice(0, 5).join(', ') + (missing.length > 5 ? '...' : ''));
+            }
+        } catch (error) {
+            console.warn('[Server] Model database initialization failed:', error.message);
+        }
+
+        // Run model bootstrap (analyzes models and populates presets)
+        console.log('[Server] Running model bootstrap...');
+        try {
+            const modelDbService = require('./model_db_service.js');
+            const bootstrapResult = await runBootstrap(modelDbService);
+            if (bootstrapResult.success) {
+                console.log(`[Server] Bootstrap complete: ${bootstrapResult.message}`);
+            } else {
+                console.warn(`[Server] Bootstrap incomplete: ${bootstrapResult.message}`);
+            }
+        } catch (error) {
+            console.warn('[Server] Model bootstrap failed:', error.message);
         }
 
         const config = getConfig();
