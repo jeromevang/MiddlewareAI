@@ -12,10 +12,11 @@
     }
   },
   "models": {
+    "activePreset": "low",
     "perQualityMainModels": {
-      "high": "",
-      "medium": "",
-      "low": "llama-3.2-1b-instruct"
+      "high": "qwen/qwen3-14b",
+      "medium": "qwen/qwen3-8b",
+      "low": "qwen/qwen3-4b-2507"
     },
     "embedding": {
       "engine": "local",
@@ -23,16 +24,16 @@
       "identifier": "all-MiniLM-L6-v2"
     },
     "ragSummarization": {
-      "model_name": "lmstudio-community/Qwen2.5-1.5B-Instruct-GGUF",
-      "identifier": "Qwen2.5-1.5B-Instruct-GGUF"
+      "model_name": "qwen2.5-coder-1.5b-instruct",
+      "identifier": "qwen2.5-coder-1.5b-instruct"
     },
     "rollingSummarization": {
-      "model_name": "lmstudio-community/Qwen2.5-1.5B-Instruct-GGUF",
-      "identifier": "Qwen2.5-1.5B-Instruct-GGUF"
+      "model_name": "qwen2.5-coder-0.5b-instruct",
+      "identifier": "qwen2.5-coder-0.5b-instruct"
     },
     "main": {
-      "model_name": "llama-3.2-1b-instruct",
-      "identifier": "llama-3.2-1b-instruct"
+      "model_name": "qwen/qwen3-4b-2507",
+      "identifier": "qwen/qwen3-4b-2507"
     }
   },
   "processing": {

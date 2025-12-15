@@ -10,15 +10,25 @@ import { ConfirmModal } from "../ui/ConfirmModal";
 import { Cpu, HardDrive, Zap, ChevronDown, ChevronUp, Check, Download, Loader2 } from "lucide-react";
 import { DownloadProgress } from "../ui/DownloadProgress";
 
-// Helper to get display name from model ID
+// Helper to get display name from modelKey
+// Now handles exact modelKeys like "qwen/qwen3-8b" or "qwen2.5-coder-1.5b-instruct"
 function getModelDisplayName(modelId: string): string {
+  if (!modelId) return 'Not set';
+  
+  // For modelKeys with publisher (e.g., "qwen/qwen3-8b")
   const parts = modelId.split('/');
-  const name = parts[parts.length - 1];
-  return name
+  let name = parts[parts.length - 1];
+  
+  // Clean up common suffixes
+  name = name
     .replace(/-GGUF$/i, '')
-    .replace(/@.*$/, '')
-    .replace(/-instruct$/i, ' Instruct')
-    .replace(/-chat$/i, ' Chat');
+    .replace(/@.*$/, '')  // Remove quantization suffix
+    .split('-')
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+    .replace(/(\d+)b/gi, '$1B'); // Format model sizes
+  
+  return name;
 }
 
 interface ModelSelection {
@@ -535,12 +545,12 @@ export default function ModelConfigPanel() {
 
         setModels(prev => ({ ...prev, main: selectedModel }));
         setActiveModelMutation.mutate(selectedModel);
-        // Persist the selection
+        // Persist the selection with exact modelKey
         mutation.mutate({
           models: {
             main: {
               model_name: selectedModel,
-              identifier: selectedModel.split('/').pop()
+              identifier: selectedModel  // Use exact modelKey
             }
           }
         });
@@ -621,7 +631,7 @@ export default function ModelConfigPanel() {
         perQualityMainModels: currentPerQuality,
         main: {
           model_name: modelId,
-          identifier: modelId.split('/').pop()
+          identifier: modelId  // Use exact modelKey
         }
       }
     });
@@ -644,12 +654,16 @@ export default function ModelConfigPanel() {
   };
 
   // Check if a model is currently loaded in LM Studio
+  // Uses exact modelKey matching (preferred) with fallback for legacy IDs
   const isModelLoaded = (modelId: string): boolean => {
-    return loadedModels.some(loadedId => 
-      loadedId === modelId || 
-      loadedId.includes(modelId) || 
-      modelId.includes(loadedId)
-    );
+    return loadedModels.some(loadedId => {
+      // Exact match (preferred for modelKeys)
+      if (loadedId === modelId) return true;
+      
+      // Fallback: normalize both for comparison
+      const normalizeId = (id: string) => id.toLowerCase().replace(/@.*$/, '');
+      return normalizeId(loadedId) === normalizeId(modelId);
+    });
   };
 
   const handleSave = () => {
@@ -673,15 +687,15 @@ export default function ModelConfigPanel() {
           },
           ragSummarization: {
             model_name: models.ragSummarizer,
-            identifier: models.ragSummarizer.split('/').pop()
+            identifier: models.ragSummarizer  // Use exact modelKey
           },
           rollingSummarization: {
             model_name: models.rollingSummarizer,
-            identifier: models.rollingSummarizer.split('/').pop()
+            identifier: models.rollingSummarizer  // Use exact modelKey
           },
           main: {
             model_name: models.main,
-            identifier: models.main.split('/').pop()
+            identifier: models.main  // Use exact modelKey
           }
         },
         cloud: {
@@ -694,25 +708,26 @@ export default function ModelConfigPanel() {
       mutation.mutate(config);
     } else {
       // Local configuration with selected models
+      // Use exact modelKey as identifier (no transformation needed)
       const config = {
         runtime: { mode: "local" },
         models: {
           embedding: {
             engine: "local",
             model_name: models.embedding,
-            identifier: models.embedding.split('/').pop()
+            identifier: models.embedding  // Keep exact modelKey
           },
           ragSummarization: {
             model_name: models.ragSummarizer,
-            identifier: models.ragSummarizer.split('/').pop()
+            identifier: models.ragSummarizer  // Keep exact modelKey
           },
           rollingSummarization: {
             model_name: models.rollingSummarizer,
-            identifier: models.rollingSummarizer.split('/').pop()
+            identifier: models.rollingSummarizer  // Keep exact modelKey
           },
           main: {
             model_name: models.main,
-            identifier: models.main.split('/').pop()
+            identifier: models.main  // Keep exact modelKey
           }
         }
       };

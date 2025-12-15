@@ -1,0 +1,344 @@
+#!/usr/bin/env node
+
+/**
+ * Model Sync Service
+ * 
+ * Syncs models from LM Studio using `lms ls --json` and categorizes them
+ * by function (main/summarizer/embedder) and quality tier (low/medium/high).
+ */
+
+const { exec } = require('child_process');
+const { promisify } = require('util');
+const { getLMStudioCLIPath } = require('../lmstudio_manager.js');
+const { getPresetVRAMBudget } = require('../hardware_detector.js');
+
+const execAsync = promisify(exec);
+
+// Cache for synced models
+let syncedModelsCache = null;
+let lastSyncTime = 0;
+const CACHE_TTL_MS = 60000; // 1 minute
+
+/**
+ * Role-specific inference defaults
+ */
+const ROLE_DEFAULTS = {
+    main: {
+        temperature: 0.4,
+        topP: 0.9,
+        topK: 40,
+        repeatPenalty: 1.1,
+        gpu: 'max',
+        maxTokens: -1
+    },
+    summarizer: {
+        temperature: 0,
+        topP: 0.5,
+        topK: 20,
+        repeatPenalty: 1.2,
+        gpu: 0.3,
+        maxTokens: 500,
+        contextLength: 4096
+    },
+    embedder: {
+        gpu: 'off',
+        contextLength: 512
+    }
+};
+
+/**
+ * Get role defaults for a specific role
+ * @param {string} role - 'main', 'summarizer', or 'embedder'
+ * @returns {object}
+ */
+function getRoleDefaults(role) {
+    return ROLE_DEFAULTS[role] || ROLE_DEFAULTS.summarizer;
+}
+
+/**
+ * Fetch models from LM Studio using CLI
+ * @returns {Promise<Array>} Raw model list from LM Studio
+ */
+async function fetchModelsFromLMStudio() {
+    try {
+        const cliPath = getLMStudioCLIPath();
+        const { stdout } = await execAsync(`"${cliPath}" ls --json`, {
+            timeout: 30000,
+            encoding: 'utf8',
+            maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large model lists
+        });
+        
+        const models = JSON.parse(stdout);
+        console.log(`[ModelSync] Fetched ${models.length} models from LM Studio`);
+        return models;
+    } catch (error) {
+        console.error('[ModelSync] Failed to fetch models from LM Studio:', error.message);
+        return [];
+    }
+}
+
+/**
+ * Determine the function/role of a model based on its properties
+ * @param {object} model - Model from LM Studio
+ * @returns {'main' | 'summarizer' | 'embedder'}
+ */
+function determineModelFunction(model) {
+    // Embeddings are clearly marked
+    if (model.type === 'embedding') {
+        return 'embedder';
+    }
+    
+    // Models with tool use capability are best for main role
+    if (model.trainedForToolUse) {
+        return 'main';
+    }
+    
+    // Default to summarizer for other LLMs
+    return 'summarizer';
+}
+
+/**
+ * Determine which quality tiers a model fits in based on size
+ * @param {object} model - Model with sizeBytes
+ * @returns {string[]} Array of tier names the model fits in
+ */
+function determineModelTiers(model) {
+    const sizeGB = (model.sizeBytes || 0) / (1024 * 1024 * 1024);
+    const tiers = [];
+    
+    // Get budget limits for each tier
+    const lowBudget = getPresetVRAMBudget('low');
+    const medBudget = getPresetVRAMBudget('medium');
+    const highBudget = getPresetVRAMBudget('high');
+    
+    // Model fits in a tier if it leaves room for other models
+    if (sizeGB <= lowBudget.maxMainModelGB) {
+        tiers.push('low', 'medium', 'high');
+    } else if (sizeGB <= medBudget.maxMainModelGB) {
+        tiers.push('medium', 'high');
+    } else if (sizeGB <= highBudget.maxMainModelGB) {
+        tiers.push('high');
+    }
+    // Models larger than high tier max don't fit any preset
+    
+    return tiers;
+}
+
+/**
+ * Generate capability badges for a model
+ * @param {object} model - Model from LM Studio
+ * @returns {string[]} Array of capability badge keys
+ */
+function getModelCapabilities(model) {
+    const capabilities = [];
+    
+    if (model.trainedForToolUse) capabilities.push('toolUse');
+    if (model.vision) capabilities.push('vision');
+    if (model.maxContextLength > 32768) capabilities.push('longContext');
+    if (model.type === 'embedding') capabilities.push('embedding');
+    if (model.quantization?.bits >= 6) capabilities.push('highQuality');
+    
+    // Check if it's a small/fast model
+    const params = parseFloat(model.paramsString) || 0;
+    if (params > 0 && params < 3) capabilities.push('fast');
+    
+    return capabilities;
+}
+
+/**
+ * Parse parameter string to number (e.g., "7B" -> 7, "1.5B" -> 1.5)
+ * @param {string} paramsString 
+ * @returns {number}
+ */
+function parseParamSize(paramsString) {
+    if (!paramsString) return 0;
+    const match = paramsString.match(/^([\d.]+)/);
+    return match ? parseFloat(match[1]) : 0;
+}
+
+/**
+ * Categorize a single model
+ * @param {object} model - Raw model from LM Studio
+ * @returns {object} Categorized model
+ */
+function categorizeModel(model) {
+    const sizeGB = (model.sizeBytes || 0) / (1024 * 1024 * 1024);
+    const func = determineModelFunction(model);
+    const tiers = determineModelTiers(model);
+    const capabilities = getModelCapabilities(model);
+    const paramSize = parseParamSize(model.paramsString);
+    
+    return {
+        // Core identification - modelKey is the canonical ID
+        modelKey: model.modelKey,
+        displayName: model.displayName,
+        publisher: model.publisher,
+        
+        // Classification
+        function: func,
+        tiers,
+        capabilities,
+        
+        // Size info
+        sizeGB: Math.round(sizeGB * 100) / 100,
+        paramsString: model.paramsString,
+        paramSize,
+        
+        // Technical details
+        architecture: model.architecture,
+        format: model.format,
+        maxContextLength: model.maxContextLength,
+        quantization: model.quantization,
+        
+        // Feature flags
+        trainedForToolUse: model.trainedForToolUse || false,
+        vision: model.vision || false,
+        
+        // Full path for reference
+        path: model.path,
+        
+        // Inference defaults based on function
+        inferenceDefaults: getRoleDefaults(func)
+    };
+}
+
+/**
+ * Sync models from LM Studio and categorize them
+ * @param {boolean} forceRefresh - Force refresh even if cache is valid
+ * @returns {Promise<{models: object[], byFunction: object, byTier: object, lastSync: number}>}
+ */
+async function syncModels(forceRefresh = false) {
+    const now = Date.now();
+    
+    // Return cached data if still valid
+    if (!forceRefresh && syncedModelsCache && (now - lastSyncTime) < CACHE_TTL_MS) {
+        return syncedModelsCache;
+    }
+    
+    console.log('[ModelSync] Syncing models from LM Studio...');
+    
+    const rawModels = await fetchModelsFromLMStudio();
+    const models = rawModels.map(categorizeModel);
+    
+    // Group by function
+    const byFunction = {
+        main: models.filter(m => m.function === 'main'),
+        summarizer: models.filter(m => m.function === 'summarizer'),
+        embedder: models.filter(m => m.function === 'embedder')
+    };
+    
+    // Group by tier
+    const byTier = {
+        low: models.filter(m => m.tiers.includes('low')),
+        medium: models.filter(m => m.tiers.includes('medium')),
+        high: models.filter(m => m.tiers.includes('high'))
+    };
+    
+    // Sort each group by size (smaller first for faster models)
+    Object.values(byFunction).forEach(arr => arr.sort((a, b) => a.sizeGB - b.sizeGB));
+    Object.values(byTier).forEach(arr => arr.sort((a, b) => a.sizeGB - b.sizeGB));
+    
+    syncedModelsCache = {
+        models,
+        byFunction,
+        byTier,
+        lastSync: now,
+        count: {
+            total: models.length,
+            main: byFunction.main.length,
+            summarizer: byFunction.summarizer.length,
+            embedder: byFunction.embedder.length
+        }
+    };
+    
+    lastSyncTime = now;
+    
+    console.log(`[ModelSync] Synced ${models.length} models: ${byFunction.main.length} main, ${byFunction.summarizer.length} summarizer, ${byFunction.embedder.length} embedder`);
+    
+    return syncedModelsCache;
+}
+
+/**
+ * Get a model by its modelKey
+ * @param {string} modelKey - The exact modelKey from LM Studio
+ * @returns {Promise<object | null>}
+ */
+async function getModelByKey(modelKey) {
+    const { models } = await syncModels();
+    return models.find(m => m.modelKey === modelKey) || null;
+}
+
+/**
+ * Get models suitable for a specific role and tier
+ * @param {string} role - 'main', 'summarizer', or 'embedder'
+ * @param {string} tier - 'low', 'medium', or 'high'
+ * @returns {Promise<object[]>}
+ */
+async function getModelsForRoleAndTier(role, tier) {
+    const { byFunction, byTier } = await syncModels();
+    
+    // Get models that match both role and tier
+    const roleModels = byFunction[role] || [];
+    const tierModels = new Set((byTier[tier] || []).map(m => m.modelKey));
+    
+    return roleModels.filter(m => tierModels.has(m.modelKey));
+}
+
+/**
+ * Suggest optimal models for a preset
+ * @param {string} tier - 'low', 'medium', or 'high'
+ * @returns {Promise<{main: object|null, summarizer: object|null, embedder: object|null}>}
+ */
+async function suggestModelsForPreset(tier) {
+    const mainModels = await getModelsForRoleAndTier('main', tier);
+    const summarizerModels = await getModelsForRoleAndTier('summarizer', tier);
+    const embedderModels = await getModelsForRoleAndTier('embedder', tier);
+    
+    // Prefer models with tool use for main
+    const mainWithTools = mainModels.filter(m => m.trainedForToolUse);
+    const bestMain = mainWithTools[0] || mainModels[0] || null;
+    
+    // Prefer smaller models for summarizer (faster)
+    const bestSummarizer = summarizerModels[0] || null;
+    
+    // First embedder available
+    const bestEmbedder = embedderModels[0] || null;
+    
+    return {
+        main: bestMain,
+        summarizer: bestSummarizer,
+        embedder: bestEmbedder
+    };
+}
+
+/**
+ * Invalidate the sync cache
+ */
+function invalidateSyncCache() {
+    syncedModelsCache = null;
+    lastSyncTime = 0;
+}
+
+/**
+ * Get the role defaults configuration
+ * @returns {object}
+ */
+function getAllRoleDefaults() {
+    return ROLE_DEFAULTS;
+}
+
+module.exports = {
+    syncModels,
+    getModelByKey,
+    getModelsForRoleAndTier,
+    suggestModelsForPreset,
+    categorizeModel,
+    determineModelFunction,
+    determineModelTiers,
+    getModelCapabilities,
+    getRoleDefaults,
+    getAllRoleDefaults,
+    invalidateSyncCache,
+    ROLE_DEFAULTS
+};
+

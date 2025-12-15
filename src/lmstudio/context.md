@@ -1,45 +1,78 @@
-# LM Studio Module Context
+# LM Studio Integration Module
 
-## Module Responsibilities
-- Manages communication with LM Studio for local LLM inference
-- Handles model loading, unloading, and state tracking
-- Provides chat completions and embedding APIs
-- Manages LM Studio server lifecycle (start/stop)
+## Overview
+This module handles all interactions with LM Studio, including model loading, unloading, health checks, and inference.
 
-## Entry Files
-- `model_manager.js` - Core model loading/unloading logic
-- `chat.js` - Chat completions and summarization
-- `embeddings.js` - Embedding generation
-- `state.js` - Shared state and configuration
+## Key Files
 
-## Key Dependencies
-- `axios` - HTTP requests to LM Studio REST API
-- `child_process` - CLI execution for model loading/unloading
-- `../lmstudio_manager.js` - CLI path resolution
+| File | Purpose |
+|------|---------|
+| `model_manager.js` | Load/unload models, health checks, preset loading |
+| `model_sync.js` | **NEW** - Sync models from `lms ls --json`, categorize by function/tier |
+| `chat.js` | Chat completions with streaming support |
+| `embeddings.js` | Embedding generation for RAG |
+| `state.js` | Shared state (loaded models, locks, config) |
 
-## Important Notes
+## Model Identification System (v2.0)
 
-### Model Loading (Fixed 2025-12-15)
-**CRITICAL**: LM Studio does NOT support `POST /api/v0/models/load` REST endpoint!
-- Loading models must be done via CLI: `lms load <model-path> --yes`
-- Unloading works via CLI: `lms unload <model-id>`
-- Listing models works via REST: `GET /api/v0/models`
-- Chat completions work via REST: `POST /api/v0/chat/completions`
+### modelKey as Canonical ID
+All model references now use the exact `modelKey` from LM Studio's `lms ls --json` output.
 
-### Valid LM Studio REST API Endpoints
-- `GET /api/v0/models` - List models (including load state)
-- `POST /api/v0/chat/completions` - Chat completions
-- `POST /api/v0/embeddings` - Generate embeddings
+**Examples:**
+- `qwen/qwen3-8b` (with publisher prefix)
+- `qwen2.5-coder-1.5b-instruct` (simple key)
+- `osmosis-mcp-4b@q4_k_s` (with quantization)
 
-### CLI Commands Used
-- `lms load <path> --yes` - Load a model (--yes suppresses prompts)
-- `lms unload <id>` - Unload a specific model
-- `lms unload --all` - Unload all models
-- `lms server start` - Start LM Studio server
-- `lms server stop` - Stop LM Studio server
-- `lms server status` - Get server status
-- `lms ls` - List downloaded models
+### No More Fuzzy Matching
+The old fuzzy matching system (`normalizeModelIdForMatching`, `tokenOverlapScore`, etc.) has been removed. All lookups are now exact matches via `model_sync.js`.
+
+## Model Categorization
+
+### By Function
+| Role | Detection | Use |
+|------|-----------|-----|
+| Main | `trainedForToolUse: true` | Primary chat model with tool calling |
+| Summarizer | LLM without tool use | RAG and rolling summaries |
+| Embedder | `type: "embedding"` | Vector embeddings for RAG |
+
+### By Quality Tier (VRAM Budget)
+| Tier | Target GPU | VRAM Budget | Max Main | Max Summarizer |
+|------|------------|-------------|----------|----------------|
+| Low | RTX 3060 (8GB) | 6GB | ≤3B | ≤1.5B |
+| Medium | RTX 4070 (12GB) | 10GB | ≤8B | ≤3B |
+| High | RTX 5080 (16GB) | 14GB | ≤14B | ≤7B |
+
+## Role-Specific Inference Defaults
+
+```javascript
+{
+  main: { temperature: 0.4, topP: 0.9, gpu: "max" },
+  summarizer: { temperature: 0, topP: 0.5, gpu: 0.3, maxTokens: 500 },
+  embedder: { gpu: "off" }
+}
+```
+
+## Key Functions
+
+### model_sync.js
+- `syncModels()` - Fetch and categorize all models from LM Studio
+- `getModelByKey(modelKey)` - Get model by exact key
+- `getModelsForRoleAndTier(role, tier)` - Filter by function and quality
+- `suggestModelsForPreset(tier)` - Suggest optimal models for a preset
+- `getRoleDefaults(role)` - Get inference settings for a role
+
+### model_manager.js
+- `ensureModelLoaded(model, options)` - Load with role-specific settings
+- `openModel(model, options)` - CLI load with GPU offload
+- `ensurePresetModelsLoaded(preset)` - Load all models for a preset
+- `listLoadedModels()` - Get currently loaded models
+
+## Dependencies
+- `../hardware_detector.js` - GPU detection for VRAM budgets
+- `../lmstudio_manager.js` - CLI path configuration
+- `../processing_state.js` - Context tracking
 
 ## Migration Notes
-- None currently pending
-
+- Config now uses exact `modelKey` (e.g., `qwen/qwen3-4b-2507`)
+- `data/models.json` presets use actual modelKeys from LM Studio
+- Old preset IDs like `lmstudio-community/Qwen2.5-1.5B-Instruct-GGUF` are deprecated

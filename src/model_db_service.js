@@ -964,177 +964,41 @@ function isModelAvailable(modelId) {
 }
 
 /**
- * Normalize a model ID for matching
- * Converts "lmstudio-community/Qwen2.5-3B-Instruct-GGUF" -> "qwen2.5-3b-instruct"
+ * Find the actual LM Studio model ID using exact modelKey matching
+ * Uses the new model_sync service for reliable model lookup
+ * @param {string} modelId - The model ID (should be an exact modelKey from LM Studio)
+ * @returns {Promise<string|null>} - The modelKey or null if not found
  */
-function normalizeModelIdForMatching(id) {
-    if (!id) return '';
-    let s = String(id).trim().toLowerCase();
-    // Remove path prefixes (lmstudio-community/, etc.) but keep the last segment
-    const parts = s.split('/');
-    s = parts[parts.length - 1];
-    // Also check if it's a full GGUF path like "Mungert/model/file.gguf"
-    if (s.endsWith('.gguf')) {
-        s = s.replace(/\.gguf$/i, '');
-    }
-    // Remove common suffixes
-    s = s.replace(/-gguf$/i, '');
-    s = s.replace(/-q\d.*$/i, '');
-    s = s.replace(/@.*$/i, '');
-    // Remove quantization markers
-    s = s.replace(/_q\d+_\w+$/i, '');
-    return s;
-}
-
-/**
- * Extract key tokens from a model name for fuzzy matching
- */
-function extractModelTokens(name) {
-    if (!name) return [];
-    const normalized = normalizeModelIdForMatching(name);
-    // Split on common separators and filter out very common suffixes that don't help identify
-    return normalized.split(/[-_.]/)
-        .filter(t => t.length > 0)
-        // Keep important tokens like model sizes (1b, 3b, 7b, etc.) and types (instruct, chat)
-        .filter(t => !['hf', 'gguf', 'v1', 'v2', 'v3', 'v0', 'the'].includes(t));
-}
-
-/**
- * Extract size token from model name (e.g., "7b", "32b", "1.5b")
- */
-function extractSizeToken(name) {
-    if (!name) return null;
-    const normalized = name.toLowerCase();
-    // Match patterns like 7b, 32b, 1.5b, 0.5b, 70b, etc.
-    const sizeMatch = normalized.match(/\b(\d+(?:\.\d+)?b)\b/);
-    return sizeMatch ? sizeMatch[1] : null;
-}
-
-/**
- * Calculate token overlap score between two model names
- * Now with size-aware matching to prevent 7b matching 32b
- */
-function tokenOverlapScore(name1, name2) {
-    const tokens1 = new Set(extractModelTokens(name1));
-    const tokens2 = new Set(extractModelTokens(name2));
-    if (tokens1.size === 0 || tokens2.size === 0) return 0;
-    
-    // CRITICAL: Check if sizes match - if both have sizes and they differ, heavily penalize
-    const size1 = extractSizeToken(name1);
-    const size2 = extractSizeToken(name2);
-    if (size1 && size2 && size1 !== size2) {
-        // Size mismatch - return very low score to prevent incorrect matching
-        return 0.1;
-    }
-    
-    let overlap = 0;
-    for (const t of tokens1) {
-        if (tokens2.has(t)) overlap++;
-    }
-    // Return Jaccard-like similarity
-    return overlap / Math.max(tokens1.size, tokens2.size);
-}
-
-/**
- * Find the actual LM Studio model ID that best matches a preset model ID
- * @param {string} presetModelId - The preset model ID (e.g., "lmstudio-community/Qwen2.5-3B-Instruct-GGUF")
- * @returns {Promise<string|null>} - The actual LM Studio model ID or null if not found
- */
-async function findLMStudioModelId(presetModelId) {
-    if (!presetModelId) return null;
+async function findLMStudioModelId(modelId) {
+    if (!modelId) return null;
     
     try {
-        // Get the list of downloaded models from LM Studio
-        const downloadedModels = await getDownloadedModels();
+        // Use the new model_sync service for exact matching
+        const { getModelByKey, syncModels } = require('./lmstudio/model_sync.js');
         
-        if (!downloadedModels || downloadedModels.length === 0) {
-            console.warn('[ModelDB] No downloaded models found');
-            return null;
+        // First, try exact modelKey match (preferred)
+        const exactMatch = await getModelByKey(modelId);
+        if (exactMatch) {
+            console.log(`[ModelDB] Exact modelKey match: ${modelId}`);
+            return exactMatch.modelKey;
         }
         
-        // Normalize the preset ID for matching
-        const normalizedPreset = normalizeModelIdForMatching(presetModelId);
-        console.log(`[ModelDB] Looking for match: "${presetModelId}" -> normalized: "${normalizedPreset}"`);
+        // Fallback: search through synced models for the ID
+        const { models } = await syncModels();
         
-        // Try exact match first (for when user selects from UI with actual ID)
-        for (const model of downloadedModels) {
-            const modelId = model.id || model.path || model.name;
-            if (modelId === presetModelId) {
-                console.log(`[ModelDB] Exact match found: ${modelId}`);
-                return modelId;
-            }
+        // Try exact match on modelKey
+        const found = models.find(m => m.modelKey === modelId);
+        if (found) {
+            console.log(`[ModelDB] Found model: ${found.modelKey}`);
+            return found.modelKey;
         }
         
-        // Try normalized exact matching
-        for (const model of downloadedModels) {
-            const modelId = model.id || model.path || model.name;
-            const normalizedModel = normalizeModelIdForMatching(modelId);
-            
-            if (normalizedModel === normalizedPreset) {
-                console.log(`[ModelDB] Normalized exact match: ${modelId}`);
-                return modelId;
-            }
-        }
-        
-        // Try substring matching with scoring
-        let bestMatch = null;
-        let bestScore = 0;
-        
-        // Extract size from preset for comparison
-        const presetSize = extractSizeToken(presetModelId);
-        
-        for (const model of downloadedModels) {
-            const modelId = model.id || model.path || model.name;
-            const normalizedModel = normalizeModelIdForMatching(modelId);
-            
-            // CRITICAL: Skip if sizes don't match
-            const modelSize = extractSizeToken(modelId);
-            if (presetSize && modelSize && presetSize !== modelSize) {
-                continue; // Size mismatch - skip this model
-            }
-            
-            // Check if one contains the other (partial match)
-            if (normalizedModel.includes(normalizedPreset) || normalizedPreset.includes(normalizedModel)) {
-                const score = Math.min(normalizedModel.length, normalizedPreset.length) / 
-                             Math.max(normalizedModel.length, normalizedPreset.length);
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestMatch = modelId;
-                }
-            }
-        }
-        
-        if (bestMatch && bestScore > 0.5) {
-            console.log(`[ModelDB] Best partial match: ${bestMatch} (score: ${bestScore.toFixed(2)})`);
-            return bestMatch;
-        }
-        
-        // Fallback: Try token-based fuzzy matching (size check is in tokenOverlapScore)
-        for (const model of downloadedModels) {
-            const modelId = model.id || model.path || model.name;
-            
-            // Extra size check before even computing score
-            const modelSize = extractSizeToken(modelId);
-            if (presetSize && modelSize && presetSize !== modelSize) {
-                continue; // Size mismatch - skip
-            }
-            
-            const score = tokenOverlapScore(presetModelId, modelId);
-            if (score > bestScore && score > 0.6) {
-                bestScore = score;
-                bestMatch = modelId;
-            }
-        }
-        
-        if (bestMatch) {
-            console.log(`[ModelDB] Best token match: ${bestMatch} (score: ${bestScore.toFixed(2)})`);
-            return bestMatch;
-        }
-        
-        console.warn(`[ModelDB] No match found for: ${presetModelId}`);
+        // If not found by modelKey, the model might not be downloaded
+        console.warn(`[ModelDB] Model not found in LM Studio: ${modelId}`);
+        console.warn(`[ModelDB] Tip: Use exact modelKey from 'lms ls --json' output`);
         return null;
     } catch (error) {
-        console.error(`[ModelDB] Error finding LM Studio model ID:`, error.message);
+        console.error(`[ModelDB] Error finding model:`, error.message);
         return null;
     }
 }
@@ -1165,9 +1029,8 @@ module.exports = {
     getActiveDownloads,
     getQuantOptions,
     extractModelNameForCLI,
-    // Model ID matching
+    // Model ID matching (now uses exact modelKey from model_sync)
     findLMStudioModelId,
-    normalizeModelIdForMatching,
     // Startup & validation
     validatePresets,
     initializeModelDatabase,

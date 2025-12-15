@@ -8,16 +8,22 @@ const { getLMStudioCLIPath } = require('../lmstudio_manager.js');
 const { setMainModelMaxContext } = require('../processing_state.js');
 const { LM_STUDIO_URL, LM_STUDIO_TIMEOUT_MS, MAX_RETRIES, loadedModels, loadingModels, withLMStudioLock, generateRequestId, setLastLoadedSnapshot, getLastLoadedSnapshot } = require('./state.js');
 
+/**
+ * Normalize a model ID for comparison purposes
+ * Note: Prefer using exact modelKey matching instead of normalization
+ * @deprecated Use exact modelKey from model_sync instead
+ */
 function normalizeModelId(id) {
     if (!id) return '';
     let s = String(id).trim().toLowerCase();
     s = s.replace(/\\/g, '/');
-    s = s.split('/').pop();
-    s = s.replace(/\.gguf$/, '');
-    s = s.replace(/^text-embedding-/, '');
-    s = s.replace(/-gguf$/, '');
-    s = s.replace(/-q\d.*$/, '');
-    s = s.replace(/@.*$/, '');
+    // For modelKeys with publisher prefix (e.g., qwen/qwen3-8b), keep it
+    // Only strip for legacy IDs
+    if (!s.includes('/')) {
+        s = s.replace(/\.gguf$/, '');
+        s = s.replace(/^text-embedding-/, '');
+        s = s.replace(/-gguf$/, '');
+    }
     return s;
 }
 
@@ -35,12 +41,26 @@ function resolveModelNames(modelOrId) {
     };
 }
 
+/**
+ * Check if two model IDs match
+ * Prefers exact match, falls back to normalized comparison for legacy support
+ * @param {string} target - Target model ID (should be modelKey)
+ * @param {string} loadedId - Loaded model ID from LM Studio
+ * @returns {boolean}
+ */
 function modelIdMatches(target, loadedId) {
     if (!target || !loadedId) return false;
+    
+    // Exact match (preferred for modelKeys)
+    if (target === loadedId) return true;
+    
+    // Normalized comparison for legacy/backward compatibility
     const t = normalizeModelId(target);
     const l = normalizeModelId(loadedId);
     if (!t || !l) return false;
     if (t === l) return true;
+    
+    // Substring match as fallback
     return l.includes(t) || t.includes(l);
 }
 
@@ -51,7 +71,15 @@ async function isModelLoadedRemote(identifier) {
     return list.some(m => m.state === 'loaded' && modelIdMatches(identifier, m.id));
 }
 
-async function ensureModelLoaded(modelOrId) {
+/**
+ * Ensure a model is loaded with optional role-specific settings
+ * @param {string|object} modelOrId - Model ID or config object
+ * @param {object} options - Optional loading settings
+ * @param {string} options.role - 'main', 'summarizer', or 'embedder'
+ * @param {string|number} options.gpu - GPU offload: 'max', 'off', or 0.0-1.0
+ * @param {number} options.contextLength - Custom context length
+ */
+async function ensureModelLoaded(modelOrId, options = {}) {
     const { identifier, engine } = resolveModelNames(modelOrId);
     if (!identifier) return;
     
@@ -79,9 +107,22 @@ async function ensureModelLoaded(modelOrId) {
         console.warn(`[LM Studio] Could not verify if model is loaded: ${err?.message || err}`);
     }
 
+    // Get role defaults if role is specified but no explicit options
+    let loadOptions = { ...options };
+    if (options.role && !options.gpu) {
+        try {
+            const { getRoleDefaults } = require('./model_sync.js');
+            const defaults = getRoleDefaults(options.role);
+            loadOptions = { ...defaults, ...options };
+            console.log(`[LM Studio] Applying ${options.role} defaults: gpu=${loadOptions.gpu}`);
+        } catch (err) {
+            console.warn(`[LM Studio] Could not get role defaults:`, err?.message);
+        }
+    }
+
     const loadPromise = (async () => {
         try {
-            await withLMStudioLock(() => openModel(modelOrId));
+            await withLMStudioLock(() => openModel(modelOrId, loadOptions));
             loadedModels.add(identifier);
         } catch (err) {
             console.warn(`[LM Studio] Failed to open model ${identifier}:`, err?.message || err);
@@ -177,10 +218,13 @@ async function waitForModelsLoaded(modelIds, timeoutMs = 30000, intervalMs = 500
     throw new Error(`Models not loaded within ${timeoutMs}ms: ${[...target].join(', ')}`);
 }
 
-async function openModel(modelOrId) {
+async function openModel(modelOrId, options = {}) {
     const { identifier, loadName } = resolveModelNames(modelOrId);
     const modelName = loadName || identifier;
     const requestId = generateRequestId();
+    
+    // Get role-specific settings if provided
+    const { role, gpu, contextLength } = options;
 
     // Check if model is already loaded BEFORE attempting to load via CLI
     // This prevents duplicate model instances
@@ -195,12 +239,32 @@ async function openModel(modelOrId) {
         console.warn(`[LM Studio Load] Pre-check failed, proceeding with load: ${checkErr?.message}`);
     }
 
+    // Build CLI command with options
+    let cliArgs = `load "${modelName}" --yes`;
+    
+    // Apply GPU offload setting
+    if (gpu !== undefined) {
+        if (gpu === 'max') {
+            cliArgs += ' --gpu max';
+        } else if (gpu === 'off') {
+            cliArgs += ' --gpu off';
+        } else if (typeof gpu === 'number') {
+            cliArgs += ` --gpu ${gpu}`;
+        }
+    }
+    
+    // Apply context length if specified
+    if (contextLength && typeof contextLength === 'number') {
+        cliArgs += ` --context-length ${contextLength}`;
+    }
+
     // Load the model using CLI (REST API /api/v0/models/load is NOT a valid endpoint)
     try {
-        console.log(`[LM Studio Load] Loading model via CLI: ${modelName}`);
         const cliPath = getLMStudioCLIPath();
-        // Use --yes to suppress interactive prompts, --quiet for cleaner output
-        const { stdout, stderr } = await execAsync(`"${cliPath}" load "${modelName}" --yes`);
+        console.log(`[LM Studio Load] Loading model via CLI: ${modelName}${role ? ` (role: ${role})` : ''}`);
+        console.log(`[LM Studio Load] CLI args: ${cliArgs}`);
+        
+        const { stdout, stderr } = await execAsync(`"${cliPath}" ${cliArgs}`);
         console.log(`[LM Studio Load] CLI output: ${stdout.trim()}`);
         if (stderr && stderr.trim()) {
             console.warn(`[LM Studio Load] CLI stderr: ${stderr.trim()}`);
@@ -562,6 +626,7 @@ async function waitForServerReady(timeoutMs = 30000) {
  */
 async function ensurePresetModelsLoaded(presetName) {
     const { getPreset, findLMStudioModelId, isModelAvailable } = require('../model_db_service.js');
+    const { getRoleDefaults } = require('./model_sync.js');
 
     const result = {
         loaded: [],
@@ -576,7 +641,7 @@ async function ensurePresetModelsLoaded(presetName) {
         throw new Error(`Preset '${presetName}' not found`);
     }
 
-    // Build list of required models for this preset
+    // Build list of required models for this preset with their roles
     const requiredModels = [];
 
     // Embedding model (local, doesn't need LM Studio loading)
@@ -584,26 +649,42 @@ async function ensurePresetModelsLoaded(presetName) {
         console.log(`[LM Studio] Embedding model: ${preset.embedding} (local, no loading needed)`);
     }
 
-    // RAG Summarizer
+    // RAG Summarizer - uses summarizer role defaults
     if (preset.ragSummarizer) {
-        requiredModels.push({ type: 'ragSummarizer', presetId: preset.ragSummarizer });
+        requiredModels.push({ 
+            type: 'ragSummarizer', 
+            role: 'summarizer',
+            presetId: preset.ragSummarizer,
+            loadOptions: getRoleDefaults('summarizer')
+        });
     }
 
-    // Rolling Summarizer
+    // Rolling Summarizer - uses summarizer role defaults
     if (preset.rollingSummarizer) {
-        requiredModels.push({ type: 'rollingSummarizer', presetId: preset.rollingSummarizer });
+        requiredModels.push({ 
+            type: 'rollingSummarizer', 
+            role: 'summarizer',
+            presetId: preset.rollingSummarizer,
+            loadOptions: getRoleDefaults('summarizer')
+        });
     }
 
-    // Main model - use the first option from the preset
+    // Main model - uses main role defaults (max GPU, higher temp, etc.)
     if (preset.mainOptions && preset.mainOptions.length > 0) {
         const mainModelId = preset.mainOptions[0];
-        requiredModels.push({ type: 'main', presetId: mainModelId });
+        requiredModels.push({ 
+            type: 'main', 
+            role: 'main',
+            presetId: mainModelId,
+            loadOptions: getRoleDefaults('main')
+        });
         console.log(`[LM Studio] Using main model from preset: ${mainModelId}`);
     }
 
-    // Resolve all preset IDs to actual LM Studio IDs
+    // Resolve all preset IDs to actual LM Studio modelKeys
     const resolvedModels = [];
     for (const model of requiredModels) {
+        // The presetId should now be an exact modelKey
         const actualId = await findLMStudioModelId(model.presetId);
         if (actualId) {
             resolvedModels.push({ ...model, actualId });
@@ -663,14 +744,20 @@ async function ensurePresetModelsLoaded(presetName) {
     result.kept = modelsToKeep;
     modelsToKeep.forEach(id => console.log(`[LM Studio] Keeping already loaded: ${id}`));
 
-    // Load new models
+    // Load new models with role-specific settings
     let mainModelId = null;
     for (const model of modelsToLoad) {
         try {
-            console.log(`[LM Studio] Loading model: ${model.actualId} (${model.type})`);
-            await ensureModelLoaded({ identifier: model.actualId });
+            console.log(`[LM Studio] Loading model: ${model.actualId} (${model.type}, role: ${model.role})`);
+            
+            // Pass role-specific load options (gpu offload, context length, etc.)
+            await ensureModelLoaded(
+                { identifier: model.actualId }, 
+                { role: model.role, ...model.loadOptions }
+            );
+            
             result.loaded.push(model.actualId);
-            console.log(`[LM Studio] Successfully loaded: ${model.actualId}`);
+            console.log(`[LM Studio] Successfully loaded: ${model.actualId} with ${model.role} settings`);
             
             // Track main model for context update
             if (model.type === 'main') {
