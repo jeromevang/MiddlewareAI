@@ -31,8 +31,8 @@
       "identifier": "Qwen2.5-1.5B-Instruct-GGUF"
     },
     "main": {
-      "model_name": "llama-3.2-1b-instruct",
-      "identifier": "llama-3.2-1b-instruct"
+      "model_name": "lmstudio-community/qwen2.5-coder-7b-instruct-GGUF",
+      "identifier": "qwen2.5-coder-7b-instruct-GGUF"
     }
   },
   "processing": {

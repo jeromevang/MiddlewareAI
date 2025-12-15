@@ -167,27 +167,43 @@ async function openModel(modelOrId) {
     const modelName = loadName || identifier;
     const requestId = generateRequestId();
 
-    // First, load the model
+    // Load the model using CLI (REST API /api/v0/models/load is NOT a valid endpoint)
     try {
-        console.log(`[LM Studio Load] Loading model: ${modelName}`);
-        await axios.post(
-            `${LM_STUDIO_URL}/api/v0/models/load`,
-            { identifier: modelName },
-            {
-                timeout: LM_STUDIO_TIMEOUT_MS,
-                headers: { 'Content-Type': 'application/json' }
-            }
-        );
-        console.log(`[LM Studio Load] Successfully loaded model: ${modelName}`);
+        console.log(`[LM Studio Load] Loading model via CLI: ${modelName}`);
+        const cliPath = getLMStudioCLIPath();
+        // Use --yes to suppress interactive prompts, --quiet for cleaner output
+        const { stdout, stderr } = await execAsync(`"${cliPath}" load "${modelName}" --yes`);
+        console.log(`[LM Studio Load] CLI output: ${stdout.trim()}`);
+        if (stderr && stderr.trim()) {
+            console.warn(`[LM Studio Load] CLI stderr: ${stderr.trim()}`);
+        }
+        console.log(`[LM Studio Load] Successfully loaded model via CLI: ${modelName}`);
     } catch (loadError) {
-        console.error(`[LM Studio Load] Failed to load model ${modelName}:`, loadError.message);
-        throw loadError;
+        // Check if the error is because model is already loaded
+        const errorMsg = loadError.message || String(loadError);
+        if (errorMsg.includes('already loaded') || errorMsg.includes('Already loaded')) {
+            console.log(`[LM Studio Load] Model already loaded: ${modelName}`);
+        } else {
+            console.error(`[LM Studio Load] Failed to load model ${modelName}:`, errorMsg);
+            throw loadError;
+        }
     }
 
-    // Wait a bit for the model to load
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    // Wait for model to be fully loaded
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Then warm it
+    // Verify model is loaded by checking loaded models list
+    try {
+        const loadedModels = await listLoadedModels();
+        const isLoaded = loadedModels.some(m => modelIdMatches(modelName, m.id));
+        if (!isLoaded) {
+            console.warn(`[LM Studio Load] Model ${modelName} not found in loaded list after CLI load`);
+        }
+    } catch (verifyError) {
+        console.warn(`[LM Studio Load] Could not verify model load:`, verifyError.message);
+    }
+
+    // Warm the model with a simple request
     let retries = MAX_RETRIES;
     while (retries > 0) {
         try {

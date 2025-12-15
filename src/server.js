@@ -997,8 +997,23 @@ app.patch('/api/config', async (req, res) => {
         const cfgPath = path.join(__dirname, '../config.json');
         const current = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
         const updates = req.body || {};
-        // Do not allow setting api_key in plain response
-        const merged = { ...current, ...updates };
+        
+        // Deep merge helper to preserve nested objects like models.embedding
+        function deepMerge(target, source) {
+            const result = { ...target };
+            for (const key of Object.keys(source)) {
+                if (source[key] && typeof source[key] === 'object' && !Array.isArray(source[key])) {
+                    // Recursively merge objects
+                    result[key] = deepMerge(target[key] || {}, source[key]);
+                } else {
+                    // Replace primitives and arrays
+                    result[key] = source[key];
+                }
+            }
+            return result;
+        }
+        
+        const merged = deepMerge(current, updates);
         fs.writeFileSync(cfgPath, JSON.stringify(merged, null, 2));
         refreshEngineStateFromConfig();
         refreshProcessingStateFromConfig();

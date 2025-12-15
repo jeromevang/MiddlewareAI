@@ -724,6 +724,42 @@ function getActiveDownloads() {
 }
 
 /**
+ * Check if a model is available by fuzzy matching against downloaded models
+ * @param {string} modelId - The model ID to check
+ * @param {Array} downloadedModels - List of downloaded models
+ * @returns {boolean} - Whether the model is available
+ */
+function isModelDownloaded(modelId, downloadedModels) {
+    if (!modelId) return false;
+    
+    const normalizedTarget = normalizeModelIdForMatching(modelId);
+    const targetTokens = extractModelTokens(modelId);
+    
+    for (const model of downloadedModels) {
+        const downloadedId = model.id || model.path || '';
+        const normalizedDownloaded = normalizeModelIdForMatching(downloadedId);
+        
+        // Exact normalized match
+        if (normalizedTarget === normalizedDownloaded) {
+            return true;
+        }
+        
+        // Check if one contains the other (for partial matches)
+        if (normalizedDownloaded.includes(normalizedTarget) || normalizedTarget.includes(normalizedDownloaded)) {
+            return true;
+        }
+        
+        // Token-based fuzzy matching with higher threshold
+        const score = tokenOverlapScore(modelId, downloadedId);
+        if (score >= 0.6) {  // At least 60% token overlap
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+/**
  * Validate presets against downloaded models
  * Updates models.json with availability status
  * @returns {Promise<{available: string[], missing: string[]}>}
@@ -732,36 +768,15 @@ async function validatePresets() {
     console.log('[ModelDB] Validating presets against downloaded models...');
     
     const downloadedModels = await getDownloadedModels();
-    const downloadedIds = new Set(downloadedModels.map(m => {
-        // Normalize model IDs - handle various formats
-        const id = m.id || m.path || '';
-        // Extract the model identifier (handle paths like "author/model-name")
-        return id.toLowerCase();
-    }));
-    
-    // Also add partial matches (model name without author prefix)
-    downloadedModels.forEach(m => {
-        const id = m.id || m.path || '';
-        const parts = id.split('/');
-        if (parts.length > 1) {
-            downloadedIds.add(parts[parts.length - 1].toLowerCase());
-        }
-    });
+    console.log(`[ModelDB] Found ${downloadedModels.length} downloaded models via CLI`);
     
     const db = loadModelDatabase();
     const available = [];
     const missing = [];
     
-    // Check all models in modelSpecs
+    // Check all models in modelSpecs using fuzzy matching
     for (const [modelId, spec] of Object.entries(db.modelSpecs || {})) {
-        const idLower = modelId.toLowerCase();
-        const namePart = modelId.split('/').pop()?.toLowerCase() || '';
-        
-        // Check if model is available (exact match or partial match)
-        const isAvailable = downloadedIds.has(idLower) || 
-                           downloadedIds.has(namePart) ||
-                           Array.from(downloadedIds).some(d => d.includes(namePart) || namePart.includes(d));
-        
+        const isAvailable = isModelDownloaded(modelId, downloadedModels);
         spec.available = isAvailable;
         
         if (isAvailable) {
@@ -773,31 +788,45 @@ async function validatePresets() {
     
     // Also check preset models not in modelSpecs
     for (const [tier, preset] of Object.entries(db.presets || {})) {
-        // Check summarizer
-        if (preset.summarizer && !db.modelSpecs[preset.summarizer]) {
-            const idLower = preset.summarizer.toLowerCase();
-            const namePart = preset.summarizer.split('/').pop()?.toLowerCase() || '';
-            const isAvailable = downloadedIds.has(idLower) || downloadedIds.has(namePart);
+        // Check ragSummarizer
+        if (preset.ragSummarizer && !db.modelSpecs[preset.ragSummarizer]) {
+            const namePart = preset.ragSummarizer.split('/').pop()?.toLowerCase() || '';
+            const isAvailable = isModelDownloaded(preset.ragSummarizer, downloadedModels);
             
-            // Add to modelSpecs with availability
-            db.modelSpecs[preset.summarizer] = {
-                id: preset.summarizer,
+            db.modelSpecs[preset.ragSummarizer] = {
+                id: preset.ragSummarizer,
                 name: namePart,
                 type: 'summarizer',
                 engine: 'lmstudio',
                 available: isAvailable
             };
             
-            if (isAvailable) available.push(preset.summarizer);
-            else missing.push(preset.summarizer);
+            if (isAvailable) available.push(preset.ragSummarizer);
+            else missing.push(preset.ragSummarizer);
+        }
+        
+        // Check rollingSummarizer
+        if (preset.rollingSummarizer && !db.modelSpecs[preset.rollingSummarizer]) {
+            const namePart = preset.rollingSummarizer.split('/').pop()?.toLowerCase() || '';
+            const isAvailable = isModelDownloaded(preset.rollingSummarizer, downloadedModels);
+            
+            db.modelSpecs[preset.rollingSummarizer] = {
+                id: preset.rollingSummarizer,
+                name: namePart,
+                type: 'summarizer',
+                engine: 'lmstudio',
+                available: isAvailable
+            };
+            
+            if (isAvailable) available.push(preset.rollingSummarizer);
+            else missing.push(preset.rollingSummarizer);
         }
         
         // Check mainOptions
         for (const mainId of (preset.mainOptions || [])) {
             if (!db.modelSpecs[mainId]) {
-                const idLower = mainId.toLowerCase();
                 const namePart = mainId.split('/').pop()?.toLowerCase() || '';
-                const isAvailable = downloadedIds.has(idLower) || downloadedIds.has(namePart);
+                const isAvailable = isModelDownloaded(mainId, downloadedModels);
                 
                 db.modelSpecs[mainId] = {
                     id: mainId,
@@ -947,10 +976,11 @@ function normalizeModelIdForMatching(id) {
 function extractModelTokens(name) {
     if (!name) return [];
     const normalized = normalizeModelIdForMatching(name);
-    // Split on common separators and filter out common suffixes
+    // Split on common separators and filter out very common suffixes that don't help identify
     return normalized.split(/[-_.]/)
-        .filter(t => t.length > 1)
-        .filter(t => !['instruct', 'chat', 'base', 'v1', 'v2', 'v3', 'hf', 'gguf'].includes(t));
+        .filter(t => t.length > 0)
+        // Keep important tokens like model sizes (1b, 3b, 7b, etc.) and types (instruct, chat)
+        .filter(t => !['hf', 'gguf', 'v1', 'v2', 'v3', 'v0', 'the'].includes(t));
 }
 
 /**
