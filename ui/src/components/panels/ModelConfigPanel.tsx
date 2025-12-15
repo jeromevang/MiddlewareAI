@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels, loadPresetModels, getPresets, setActiveModel, getModelStatus, downloadModel, getQuantOptions, getBootstrapStatus, triggerBootstrap } from "../../lib/api";
-import type { QualityPreset, ModelAvailability, QuantOption } from "../../lib/api";
+import type { ModelAvailability, QuantOption } from "../../lib/api";
 import { SuggestedModelsPanel } from "../ui/SuggestedModelsPanel";
 import { useDashboardStore } from "../../state/dashboard-store";
 import { Card } from "../ui/Card";
@@ -9,6 +9,8 @@ import { Button } from "../ui/Button";
 import { ConfirmModal } from "../ui/ConfirmModal";
 import { Cpu, HardDrive, Zap, ChevronDown, ChevronUp, Check, Download, Loader2 } from "lucide-react";
 import { DownloadProgress } from "../ui/DownloadProgress";
+import { CustomPresetPanel } from "./CustomPresetPanel";
+import type { PresetQuality } from "./model-config/PresetSelector";
 
 // Helper to get display name from modelKey
 // Now handles exact modelKeys like "qwen/qwen3-8b" or "qwen2.5-coder-1.5b-instruct"
@@ -120,8 +122,23 @@ export default function ModelConfigPanel() {
   const lastActiveModel = presetsData?.lastActiveModel || '';
 
   const [mode, setMode] = useState<"local" | "cloud">("local");
-  const [quality, setQuality] = useState<"high" | "medium" | "low">("high");
+  const [quality, setQuality] = useState<PresetQuality>("high");
   const [showModelDiscovery, setShowModelDiscovery] = useState(false);
+  
+  // Helper to get current preset (returns undefined for custom)
+  const currentPreset = quality !== 'custom' ? presets[quality as keyof typeof presets] : undefined;
+
+  // Fetch available models for Custom Preset panel
+  const { data: availableModelsData, refetch: refetchAvailableModels } = useQuery({
+    queryKey: ['availableModels'],
+    queryFn: async () => {
+      const response = await fetch('/models/available');
+      if (!response.ok) throw new Error('Failed to fetch available models');
+      return response.json();
+    },
+    staleTime: 30000, // 30 seconds
+    enabled: quality === 'custom', // Only fetch when custom preset is selected
+  });
   const [selectedQuant, setSelectedQuant] = useState<string>("q4_k_m");
   const [models, setModels] = useState<ModelSelection>({
     embedding: "",
@@ -171,14 +188,14 @@ export default function ModelConfigPanel() {
 
   // Set initial main model from last active or first option
   useEffect(() => {
-    if (!models.main && presetsData) {
-      const preset = presets[quality];
+    if (!models.main && presetsData && quality !== 'custom') {
+      const preset = presets[quality as keyof typeof presets];
       const initialMain = lastActiveModel || preset?.mainOptions?.[0] || '';
       if (initialMain) {
         setModels(prev => ({ ...prev, main: initialMain }));
       }
     }
-  }, [presetsData]);
+  }, [presetsData, quality]);
 
   // Load current config on mount (only set defaults if not already set)
   useEffect(() => {
@@ -834,41 +851,58 @@ export default function ModelConfigPanel() {
             {presetsLoading ? (
               <div className="text-center py-8 text-white/60">Loading presets...</div>
             ) : (
-              <div className="grid gap-4 md:grid-cols-3">
-                {(Object.entries(presets) as [string, QualityPreset][]).map(([key, preset]) => {
+              <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+                {(['high', 'medium', 'low', 'custom'] as PresetQuality[]).map((key) => {
+                  const preset = presets[key as keyof typeof presets];
                   const isLoading = loadPresetModelsMutation.isPending;
                   const isSelected = quality === key;
                   const isDisabled = isLoading || isSelected;
+                  const isCustom = key === 'custom';
+                  
+                  const presetMeta: Record<string, { name: string; description: string; color: string }> = {
+                    high: { name: 'High Quality', description: 'Best for 12GB+ VRAM', color: 'cyan' },
+                    medium: { name: 'Balanced', description: 'Good for 8GB VRAM', color: 'purple' },
+                    low: { name: 'Fast & Light', description: 'Works on 4GB VRAM', color: 'green' },
+                    custom: { name: 'Custom', description: 'Manual selection', color: 'amber' },
+                  };
+                  const meta = presetMeta[key];
+                  const colorClasses: Record<string, string> = {
+                    cyan: 'border-cyan-400 bg-cyan-400/10',
+                    purple: 'border-purple-400 bg-purple-400/10',
+                    green: 'border-green-400 bg-green-400/10',
+                    amber: 'border-amber-400 bg-amber-400/10',
+                  };
                   
                   return (
                     <div
                       key={key}
                       className={`p-4 border rounded-lg transition-all ${
                         isSelected
-                          ? 'border-cyan-400 bg-cyan-400/10 shadow-[0_0_20px_rgba(44,212,250,0.1)]'
+                          ? colorClasses[meta.color]
                           : isDisabled
                             ? 'border-white/10 bg-white/3 opacity-50 cursor-not-allowed'
                             : 'border-white/15 bg-white/5 hover:border-white/30 cursor-pointer'
                       }`}
                       onClick={() => {
-                        // Prevent duplicate clicks while loading or if already selected
                         if (isDisabled) return;
-                        setQuality(key as "high" | "medium" | "low");
-                        loadPresetModelsMutation.mutate(key);
+                        setQuality(key);
+                        if (!isCustom) {
+                          loadPresetModelsMutation.mutate(key);
+                        }
                       }}
                     >
-                      <h3 className="font-semibold text-white mb-1">{preset.name}</h3>
-                      <p className="text-sm text-white/70">{preset.description}</p>
+                      <h3 className="font-semibold text-white mb-1">{preset?.name || meta.name}</h3>
+                      <p className="text-sm text-white/70">{preset?.description || meta.description}</p>
                       <div className="mt-2 text-xs text-white/50">
-                        {preset.mainOptions?.length || 0} main models available
+                        {isCustom ? 'Configure below' : `${preset?.mainOptions?.length || 0} models`}
                       </div>
                       {isSelected && !isLoading && (
-                        <div className="mt-2 text-xs text-cyan-400 font-semibold">✓ Selected</div>
+                        <div className="mt-2 text-xs text-green-400 font-semibold">✓ Selected</div>
                       )}
-                      {isLoading && isSelected && (
+                      {isLoading && isSelected && !isCustom && (
                         <div className="mt-2 text-xs text-amber-400 font-semibold flex items-center gap-1">
                           <div className="w-3 h-3 border border-amber-400 border-t-transparent rounded-full animate-spin"></div>
-                          Loading models...
+                          Loading...
                         </div>
                       )}
                     </div>
@@ -878,7 +912,23 @@ export default function ModelConfigPanel() {
             )}
           </Card>
 
-          {/* Model Configuration */}
+          {/* Custom Preset Panel */}
+          {quality === 'custom' && (
+            <CustomPresetPanel
+              availableModels={availableModelsData?.models || []}
+              onConfigChange={() => {
+                // Refresh after config change
+                queryClient.invalidateQueries({ queryKey: ['presets'] });
+              }}
+              onModelDownloaded={() => {
+                refetchAvailableModels();
+                refetchModelStatus();
+              }}
+            />
+          )}
+
+          {/* Model Configuration - only for standard presets */}
+          {quality !== 'custom' && (
           <Card title="Model Configuration" subtitle="Auto-configured based on selected preset">
             <div className="space-y-6">
               {/* Quantization Selector for Downloads */}
@@ -1097,6 +1147,7 @@ export default function ModelConfigPanel() {
               </details>
             </div>
           </Card>
+          )}
 
           {/* Model Discovery & Re-analyze */}
           <div className="space-y-3">
@@ -1183,7 +1234,7 @@ export default function ModelConfigPanel() {
                 <div className="space-y-2">
                   <label className="block text-sm font-semibold text-white">RAG Summarizer</label>
                   <div className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white/70">
-                    {getModelDisplayName(presets[quality]?.ragSummarizer || 'Select a quality preset')}
+                    {getModelDisplayName(currentPreset?.ragSummarizer || 'Select a quality preset')}
                   </div>
                   <p className="text-xs text-white/50">Code chunk summaries</p>
                 </div>
@@ -1191,7 +1242,7 @@ export default function ModelConfigPanel() {
                 <div className="space-y-2">
                   <label className="block text-sm font-semibold text-white">Rolling Summarizer</label>
                   <div className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white/70">
-                    {getModelDisplayName(presets[quality]?.rollingSummarizer || 'Select a quality preset')}
+                    {getModelDisplayName(currentPreset?.rollingSummarizer || 'Select a quality preset')}
                   </div>
                   <p className="text-xs text-white/50">Conversation memory</p>
                 </div>
@@ -1204,7 +1255,7 @@ export default function ModelConfigPanel() {
                     className="w-full rounded-xl border border-white/15 bg-white/10 px-3 py-2 text-sm text-white focus:border-cyan-400 focus:outline-none"
                   >
                     <option value="">Select a model...</option>
-                    {(presets[quality]?.mainOptions || []).map((modelId: string) => (
+                    {(currentPreset?.mainOptions || []).map((modelId: string) => (
                       <option key={modelId} value={modelId}>
                         {getModelDisplayName(modelId)}
                       </option>

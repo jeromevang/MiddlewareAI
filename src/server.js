@@ -1379,12 +1379,84 @@ app.post('/lmstudio/models/load-required', async (req, res) => {
 app.post('/lmstudio/models/load-preset/:preset', async (req, res) => {
     try {
         const { preset } = req.params;
-        if (!preset || !['high', 'medium', 'low'].includes(preset)) {
-            return res.status(400).json({ error: 'Invalid preset. Must be one of: high, medium, low' });
+        if (!preset || !['high', 'medium', 'low', 'custom'].includes(preset)) {
+            return res.status(400).json({ error: 'Invalid preset. Must be one of: high, medium, low, custom' });
         }
 
-        const result = await ensurePresetModelsLoaded(preset);
-        appendLog(`Preset '${preset}' models loaded via API: loaded=${result.loaded.length}, kept=${result.kept.length}, unloaded=${result.unloaded.length}`, 'info');
+        let result;
+        
+        if (preset === 'custom') {
+            // Load models from custom preset config
+            const config = getConfig();
+            const customConfig = config.customPreset || {};
+            
+            if (!customConfig.main) {
+                return res.status(400).json({ error: 'Custom preset has no main model configured' });
+            }
+            
+            // Build model list to load
+            const { ensureModelLoaded, unloadModel, listLoadedModels } = require('./lmstudio/model_manager.js');
+            const { findLMStudioModelId } = require('./model_db_service.js');
+            
+            result = { loaded: [], kept: [], unloaded: [], failed: [] };
+            
+            // Get currently loaded models
+            let currentlyLoaded = [];
+            try {
+                currentlyLoaded = (await listLoadedModels()).map(m => m.id);
+            } catch (e) {}
+            
+            // Determine what to load
+            const modelsToLoad = [
+                { role: 'main', id: customConfig.main },
+                { role: 'summarizer', id: customConfig.summarizer },
+                { role: 'embedder', id: customConfig.embedder }
+            ].filter(m => m.id);
+            
+            const neededIds = new Set();
+            for (const m of modelsToLoad) {
+                const actualId = await findLMStudioModelId(m.id);
+                if (actualId) neededIds.add(actualId);
+            }
+            
+            // Unload models not needed
+            for (const loadedId of currentlyLoaded) {
+                if (![...neededIds].some(n => n === loadedId || loadedId.includes(n) || n.includes(loadedId))) {
+                    try {
+                        await unloadModel(loadedId);
+                        result.unloaded.push(loadedId);
+                    } catch (e) {}
+                } else {
+                    result.kept.push(loadedId);
+                }
+            }
+            
+            // Load new models
+            for (const m of modelsToLoad) {
+                const actualId = await findLMStudioModelId(m.id);
+                if (!actualId) {
+                    result.failed.push(m.id);
+                    continue;
+                }
+                
+                // Skip if already loaded
+                if (result.kept.some(k => k === actualId || k.includes(actualId) || actualId.includes(k))) {
+                    continue;
+                }
+                
+                try {
+                    await ensureModelLoaded({ identifier: actualId }, { role: m.role });
+                    result.loaded.push(actualId);
+                } catch (e) {
+                    result.failed.push(m.id);
+                }
+            }
+            
+            appendLog(`Custom preset models loaded via API: loaded=${result.loaded.length}, kept=${result.kept.length}, unloaded=${result.unloaded.length}`, 'info');
+        } else {
+            result = await ensurePresetModelsLoaded(preset);
+            appendLog(`Preset '${preset}' models loaded via API: loaded=${result.loaded.length}, kept=${result.kept.length}, unloaded=${result.unloaded.length}`, 'info');
+        }
         
         res.json({ 
             status: 'ok', 
@@ -1681,6 +1753,34 @@ app.post('/models/validate', async (req, res) => {
     } catch (error) {
         console.error('[API] Failed to validate models:', error.message);
         res.status(500).json({ error: 'Failed to validate models', details: error.message });
+    }
+});
+
+/**
+ * GET /models/available - Get all downloaded/synced models for dropdowns
+ */
+app.get('/models/available', async (req, res) => {
+    try {
+        const { syncModels } = require('./lmstudio/model_sync.js');
+        const { models } = await syncModels();
+        
+        // Format for frontend consumption
+        const formatted = models.map(m => ({
+            id: m.modelKey,
+            modelKey: m.modelKey,
+            name: m.displayName || m.modelKey,
+            sizeGB: m.sizeGB,
+            trainedForToolUse: m.trainedForToolUse || false,
+            maxContextLength: m.maxContextLength,
+            type: m.function, // 'main', 'summarizer', 'embedder'
+            tiers: m.tiers,
+            architecture: m.architecture
+        }));
+        
+        res.json({ status: 'ok', models: formatted, count: formatted.length });
+    } catch (error) {
+        console.error('[API] Failed to get available models:', error.message);
+        res.status(500).json({ error: 'Failed to get available models', details: error.message });
     }
 });
 

@@ -793,3 +793,32 @@ export async function checkHFModelDownloaded(modelId: string): Promise<{
 }> {
   return request(`/models/check-hf/${encodeURIComponent(modelId)}`);
 }
+
+// =============================================================================
+// Available Models API
+// =============================================================================
+
+export interface AvailableModel {
+  id: string;
+  modelKey: string;
+  name: string;
+  sizeGB?: number;
+  trainedForToolUse?: boolean;
+  maxContextLength?: number;
+  type?: string;
+  tiers?: string[];
+  architecture?: string;
+}
+
+export interface AvailableModelsResponse {
+  status: string;
+  models: AvailableModel[];
+  count: number;
+}
+
+/**
+ * Get all downloaded/synced models for dropdowns
+ */
+export async function getAvailableModels(): Promise<AvailableModelsResponse> {
+  return request<AvailableModelsResponse>("/models/available");
+}

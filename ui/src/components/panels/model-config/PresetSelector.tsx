@@ -6,10 +6,12 @@
 import { Check } from 'lucide-react';
 import type { QualityPreset } from '../../../lib/api';
 
+export type PresetQuality = 'high' | 'medium' | 'low' | 'custom';
+
 interface PresetSelectorProps {
   presets: Record<string, QualityPreset>;
-  quality: 'high' | 'medium' | 'low';
-  onPresetChange: (preset: 'high' | 'medium' | 'low') => void;
+  quality: PresetQuality;
+  onPresetChange: (preset: PresetQuality) => void;
   isModelAvailable: (modelId: string) => boolean;
   isLoading?: boolean;
 }
@@ -20,11 +22,12 @@ function getSelectedButtonClasses(color: string): string {
     cyan: 'border-cyan-500/50 bg-cyan-500/10',
     purple: 'border-purple-500/50 bg-purple-500/10',
     green: 'border-green-500/50 bg-green-500/10',
+    amber: 'border-amber-500/50 bg-amber-500/10',
   };
   return colorMap[color] || colorMap.cyan;
 }
 
-const presetMeta = {
+const presetMeta: Record<PresetQuality, { label: string; description: string; color: string; isCustom?: boolean }> = {
   high: {
     label: 'High Quality',
     description: 'Best quality for 12GB+ VRAM',
@@ -39,6 +42,12 @@ const presetMeta = {
     label: 'Fast & Lightweight',
     description: 'Works on 4GB VRAM, fastest inference',
     color: 'green'
+  },
+  custom: {
+    label: 'Custom',
+    description: 'Manual model selection',
+    color: 'amber',
+    isCustom: true
   },
 };
 
@@ -62,11 +71,11 @@ export function PresetSelector({
       
       <h3 className="text-sm font-semibold text-white/70 mb-3">Quality Presets</h3>
       
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {Object.entries(presetMeta).map(([key, meta]) => {
           const preset = presets[key];
           const isSelected = quality === key;
-          const availableCount = countAvailableModels(preset);
+          const availableCount = meta.isCustom ? 0 : countAvailableModels(preset);
           
           return (
             <button
@@ -76,7 +85,7 @@ export function PresetSelector({
                   ? getSelectedButtonClasses(meta.color)
                   : 'border-white/15 bg-white/5 hover:border-white/30'
               }`}
-              onClick={() => onPresetChange(key as 'high' | 'medium' | 'low')}
+              onClick={() => onPresetChange(key as PresetQuality)}
               disabled={isLoading}
             >
               <h3 className="font-semibold text-white mb-1">{preset?.name || meta.label}</h3>
@@ -85,7 +94,7 @@ export function PresetSelector({
               </p>
               <div className="flex items-center justify-between">
                 <span className="text-xs text-white/50">
-                  {isLoading ? 'Loading...' : `${availableCount} main models available`}
+                  {isLoading ? 'Loading...' : meta.isCustom ? 'Configure below' : `${availableCount} models`}
                 </span>
                 {isSelected && (
                   <span className="flex items-center gap-1 text-xs text-green-400">
