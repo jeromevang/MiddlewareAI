@@ -2334,6 +2334,37 @@ app.post('/rag/ensure-models', async (req, res) => {
 });
 
 /**
+ * POST /rag/reindex - Trigger RAG reindexing (clears and rebuilds index)
+ */
+app.post('/rag/reindex', async (req, res) => {
+    try {
+        if (!isRagFeatureEnabled()) {
+            return res.status(400).json({ error: 'RAG is disabled in the current runtime mode.' });
+        }
+
+        const { reason = 'rag-reindex' } = req.body || {};
+
+        // Clear existing index first (dimension may change)
+        console.log('Clearing FAISS index...');
+        await faissIndexManager.clear();
+
+        console.log('Clearing SQLite cache...');
+        await sqliteCacheManager.clearChunks();
+
+        // Start re-index in background
+        console.log('Starting RAG reindexing...');
+        void startIndexer({ reason, background: true });
+
+        appendLog(`RAG reindex triggered: ${reason}`, 'info');
+        res.json({ status: 'ok', message: 'RAG reindexing started in background' });
+    } catch (error) {
+        appendLog(`RAG reindex failed: ${error.message}`, 'error');
+        console.error('[API] Failed to start RAG reindex:', error.message);
+        res.status(500).json({ error: 'Failed to start reindexing', details: error.message });
+    }
+});
+
+/**
  * POST /presets/optimize - Run LLM-powered optimization
  */
 app.post('/presets/optimize', async (req, res) => {
