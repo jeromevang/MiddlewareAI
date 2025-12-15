@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels, loadPresetModels, getPresets, setActiveModel, getModelStatus, downloadModel, getQuantOptions, getBootstrapStatus, triggerBootstrap } from "../../lib/api";
-import type { ModelAvailability, QuantOption } from "../../lib/api";
+import { saveConfig, deleteAllSessions, reprocessSummaries, updateSummaryKeepRecent, triggerAction, unloadModel, unloadAllModels, refreshModelContext, checkLMStudioHealth, startLMStudioServer, stopLMStudioServer, loadRequiredModels, loadPresetModels, getPresets, setActiveModel, getModelStatus, downloadModel, getBootstrapStatus, triggerBootstrap } from "../../lib/api";
+import type { ModelAvailability } from "../../lib/api";
 import { SuggestedModelsPanel } from "../ui/SuggestedModelsPanel";
 import { useDashboardStore } from "../../state/dashboard-store";
 import { Card } from "../ui/Card";
@@ -90,18 +90,6 @@ export default function ModelConfigPanel() {
       ])
     );
 
-  // Fetch quantization options
-  const { data: quantOptionsData } = useQuery({
-    queryKey: ['quantOptions'],
-    queryFn: getQuantOptions,
-    staleTime: 300000, // 5 minutes - these rarely change
-  });
-  const quantOptions: QuantOption[] = quantOptionsData?.options || [
-    { id: 'q4_k_m', name: 'Q4_K_M', description: 'Balanced (recommended)', sizeMultiplier: 0.5 },
-    { id: 'q8_0', name: 'Q8_0', description: 'High quality', sizeMultiplier: 0.9 },
-    { id: 'q3_k_m', name: 'Q3_K_M', description: 'Compact', sizeMultiplier: 0.4 },
-  ];
-
   // Fetch bootstrap status
   const { data: bootstrapData } = useQuery({
     queryKey: ['bootstrapStatus'],
@@ -139,7 +127,6 @@ export default function ModelConfigPanel() {
     staleTime: 30000, // 30 seconds
     enabled: quality === 'custom', // Only fetch when custom preset is selected
   });
-  const [selectedQuant, setSelectedQuant] = useState<string>("q4_k_m");
   const [models, setModels] = useState<ModelSelection>({
     embedding: "",
     ragSummarizer: "",
@@ -655,7 +642,7 @@ export default function ModelConfigPanel() {
   };
 
   const handleDownloadModel = (modelId: string, quant?: string) => {
-    const quantToUse = quant || selectedQuant;
+    const quantToUse = quant || 'q4_k_m'; // Default to balanced quantization
     setMessage(`⏳ Downloading ${getModelDisplayName(modelId)} (${quantToUse.toUpperCase()})...`);
     downloadModelMutation.mutate({ modelId, quant: quantToUse });
   };
@@ -931,26 +918,6 @@ export default function ModelConfigPanel() {
           {quality !== 'custom' && (
           <Card title="Model Configuration" subtitle="Auto-configured based on selected preset">
             <div className="space-y-6">
-              {/* Quantization Selector for Downloads */}
-              <div className="flex items-center justify-between p-3 bg-white/5 border border-white/10 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <Download className="h-4 w-4 text-amber-400" />
-                  <span className="text-sm text-white">Download Quality</span>
-                  <span className="text-xs text-white/50">(for new model downloads)</span>
-                </div>
-                <select
-                  value={selectedQuant}
-                  onChange={(e) => setSelectedQuant(e.target.value)}
-                  className="px-3 py-1.5 rounded-lg border border-white/20 bg-gray-800 text-sm text-white focus:border-amber-400 focus:outline-none"
-                >
-                  {quantOptions.map((opt) => (
-                    <option key={opt.id} value={opt.id}>
-                      {opt.name} - {opt.description}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
               {/* All 4 models in a grid */}
               <div className="grid gap-4 md:grid-cols-2">
                 {/* Embedding Model */}
