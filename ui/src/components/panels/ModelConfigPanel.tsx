@@ -80,6 +80,33 @@ export default function ModelConfigPanel() {
     },
   });
 
+  // Fetch RAG pipeline configuration
+  const { data: ragTierData } = useQuery({
+    queryKey: ['ragTier'],
+    queryFn: async () => {
+      const res = await fetch("/rag/tier");
+      return res.json();
+    },
+    staleTime: 30000,
+  });
+
+  // Mutation to change RAG tier
+  const changeRagTierMutation = useMutation({
+    mutationFn: async (tier: string) => {
+      const res = await fetch("/rag/tier", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tier }),
+      });
+      if (!res.ok) throw new Error('Failed to change RAG tier');
+      return res.json();
+    },
+    onSuccess: () => {
+      // Invalidate RAG tier query to refresh the UI
+      queryClient.invalidateQueries({ queryKey: ['ragTier'] });
+    },
+  });
+
   const modelAvailability: Record<string, ModelAvailability> = modelStatusData?.availability || {};
   const loadedModels: string[] = modelStatusData?.loadedModels || [];
   const activeDownloads: Record<string, { status: string; startedAt: number; progress: number }> =
@@ -877,6 +904,11 @@ export default function ModelConfigPanel() {
                         if (isDisabled) return;
                         setQuality(key);
                         if (!isCustom) {
+                          // Also update RAG tier to match the preset quality
+                          const ragTierMap = { high: 'high', medium: 'medium', low: 'low' };
+                          if (ragTierMap[key as keyof typeof ragTierMap]) {
+                            changeRagTierMutation.mutate(ragTierMap[key as keyof typeof ragTierMap]);
+                          }
                           loadPresetModelsMutation.mutate(key);
                         }
                       }}
@@ -930,7 +962,7 @@ export default function ModelConfigPanel() {
                     <label className="text-sm font-semibold text-white">Embedding</label>
                     <span className="text-xs px-2 py-0.5 bg-cyan-500/20 text-cyan-400 rounded">CPU</span>
                   </div>
-                  <div className="text-sm text-white/80">{getModelDisplayName(presets[quality]?.embedding || 'Not set')}</div>
+                  <div className="text-sm text-white/80">{getModelDisplayName(ragTierData?.config?.embedder?.model_name || 'Jina Code v2')}</div>
                   <p className="text-xs text-white/50 mt-1">Vector search embeddings</p>
                 </div>
 
@@ -941,15 +973,15 @@ export default function ModelConfigPanel() {
                     <label className="text-sm font-semibold text-white">RAG Summarizer</label>
                     <span className="text-xs px-2 py-0.5 bg-amber-500/20 text-amber-400 rounded">Auto</span>
                   </div>
-                  <div className="text-sm text-white/80">{getModelDisplayName(presets[quality]?.ragSummarizer || 'Not set')}</div>
+                  <div className="text-sm text-white/80">{getModelDisplayName(ragTierData?.config?.ragSummarizer?.model_name || 'Not set')}</div>
                   <p className="text-xs text-white/50 mt-1">Code chunk summaries</p>
-                  {presets[quality]?.ragSummarizer && !isModelAvailable(presets[quality].ragSummarizer) && (
+                  {ragTierData?.config?.ragSummarizer?.identifier && !isModelAvailable(ragTierData.config.ragSummarizer.identifier) && (
                     <button
-                      onClick={() => handleDownloadModel(presets[quality].ragSummarizer)}
-                      disabled={isModelDownloading(presets[quality].ragSummarizer)}
+                      onClick={() => handleDownloadModel(ragTierData.config.ragSummarizer.identifier)}
+                      disabled={isModelDownloading(ragTierData.config.ragSummarizer.identifier)}
                       className="mt-2 text-xs px-2 py-1 bg-amber-500/20 hover:bg-amber-500/30 text-amber-400 rounded disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
                     >
-                      {isModelDownloading(presets[quality].ragSummarizer) ? (
+                      {isModelDownloading(ragTierData.config.ragSummarizer.identifier) ? (
                         <>
                           <div className="w-3 h-3 border border-amber-400 border-t-transparent rounded-full animate-spin"></div>
                           Downloading...
