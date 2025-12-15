@@ -247,18 +247,49 @@ function invalidateHardwareCache() {
 // VRAM-Aware Context Calculation
 // ============================================================================
 
-// Minimum context lengths by role
-const MIN_CONTEXT = {
-    main: 8192,        // 8K minimum for coding tasks
-    summarizer: 4096,  // 4K fixed for summarizers
+// Default minimum context lengths by role (can be overridden by system settings)
+const DEFAULT_MIN_CONTEXT = {
+    main: 16384,       // 16K minimum for coding tasks (configurable)
+    summarizer: 4096,  // 4K fixed for summarizers (configurable)
     embedder: 8192     // Model's native (Jina is 8K)
 };
+
+// Legacy export for compatibility
+const MIN_CONTEXT = DEFAULT_MIN_CONTEXT;
 
 // Approximate VRAM per 8K context tokens (varies by model architecture)
 const VRAM_PER_8K_CONTEXT = 0.5; // ~0.5GB per 8K tokens
 
 /**
- * Calculate optimal context length based on available VRAM.
+ * Get context limits from system settings
+ * @returns {object} Context limits
+ */
+function getContextLimits() {
+    try {
+        const { getSystemSettings } = require('./config.js');
+        const settings = getSystemSettings();
+        return {
+            minMain: settings.minMainContextTokens || DEFAULT_MIN_CONTEXT.main,
+            summarizer: settings.summarizerContextTokens || DEFAULT_MIN_CONTEXT.summarizer,
+            embedder: DEFAULT_MIN_CONTEXT.embedder,
+            maxCap: settings.maxContextCap || 131072,
+            vramHeadroom: settings.vramHeadroomGB || 1.5,
+            dynamicScaling: settings.dynamicContextScaling !== false
+        };
+    } catch (e) {
+        return {
+            minMain: DEFAULT_MIN_CONTEXT.main,
+            summarizer: DEFAULT_MIN_CONTEXT.summarizer,
+            embedder: DEFAULT_MIN_CONTEXT.embedder,
+            maxCap: 131072,
+            vramHeadroom: 1.5,
+            dynamicScaling: true
+        };
+    }
+}
+
+/**
+ * Calculate optimal context length based on available VRAM and system settings.
  * @param {Object} params - Calculation parameters
  * @param {number} params.modelSizeGB - Model size in GB
  * @param {number} params.modelMaxContext - Model's maximum supported context
@@ -267,31 +298,41 @@ const VRAM_PER_8K_CONTEXT = 0.5; // ~0.5GB per 8K tokens
  * @returns {Promise<{context: number, fits: boolean, warning?: string}>}
  */
 async function calculateOptimalContext({ modelSizeGB, modelMaxContext, role, availableVRAM = null }) {
-    // Fixed context for summarizers and embedders
+    const limits = getContextLimits();
+    
+    // Fixed context for summarizers
     if (role === 'summarizer') {
-        return { context: MIN_CONTEXT.summarizer, fits: true };
-    }
-    if (role === 'embedder') {
-        return { context: modelMaxContext || MIN_CONTEXT.embedder, fits: true };
+        return { context: limits.summarizer, fits: true };
     }
     
-    // Main model: calculate based on VRAM
+    // Embedders use their native context
+    if (role === 'embedder') {
+        return { context: modelMaxContext || limits.embedder, fits: true };
+    }
+    
+    // Main model: calculate based on VRAM if dynamic scaling is enabled
     if (availableVRAM === null) {
         const hw = await detectHardware();
         availableVRAM = hw.gpu?.totalGB || 0;
     }
     
-    // Reserve: 2GB headroom + model size + space for other models
-    const reservedVRAM = 2 + modelSizeGB;
+    // If dynamic scaling is disabled, use minimum
+    if (!limits.dynamicScaling) {
+        return { context: limits.minMain, fits: true };
+    }
+    
+    // Reserve VRAM: headroom + model size + summarizers (~1.5GB)
+    const summarizersVRAM = 1.5;
+    const reservedVRAM = limits.vramHeadroom + modelSizeGB + summarizersVRAM;
     const availableForContext = Math.max(0, availableVRAM - reservedVRAM);
     
     // Calculate how much context we can afford
     const contextChunks = Math.floor(availableForContext / VRAM_PER_8K_CONTEXT);
     const calculatedContext = contextChunks * 8192;
     
-    // Apply minimum and maximum bounds
-    const minContext = MIN_CONTEXT.main;
-    const maxContext = modelMaxContext || 128000;
+    // Apply minimum and maximum bounds from settings
+    const minContext = limits.minMain;
+    const maxContext = Math.min(modelMaxContext || 128000, limits.maxCap);
     
     let finalContext = Math.max(minContext, Math.min(maxContext, calculatedContext));
     let fits = true;

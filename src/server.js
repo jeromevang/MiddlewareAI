@@ -1286,6 +1286,75 @@ app.patch('/api/config', async (req, res) => {
     }
 });
 
+// =============================================================================
+// SYSTEM SETTINGS API
+// =============================================================================
+
+/**
+ * GET /api/system-settings - Get system settings (context limits, VRAM, etc.)
+ */
+app.get('/api/system-settings', async (_req, res) => {
+    try {
+        const { getSystemSettings } = require('./config.js');
+        const settings = getSystemSettings();
+        res.json({ status: 'ok', settings });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * PATCH /api/system-settings - Update system settings
+ */
+app.patch('/api/system-settings', async (req, res) => {
+    try {
+        const { updateSystemSettings, getSystemSettings } = require('./config.js');
+        const updates = req.body || {};
+        
+        // Validate numeric fields
+        const numericFields = ['minMainContextTokens', 'summarizerContextTokens', 'maxContextCap', 'vramHeadroomGB'];
+        for (const field of numericFields) {
+            if (updates[field] !== undefined) {
+                const val = Number(updates[field]);
+                if (!Number.isFinite(val) || val < 0) {
+                    return res.status(400).json({ error: `Invalid ${field}: must be a positive number` });
+                }
+                updates[field] = val;
+            }
+        }
+        
+        // Validate boolean fields
+        const boolFields = ['dynamicContextScaling', 'filterBelowMinContext'];
+        for (const field of boolFields) {
+            if (updates[field] !== undefined && typeof updates[field] !== 'boolean') {
+                return res.status(400).json({ error: `Invalid ${field}: must be boolean` });
+            }
+        }
+        
+        // Validate context limits
+        if (updates.minMainContextTokens !== undefined && updates.minMainContextTokens < 4096) {
+            return res.status(400).json({ error: 'minMainContextTokens must be at least 4096' });
+        }
+        if (updates.summarizerContextTokens !== undefined && updates.summarizerContextTokens < 1024) {
+            return res.status(400).json({ error: 'summarizerContextTokens must be at least 1024' });
+        }
+        
+        const newSettings = updateSystemSettings(updates);
+        
+        // Invalidate model sync cache so new filters apply
+        const { invalidateSyncCache } = require('./lmstudio/model_sync.js');
+        invalidateSyncCache();
+        
+        res.json({ 
+            status: 'ok', 
+            settings: newSettings,
+            note: 'Settings updated. Reload preset to apply context changes.'
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
 app.patch('/engines/:engine', async (req, res) => {
     const { engine } = req.params;
     const supported = ['rag', 'summary'];

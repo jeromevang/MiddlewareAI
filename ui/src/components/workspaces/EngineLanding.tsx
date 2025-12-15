@@ -223,6 +223,23 @@ export default function EngineLanding() {
               </div>
             </div>
           </button>
+          
+          <button
+            onClick={() => navigate("/settings")}
+            className="p-4 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all text-left group"
+          >
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">⚙️</span>
+              <div>
+                <div className="font-medium text-white group-hover:text-accent-primary transition-colors">
+                  System Settings
+                </div>
+                <div className="text-xs text-white/50">
+                  Context limits, VRAM, model filtering
+                </div>
+              </div>
+            </div>
+          </button>
         </section>
 
         {/* Performance Overview */}

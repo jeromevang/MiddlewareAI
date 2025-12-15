@@ -7,6 +7,7 @@ import EngineLanding from "./components/workspaces/EngineLanding";
 import SummaryWorkspace from "./components/workspaces/SummaryWorkspace";
 import ConfigWorkspace from "./components/workspaces/ConfigWorkspace";
 import DebugWorkspace from "./components/workspaces/DebugWorkspace";
+import { SettingsWorkspace } from "./components/workspaces/SettingsWorkspace";
 import { CommandPalette } from "./components/ui/CommandPalette";
 
 const RAW_BASE = import.meta.env.BASE_URL || "/";
@@ -91,6 +92,7 @@ function App() {
             <Route path="/summary" element={<SummaryWorkspace />} />
             <Route path="/config" element={<ConfigWorkspace />} />
             <Route path="/debug" element={<DebugWorkspace />} />
+            <Route path="/settings" element={<SettingsWorkspace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

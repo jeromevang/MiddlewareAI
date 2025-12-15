@@ -194,6 +194,34 @@ function getSessionConfig() {
     return loadConfig().sessions || { default_retention_days: 30 };
 }
 
+/**
+ * Get system settings for context limits, VRAM management, etc.
+ * @returns {object} System settings with defaults
+ */
+function getSystemSettings() {
+    const config = loadConfig();
+    const defaults = {
+        minMainContextTokens: 16384,
+        summarizerContextTokens: 4096,
+        maxContextCap: 131072,
+        vramHeadroomGB: 1.5,
+        dynamicContextScaling: true,
+        filterBelowMinContext: true
+    };
+    return { ...defaults, ...(config.system || {}) };
+}
+
+/**
+ * Update system settings
+ * @param {object} settings - Partial settings to update
+ */
+function updateSystemSettings(settings) {
+    const config = loadConfig();
+    config.system = { ...getSystemSettings(), ...settings };
+    updateConfigFile(config);
+    return config.system;
+}
+
 module.exports = {
     getConfig,
     getLMStudioConfig,
@@ -202,6 +230,8 @@ module.exports = {
     getStorageConfig,
     getRuntimeConfig,
     getSessionConfig,
+    getSystemSettings,
+    updateSystemSettings,
     updateConfigFile,
     getRagPipelineTier,
     setRagPipelineTier,

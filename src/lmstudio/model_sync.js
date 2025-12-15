@@ -11,6 +11,7 @@ const { exec } = require('child_process');
 const { promisify } = require('util');
 const { getLMStudioCLIPath } = require('../lmstudio_manager.js');
 const { getPresetVRAMBudget } = require('../hardware_detector.js');
+const { getSystemSettings } = require('../config.js');
 
 const execAsync = promisify(exec);
 
@@ -48,12 +49,23 @@ const ROLE_DEFAULTS = {
 };
 
 /**
- * Get role defaults for a specific role
+ * Get role defaults for a specific role (reads context lengths from system settings)
  * @param {string} role - 'main', 'summarizer', or 'embedder'
  * @returns {object}
  */
 function getRoleDefaults(role) {
-    return ROLE_DEFAULTS[role] || ROLE_DEFAULTS.summarizer;
+    const settings = getSystemSettings();
+    const defaults = { ...ROLE_DEFAULTS[role] } || { ...ROLE_DEFAULTS.summarizer };
+    
+    // Override context lengths from system settings
+    if (role === 'main') {
+        // Main model uses minimum as baseline, can be scaled up dynamically
+        defaults.contextLength = settings.minMainContextTokens || 16384;
+    } else if (role === 'summarizer') {
+        defaults.contextLength = settings.summarizerContextTokens || 4096;
+    }
+    
+    return defaults;
 }
 
 /**
@@ -81,17 +93,36 @@ async function fetchModelsFromLMStudio() {
 /**
  * Determine the function/role of a model based on its properties
  * @param {object} model - Model from LM Studio
- * @returns {'main' | 'summarizer' | 'embedder'}
+ * @returns {'main' | 'summarizer' | 'embedder' | 'excluded'}
  */
 function determineModelFunction(model) {
+    const settings = getSystemSettings();
+    const minMainContext = settings.minMainContextTokens || 16384;
+    const filterBelowMin = settings.filterBelowMinContext !== false;
+    
     // Embeddings are clearly marked
     if (model.type === 'embedding') {
         return 'embedder';
     }
     
-    // Models with tool use capability are best for main role
-    if (model.trainedForToolUse) {
+    // Check if model meets minimum context requirement for main role
+    const modelMaxContext = model.maxContextLength || 4096;
+    const meetsMinContext = modelMaxContext >= minMainContext;
+    
+    // Models with tool use capability are best for main role (if they meet context requirement)
+    if (model.trainedForToolUse && meetsMinContext) {
         return 'main';
+    }
+    
+    // If model doesn't meet minimum context and filtering is enabled, it can only be summarizer
+    if (filterBelowMin && !meetsMinContext) {
+        // Small context models can still be summarizers (they only need 4K)
+        if (modelMaxContext >= 4096) {
+            return 'summarizer';
+        }
+        // Models with less than 4K context are excluded
+        console.log(`[ModelSync] Excluding model ${model.path || model.modelKey}: context ${modelMaxContext} < 4096`);
+        return 'excluded';
     }
     
     // Default to summarizer for other LLMs
