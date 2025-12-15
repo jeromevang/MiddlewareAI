@@ -182,6 +182,19 @@ async function openModel(modelOrId) {
     const modelName = loadName || identifier;
     const requestId = generateRequestId();
 
+    // Check if model is already loaded BEFORE attempting to load via CLI
+    // This prevents duplicate model instances
+    try {
+        const alreadyLoaded = await isModelLoadedRemote(modelName);
+        if (alreadyLoaded) {
+            console.log(`[LM Studio Load] Model already loaded, skipping CLI load: ${modelName}`);
+            loadedModels.add(identifier);
+            return;
+        }
+    } catch (checkErr) {
+        console.warn(`[LM Studio Load] Pre-check failed, proceeding with load: ${checkErr?.message}`);
+    }
+
     // Load the model using CLI (REST API /api/v0/models/load is NOT a valid endpoint)
     try {
         console.log(`[LM Studio Load] Loading model via CLI: ${modelName}`);

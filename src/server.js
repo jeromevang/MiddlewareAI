@@ -2197,9 +2197,15 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         }
 
         // Call main model with enhanced context
+        // Always use the configured main model - ignore whatever Cursor sends
+        // This ensures we use the model that's actually loaded in LM Studio
         const mainModel = getModelConfig('main').identifier;
-        const forceModel = getConfig().models?.force_model ?? false;
-        const modelToUse = forceModel ? mainModel : (requestedModel || mainModel);
+        const modelToUse = mainModel;
+        
+        // Log if Cursor requested a different model (for debugging)
+        if (requestedModel && requestedModel !== mainModel) {
+            console.log(`[Server] Cursor requested model '${requestedModel}', using configured main model '${mainModel}'`);
+        }
         
         if (stream) {
             const lmStarted = Date.now();
