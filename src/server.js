@@ -2304,37 +2304,50 @@ app.get('/rag/check-reindex', (req, res) => {
  */
 app.post('/rag/ensure-models', async (req, res) => {
     try {
-        const { tier } = req.body;
+        const { tier, previousTier } = req.body;
+        console.log(`[RAG] ensure-models called: tier=${tier}, previousTier=${previousTier}`);
         if (!tier) {
             return res.status(400).json({ error: 'Missing tier parameter' });
         }
 
-        const { getRagPipelineConfig } = require('./rag_pipeline_config.js');
+        const { getRagPipelineConfig, getAllTiers } = require('./rag_pipeline_config.js');
         const pipelineConfig = getRagPipelineConfig(tier);
         if (!pipelineConfig) {
             return res.status(400).json({ error: 'Invalid tier' });
         }
 
-        const { openModel } = require('./lmstudio/model_manager.js');
+        const { openModel, unloadModel } = require('./lmstudio/model_manager.js');
 
-        // Load embedder model if needed
-        const embedderId = pipelineConfig.embedder.identifier;
-        console.log(`Ensuring embedder is loaded: ${embedderId}`);
-        try {
-            await openModel(embedderId);
-            console.log(`Embedder ${embedderId} is ready`);
-        } catch (error) {
-            console.warn(`Failed to load embedder ${embedderId}:`, error.message);
+        // If we have a previous tier, unload its RAG summarizer (embedders are local, not LM Studio models)
+        if (previousTier && previousTier !== tier) {
+            console.log(`[RAG] Unloading previous tier RAG summarizer: ${previousTier} -> ${tier}`);
+            const prevConfig = getRagPipelineConfig(previousTier);
+            if (prevConfig) {
+                console.log(`[RAG] Previous config: summarizer=${prevConfig.ragSummarizer.identifier}`);
+                try {
+                    await unloadModel(prevConfig.ragSummarizer.identifier);
+                    console.log(`[RAG] ✅ Unloaded RAG summarizer: ${prevConfig.ragSummarizer.identifier}`);
+                } catch (error) {
+                    console.warn(`[RAG] ❌ Failed to unload RAG summarizer ${prevConfig.ragSummarizer.identifier}:`, error.message);
+                }
+            } else {
+                console.log(`[RAG] No previous config found for tier: ${previousTier}`);
+            }
+        } else {
+            console.log(`[RAG] No previous tier or same tier: previous=${previousTier}, current=${tier}`);
         }
 
-        // Load RAG summarizer if needed
+        // Note: Embedders are local @xenova/transformers models, not LM Studio models
+        console.log(`[RAG] Embedder is local model: ${pipelineConfig.embedder.identifier} (no LM Studio loading needed)`);
+
+        // Load new RAG summarizer
         const summarizerId = pipelineConfig.ragSummarizer.identifier;
         console.log(`Ensuring RAG summarizer is loaded: ${summarizerId}`);
         try {
             await openModel(summarizerId);
-            console.log(`RAG summarizer ${summarizerId} is ready`);
+            console.log(`[RAG] ✅ RAG summarizer ${summarizerId} is ready`);
         } catch (error) {
-            console.warn(`Failed to load RAG summarizer ${summarizerId}:`, error.message);
+            console.warn(`[RAG] ❌ Failed to load RAG summarizer ${summarizerId}:`, error.message);
         }
 
         res.json({ status: 'ok', message: 'Models loading initiated' });
@@ -2406,8 +2419,8 @@ app.get('/rag/indexing-status', async (req, res) => {
             currentFile: indexerStatus.currentFile,
             filesProcessed: indexerStatus.filesProcessed,
             totalFiles: indexerStatus.totalFiles,
-            chunksProcessed: dbStats.totalChunks || 0,
-            totalChunks: dbStats.totalChunks || 0,
+            chunksProcessed: dbStats.chunkCount || 0,
+            totalChunks: dbStats.chunkCount || 0,
             startTime: indexerStatus.startTime,
             estimatedTimeRemaining: indexerStatus.estimatedTimeRemaining,
             status: indexerStatus.status,
