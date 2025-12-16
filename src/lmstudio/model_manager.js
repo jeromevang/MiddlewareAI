@@ -661,8 +661,21 @@ async function ensureRequiredModelsLoaded() {
                 continue;
             }
             
-            console.log(`[LM Studio] Loading model: ${actualId} (from config: ${config.identifier})`);
-            await ensureModelLoaded({ ...config, identifier: actualId });
+            // Build load options from config (handle snake_case -> camelCase)
+            const loadOptions = {};
+            if (config.context_length) {
+                loadOptions.contextLength = config.context_length;
+                console.log(`[LM Studio] Using context_length from config: ${config.context_length}`);
+            }
+            // Set role based on type
+            if (type === 'main') {
+                loadOptions.role = 'main';
+            } else if (type === 'rollingSummarization' || type === 'ragSummarization') {
+                loadOptions.role = 'summarizer';
+            }
+            
+            console.log(`[LM Studio] Loading model: ${actualId} (from config: ${config.identifier})${loadOptions.contextLength ? ` with context=${loadOptions.contextLength}` : ''}`);
+            await ensureModelLoaded({ ...config, identifier: actualId }, loadOptions);
             console.log(`[LM Studio] Successfully loaded model: ${actualId}`);
         } catch (error) {
             console.error(`[LM Studio] Failed to load model ${config.identifier}:`, error.message);
