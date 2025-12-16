@@ -1,13 +1,18 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useDashboardStore } from "../state/dashboard-store";
 import type { DashboardSnapshot, SessionTurnsResponse, SessionUpdatePayload } from "../types/dashboard";
+
+// Exponential backoff for reconnection
+const MIN_RECONNECT_DELAY = 1000;
+const MAX_RECONNECT_DELAY = 30000;
 
 export function useDashboardSocket() {
   const setSnapshot = useDashboardStore((s) => s.setSnapshot);
   const setConnection = useDashboardStore((s) => s.setConnection);
   const upsertSession = useDashboardStore((s) => s.upsertSession);
   const queryClient = useQueryClient();
+  const reconnectAttempts = useRef(0);
 
   useEffect(() => {
     let ws: WebSocket | null = null;
@@ -34,6 +39,16 @@ export function useDashboardSocket() {
       }
     };
 
+    const getReconnectDelay = () => {
+      // Exponential backoff with jitter
+      const delay = Math.min(
+        MIN_RECONNECT_DELAY * Math.pow(2, reconnectAttempts.current),
+        MAX_RECONNECT_DELAY
+      );
+      // Add random jitter (0-25%)
+      return delay + Math.random() * delay * 0.25;
+    };
+
     const connect = () => {
       if (!isMounted) return;
       setConnection("connecting");
@@ -42,6 +57,7 @@ export function useDashboardSocket() {
 
       ws.onopen = () => {
         setConnection("open");
+        reconnectAttempts.current = 0; // Reset on successful connection
         ws?.send(JSON.stringify({ type: "snapshot-request" }));
       };
 
@@ -60,8 +76,12 @@ export function useDashboardSocket() {
 
       ws.onclose = () => {
         setConnection("closed");
+        if (!isMounted) return; // Don't reconnect if unmounted
+        
         if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connect, 3_000);
+        reconnectAttempts.current++;
+        const delay = getReconnectDelay();
+        reconnectTimer = setTimeout(connect, delay);
       };
 
       ws.onerror = () => {
@@ -74,7 +94,10 @@ export function useDashboardSocket() {
     return () => {
       isMounted = false;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      ws?.close();
+      if (ws) {
+        ws.onclose = null; // Prevent reconnection on cleanup
+        ws.close();
+      }
     };
   }, [setSnapshot, setConnection, upsertSession, queryClient]);
 }

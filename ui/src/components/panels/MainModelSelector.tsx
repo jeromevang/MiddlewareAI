@@ -30,11 +30,12 @@ export function MainModelSelector({
   const [showDetails, setShowDetails] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
-  // Fetch model availability status
+  // Fetch model availability status - poll every 10 seconds
   const { data: modelStatusData } = useQuery({
     queryKey: ['modelStatus'],
     queryFn: getModelStatus,
-    staleTime: 2000,
+    staleTime: 10000,
+    refetchInterval: 10000,
   });
 
   // Fetch model lock states

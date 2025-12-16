@@ -4,14 +4,18 @@ export default defineConfig({
   testDir: './tests',
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 0,
+  retries: 1,
   workers: 1,
-  reporter: 'html',
-  timeout: 60000,
+  reporter: [['list']],
+  timeout: 15000, // 15 seconds max per test
+  expect: {
+    timeout: 5000, // 5 second expect timeout
+  },
   use: {
-    baseURL: process.env.BASE_URL || 'http://localhost:5173',
-    trace: 'on-first-retry',
-    screenshot: 'only-on-failure',
+    baseURL: 'http://localhost:5173',
+    trace: 'off',
+    screenshot: 'off',
+    video: 'off',
   },
   projects: [
     {
@@ -19,10 +23,4 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
   ],
-  webServer: {
-    command: 'npm run dev',
-    url: 'http://localhost:5173',
-    reuseExistingServer: true,
-    timeout: 120000,
-  },
 });

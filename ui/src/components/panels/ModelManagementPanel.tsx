@@ -63,11 +63,12 @@ export function ModelManagementPanel() {
     staleTime: 5000,
   });
 
-  // Fetch model status (loaded models)
+  // Fetch model status (loaded models) - poll every 10 seconds
   const { data: statusData } = useQuery({
     queryKey: ['modelStatus'],
     queryFn: getModelStatus,
-    staleTime: 2000,
+    staleTime: 10000,
+    refetchInterval: 10000,
   });
 
   // Toggle lock mutation

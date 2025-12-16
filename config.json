@@ -39,7 +39,7 @@
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },
   "models": {
-    "activePreset": "high",
+    "activePreset": "low",
     "main": {
       "model_name": "qwen/qwen3-4b-2507",
       "identifier": "qwen/qwen3-4b-2507",
@@ -53,7 +53,7 @@
     },
     "perQualityMainModels": {
       "high": "llama-3.1-nemotron-70b-instruct-hf@q2_k_l",
-      "medium": "mungert/osmosis-mcp-4b",
+      "medium": "qwen2.5-coder-0.5b-instruct",
       "low": "qwen/qwen3-4b-2507"
     },
     "perQualityRollingSummarizers": {

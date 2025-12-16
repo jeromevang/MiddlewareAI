@@ -472,6 +472,9 @@ async function unloadAllModels() {
     }
 }
 
+// Cache to track loaded models state and prevent log flooding
+let _lastLoadedModelIds = null;
+
 async function listLoadedModels() {
     try {
         const res = await axios.get(`${LM_STUDIO_URL}/api/v0/models`, { timeout: LM_STUDIO_TIMEOUT_MS });
@@ -484,7 +487,13 @@ async function listLoadedModels() {
             context_length: m.context_length
         }));
 
-        console.log(`[LM Studio Models] Found ${loaded.length} loaded models:`, loaded.map(m => m.id).join(', '));
+        // Only log when model list changes (prevents log flooding)
+        const currentIds = loaded.map(m => m.id).sort().join(',');
+        if (_lastLoadedModelIds !== currentIds) {
+            console.log(`[LM Studio Models] Loaded models changed: ${loaded.length} models`, loaded.map(m => m.id).join(', '));
+            _lastLoadedModelIds = currentIds;
+        }
+        
         return loaded;
     } catch (error) {
         console.error(`[LM Studio Models] Failed to list models:`, error.message);

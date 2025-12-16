@@ -70,7 +70,8 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
       const res = await fetch('/lmstudio/health');
       if (!res.ok) return false;
       const data = await res.json();
-      return data.connected === true || data.status === 'healthy';
+      // API returns: { status: "ok", ready: true, ... }
+      return data.ready === true || data.status === 'ok' || data.connected === true;
     } catch {
       return false;
     }
