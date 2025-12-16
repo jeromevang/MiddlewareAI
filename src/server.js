@@ -2482,6 +2482,230 @@ app.post('/hardware/calculate-context', async (req, res) => {
 });
 
 // =========================
+// GPU Optimization Endpoints
+// =========================
+
+/**
+ * GET /gpu/status - Get current GPU optimization status
+ */
+app.get('/gpu/status', async (req, res) => {
+    try {
+        const { getOptimizationStatus } = require('./gpu_optimizer.js');
+        const { getGPUInfo, getVRAMUsage } = require('./gpu_monitor.js');
+        
+        const status = getOptimizationStatus();
+        const gpuInfo = await getGPUInfo();
+        const vramUsage = await getVRAMUsage();
+        
+        res.json({
+            status: 'ok',
+            optimization: status,
+            gpu: gpuInfo,
+            vram: vramUsage
+        });
+    } catch (error) {
+        console.error('[API] Failed to get GPU status:', error.message);
+        res.status(500).json({ error: 'Failed to get GPU status', details: error.message });
+    }
+});
+
+/**
+ * GET /gpu/settings - Get cached GPU settings for current model combination
+ */
+app.get('/gpu/settings', async (req, res) => {
+    try {
+        const { getCachedSettings, generateCombinationHash } = require('./gpu_optimizer.js');
+        const { listLoadedModels } = require('./lmstudio/model_manager.js');
+        
+        const loadedModels = await listLoadedModels();
+        const modelIds = loadedModels.map(m => m.id);
+        const combinationHash = generateCombinationHash(modelIds);
+        
+        const cached = await getCachedSettings(modelIds);
+        
+        res.json({
+            status: 'ok',
+            combinationHash,
+            modelIds,
+            cached: cached || null,
+            hasCached: !!cached
+        });
+    } catch (error) {
+        console.error('[API] Failed to get GPU settings:', error.message);
+        res.status(500).json({ error: 'Failed to get GPU settings', details: error.message });
+    }
+});
+
+/**
+ * GET /gpu/settings/all - Get all cached GPU optimization entries
+ */
+app.get('/gpu/settings/all', async (req, res) => {
+    try {
+        const { getAllCached } = require('./gpu_optimizer.js');
+        const cached = await getAllCached();
+        
+        res.json({
+            status: 'ok',
+            entries: cached,
+            count: cached.length
+        });
+    } catch (error) {
+        console.error('[API] Failed to get all GPU settings:', error.message);
+        res.status(500).json({ error: 'Failed to get all GPU settings', details: error.message });
+    }
+});
+
+/**
+ * POST /gpu/optimize - Trigger GPU optimization for currently loaded models
+ */
+app.post('/gpu/optimize', async (req, res) => {
+    try {
+        const { optimizeCombination, getOptimizationStatus, setStatusCallback } = require('./gpu_optimizer.js');
+        const { getModelSizeEstimate } = require('./hardware_detector.js');
+        const { listLoadedModels } = require('./lmstudio/model_manager.js');
+        
+        // Check if optimization is already running
+        const currentStatus = getOptimizationStatus();
+        if (currentStatus.isOptimizing) {
+            return res.status(409).json({
+                error: 'Optimization already in progress',
+                status: currentStatus
+            });
+        }
+        
+        // Set up WebSocket broadcasting for status updates
+        setStatusCallback((data) => {
+            broadcastDashboardUpdate(data);
+        });
+        
+        // Get currently loaded models with size estimates
+        const loadedModels = await listLoadedModels();
+        if (loadedModels.length === 0) {
+            return res.status(400).json({ error: 'No models loaded to optimize' });
+        }
+        
+        const models = loadedModels.map(m => ({
+            id: m.id,
+            role: m.role || (m.id.toLowerCase().includes('summar') ? 'summarizer' : 'main'),
+            sizeGB: getModelSizeEstimate(m.id)
+        }));
+        
+        logger.info(`[API] Starting GPU optimization for ${models.length} models`);
+        
+        // Start optimization (non-blocking, returns immediately)
+        res.json({
+            status: 'started',
+            message: `Optimization started for ${models.length} models`,
+            models: models.map(m => ({ id: m.id, role: m.role, sizeGB: m.sizeGB }))
+        });
+        
+        // Run optimization in background
+        try {
+            const result = await optimizeCombination(models);
+            logger.info(`[API] GPU optimization complete: ${JSON.stringify(result.settings)}`);
+            
+            // Broadcast completion
+            broadcastDashboardUpdate({
+                type: 'gpu-optimization-complete',
+                payload: result
+            });
+        } catch (optError) {
+            logger.error('[API] GPU optimization failed:', optError.message);
+            broadcastDashboardUpdate({
+                type: 'gpu-optimization-error',
+                payload: { error: optError.message }
+            });
+        }
+    } catch (error) {
+        console.error('[API] Failed to start GPU optimization:', error.message);
+        res.status(500).json({ error: 'Failed to start GPU optimization', details: error.message });
+    }
+});
+
+/**
+ * DELETE /gpu/settings/:hash - Clear cached settings for a combination
+ */
+app.delete('/gpu/settings/:hash', async (req, res) => {
+    try {
+        const { clearCachedSettings } = require('./gpu_optimizer.js');
+        const { hash } = req.params;
+        
+        await clearCachedSettings(hash);
+        
+        res.json({
+            status: 'ok',
+            message: `Cleared cached settings for ${hash}`
+        });
+    } catch (error) {
+        console.error('[API] Failed to clear GPU settings:', error.message);
+        res.status(500).json({ error: 'Failed to clear GPU settings', details: error.message });
+    }
+});
+
+/**
+ * PATCH /gpu/settings/:modelId - Manual override GPU setting for a specific model
+ * Body: { gpu: number (0.0 - 1.0), role: string }
+ */
+app.patch('/gpu/settings/:modelId', async (req, res) => {
+    try {
+        const { setManualGPU } = require('./gpu_optimizer.js');
+        const { modelId } = req.params;
+        const { gpu, role = 'main' } = req.body || {};
+        
+        if (typeof gpu !== 'number' || gpu < 0 || gpu > 1) {
+            return res.status(400).json({ error: 'Invalid GPU value. Must be a number between 0.0 and 1.0' });
+        }
+        
+        await setManualGPU(decodeURIComponent(modelId), gpu, role);
+        
+        res.json({
+            status: 'ok',
+            modelId: decodeURIComponent(modelId),
+            gpu,
+            role,
+            message: `GPU offload set to ${gpu} for ${modelId}`
+        });
+    } catch (error) {
+        console.error('[API] Failed to set manual GPU:', error.message);
+        res.status(500).json({ error: 'Failed to set manual GPU', details: error.message });
+    }
+});
+
+/**
+ * POST /gpu/apply-cached - Apply cached settings to currently loaded models
+ */
+app.post('/gpu/apply-cached', async (req, res) => {
+    try {
+        const { getCachedSettings, applyCachedSettings, generateCombinationHash } = require('./gpu_optimizer.js');
+        const { listLoadedModels } = require('./lmstudio/model_manager.js');
+        
+        const loadedModels = await listLoadedModels();
+        const modelIds = loadedModels.map(m => m.id);
+        
+        const cached = await getCachedSettings(modelIds);
+        if (!cached) {
+            return res.status(404).json({
+                error: 'No cached settings found for current model combination',
+                combinationHash: generateCombinationHash(modelIds)
+            });
+        }
+        
+        const result = await applyCachedSettings(cached);
+        
+        res.json({
+            status: 'ok',
+            message: 'Applied cached GPU settings',
+            combinationHash: cached.combinationHash,
+            calibratedAt: cached.calibratedAt,
+            results: result
+        });
+    } catch (error) {
+        console.error('[API] Failed to apply cached settings:', error.message);
+        res.status(500).json({ error: 'Failed to apply cached settings', details: error.message });
+    }
+});
+
+// =========================
 // Custom Preset & Optimization Endpoints
 // =========================
 

@@ -33,13 +33,25 @@
     "requireConsent": true,
     "endpoint": null
   },
+  "gpuOptimization": {
+    "enabled": true,
+    "autoOptimizeOnLoad": false,
+    "maxIterationsPerModel": 4,
+    "benchmarkPrompts": 3,
+    "vramHeadroomGB": 1.5,
+    "targetGpuUtilization": 90,
+    "contextSizes": {
+      "main": 16384,
+      "summarizer": 4096
+    }
+  },
   "ragPipeline": {
     "tier": "low",
     "locked": true,
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },
   "models": {
-    "activePreset": "high",
+    "activePreset": "medium",
     "main": {
       "model_name": "qwen/qwen3-4b-2507",
       "identifier": "qwen/qwen3-4b-2507",
@@ -53,11 +65,11 @@
     },
     "perQualityMainModels": {
       "high": "llama-3.1-nemotron-70b-instruct-hf@q2_k_l",
-      "medium": "qwen/qwen3-8b",
+      "medium": "qwen2.5-7b-instruct-1m",
       "low": "qwen/qwen3-4b-2507"
     },
     "perQualityRollingSummarizers": {
-      "high": "mistral-7b-instruct-v0.3",
+      "high": "qwen2.5-coder-1.5b-instruct",
       "medium": "mistral-7b-instruct-v0.3",
       "low": "tinyllama-1.1b-chat-v1.0"
     }

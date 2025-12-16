@@ -379,6 +379,118 @@ function getCPUUsage() {
 }
 
 /**
+ * Estimate model size in GB based on model ID/name
+ * Uses parameter count and quantization to estimate VRAM usage
+ * 
+ * @param {string} modelId - Model identifier or path
+ * @param {Object} metadata - Optional metadata with size info
+ * @returns {number} Estimated size in GB
+ */
+function getModelSizeEstimate(modelId, metadata = {}) {
+    // If explicit size provided, use it
+    if (metadata.sizeGB && typeof metadata.sizeGB === 'number') {
+        return metadata.sizeGB;
+    }
+    
+    if (metadata.size_bytes) {
+        return metadata.size_bytes / (1024 * 1024 * 1024);
+    }
+    
+    const modelName = (modelId || '').toLowerCase();
+    
+    // Extract parameter count from model name
+    // Common patterns: "7b", "13b", "70b", "0.5b", "1.5b", "3b", etc.
+    let paramBillions = null;
+    
+    const patterns = [
+        /(\d+\.?\d*)b(?:[^a-z]|$)/i,      // e.g., "7b", "70b", "1.5b"
+        /(\d+)billion/i,                   // e.g., "7billion"
+        /-(\d+\.?\d*)b-/i,                 // e.g., "-7b-"
+        /_(\d+\.?\d*)b_/i,                 // e.g., "_7b_"
+    ];
+    
+    for (const pattern of patterns) {
+        const match = modelName.match(pattern);
+        if (match) {
+            paramBillions = parseFloat(match[1]);
+            break;
+        }
+    }
+    
+    // Special case for known model families without explicit size
+    if (!paramBillions) {
+        const knownSizes = {
+            'llama-2': 7,
+            'llama-3': 8,
+            'mistral-7b': 7,
+            'mixtral': 47,  // MoE, but acts like ~47B for VRAM
+            'codellama': 7,
+            'phi-2': 2.7,
+            'phi-3-mini': 3.8,
+            'phi-3.1-mini': 3.8,
+            'qwen2.5-coder-0.5b': 0.5,
+            'qwen2.5-coder-1.5b': 1.5,
+            'qwen2.5-coder-3b': 3,
+            'qwen2.5-coder-7b': 7,
+            'qwen3-4b': 4,
+            'qwen3-8b': 8,
+            'tinyllama': 1.1,
+            'gemma-2b': 2,
+            'gemma-7b': 7,
+        };
+        
+        for (const [key, size] of Object.entries(knownSizes)) {
+            if (modelName.includes(key)) {
+                paramBillions = size;
+                break;
+            }
+        }
+    }
+    
+    // Default to 7B if unknown
+    if (!paramBillions) {
+        console.warn(`[Hardware] Could not estimate size for "${modelId}", defaulting to 7B`);
+        paramBillions = 7;
+    }
+    
+    // Determine quantization factor
+    // GGUF quantizations and their approximate bytes per parameter:
+    // Q2_K: ~0.27 bytes/param
+    // Q3_K_S: ~0.35 bytes/param
+    // Q4_0/Q4_K_S: ~0.5 bytes/param
+    // Q5_K_S: ~0.55 bytes/param
+    // Q6_K: ~0.66 bytes/param
+    // Q8_0: ~1.0 bytes/param
+    // F16: ~2.0 bytes/param
+    
+    let bytesPerParam = 0.5; // Default to Q4 (most common)
+    
+    if (modelName.includes('q2_k') || modelName.includes('q2k')) {
+        bytesPerParam = 0.27;
+    } else if (modelName.includes('q3_k') || modelName.includes('q3k')) {
+        bytesPerParam = 0.35;
+    } else if (modelName.includes('q4_0') || modelName.includes('q4_k') || modelName.includes('q4k')) {
+        bytesPerParam = 0.5;
+    } else if (modelName.includes('q5_k') || modelName.includes('q5k')) {
+        bytesPerParam = 0.55;
+    } else if (modelName.includes('q6_k') || modelName.includes('q6k')) {
+        bytesPerParam = 0.66;
+    } else if (modelName.includes('q8_0') || modelName.includes('q8k') || modelName.includes('q8')) {
+        bytesPerParam = 1.0;
+    } else if (modelName.includes('f16') || modelName.includes('fp16')) {
+        bytesPerParam = 2.0;
+    }
+    
+    // Calculate base model size
+    const baseSizeGB = paramBillions * bytesPerParam;
+    
+    // Add overhead for KV cache and context (approximate ~10-20%)
+    const overhead = 1.15;
+    
+    return Math.round(baseSizeGB * overhead * 10) / 10;
+}
+
+/**
  * Get real-time resource usage (CPU, RAM, VRAM).
  * @returns {Promise<{cpu: Object, ram: Object, vram: Object}>}
  */
@@ -431,6 +543,7 @@ module.exports = {
     calculateOptimalContext,
     getCPUUsage,
     getRealtimeResources,
+    getModelSizeEstimate,
     MIN_CONTEXT
 };
 

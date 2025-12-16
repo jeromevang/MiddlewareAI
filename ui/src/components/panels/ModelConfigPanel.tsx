@@ -12,6 +12,7 @@ import { ResourceBars } from "../ui/ResourceBars";
 import { CustomPresetPanel } from "./CustomPresetPanel";
 import { MainModelSelector } from "./MainModelSelector";
 import { RagIndexingStatus } from "../ui/RagIndexingStatus";
+import { GPUOptimizer } from "../ui/GPUOptimizer";
 import clsx from "clsx";
 
 // Import from split files
@@ -416,6 +417,9 @@ export default function ModelConfigPanel() {
 
           {/* Real-time Resource Monitoring - Always Visible */}
           <ResourceBars />
+
+          {/* GPU Optimization */}
+          <GPUOptimizer />
 
           {/* Quality Presets */}
           <Card title="Quality Presets" subtitle="Select a preset to automatically configure optimal models">

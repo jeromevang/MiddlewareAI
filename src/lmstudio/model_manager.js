@@ -956,6 +956,40 @@ async function ensurePresetModelsLoaded(presetName) {
     }
 
     console.log(`[LM Studio] Preset '${presetName}' complete: loaded=${result.loaded.length}, kept=${result.kept.length}, unloaded=${result.unloaded.length}, failed=${result.failed.length}, needsDownload=${result.needsDownload.length}`);
+    
+    // Check for cached GPU optimization settings and apply if available
+    try {
+        const config = getConfig();
+        if (config.gpuOptimization?.enabled) {
+            const { getCachedSettings, applyCachedSettings, generateCombinationHash } = require('../gpu_optimizer.js');
+            
+            const loadedModels = await listLoadedModels();
+            const modelIds = loadedModels.map(m => m.id);
+            const cached = await getCachedSettings(modelIds);
+            
+            if (cached) {
+                console.log(`[LM Studio] Found cached GPU settings from ${cached.calibratedAt}, applying...`);
+                await applyCachedSettings(cached);
+                result.gpuOptimized = true;
+                result.gpuSettings = cached.settings;
+            } else {
+                console.log(`[LM Studio] No cached GPU settings for this model combination (${generateCombinationHash(modelIds)})`);
+                result.gpuOptimized = false;
+                
+                // Optionally trigger auto-optimization if configured
+                if (config.gpuOptimization?.autoOptimizeOnLoad) {
+                    console.log(`[LM Studio] Auto-optimization enabled, would trigger optimization here`);
+                    // Note: We don't auto-trigger because it's slow and may not be desired
+                    // The user can manually trigger via /gpu/optimize API
+                    result.suggestOptimization = true;
+                }
+            }
+        }
+    } catch (gpuError) {
+        console.warn(`[LM Studio] GPU optimization check failed:`, gpuError.message);
+        result.gpuOptimized = false;
+    }
+    
     return result;
 }
 

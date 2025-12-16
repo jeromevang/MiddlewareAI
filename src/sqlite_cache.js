@@ -116,6 +116,25 @@ class SQLiteCacheManager {
                         CREATE INDEX IF NOT EXISTS idx_session_modes_mode ON session_context_modes(mode)
                     `);
 
+                    // GPU Optimization Cache table
+                    this.db.run(`
+                        CREATE TABLE IF NOT EXISTS gpu_optimization_cache (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            combination_hash TEXT UNIQUE NOT NULL,
+                            models_json TEXT NOT NULL,
+                            settings_json TEXT NOT NULL,
+                            total_vram_gb REAL,
+                            avg_tokens_per_sec REAL,
+                            calibrated_at TEXT NOT NULL,
+                            gpu_name TEXT,
+                            context_tested TEXT
+                        )
+                    `);
+
+                    this.db.run(`
+                        CREATE INDEX IF NOT EXISTS idx_gpu_opt_hash ON gpu_optimization_cache(combination_hash)
+                    `);
+
                     // Create indexes for faster queries
                     this.db.run(`
                         CREATE INDEX IF NOT EXISTS idx_file_path ON cached_chunks(file_path)
@@ -974,6 +993,168 @@ class SQLiteCacheManager {
                 logInfo('All cached chunks cleared for re-indexing.');
                 resolve();
             });
+        });
+    }
+
+    // =============================================================================
+    // GPU Optimization Cache Methods
+    // =============================================================================
+
+    /**
+     * Ensure the GPU optimization cache table exists
+     */
+    async ensureGPUOptimizationTable() {
+        return new Promise((resolve, reject) => {
+            this.db.run(`
+                CREATE TABLE IF NOT EXISTS gpu_optimization_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    combination_hash TEXT UNIQUE NOT NULL,
+                    models_json TEXT NOT NULL,
+                    settings_json TEXT NOT NULL,
+                    total_vram_gb REAL,
+                    avg_tokens_per_sec REAL,
+                    calibrated_at TEXT NOT NULL,
+                    gpu_name TEXT,
+                    context_tested TEXT
+                )
+            `, (err) => {
+                if (err) return reject(err);
+                this.db.run(`
+                    CREATE INDEX IF NOT EXISTS idx_gpu_opt_hash ON gpu_optimization_cache(combination_hash)
+                `, (err2) => {
+                    if (err2) return reject(err2);
+                    resolve();
+                });
+            });
+        });
+    }
+
+    /**
+     * Save GPU optimization result to cache
+     * @param {Object} result - Optimization result
+     */
+    async saveGPUOptimization(result) {
+        const {
+            combinationHash,
+            models,
+            settings,
+            totalVRAMUsed,
+            calibratedAt,
+            gpuName,
+            contextTested
+        } = result;
+
+        // Calculate average tokens/sec across all models
+        const settingsArray = Object.values(settings);
+        const avgTokensPerSec = settingsArray.length > 0
+            ? settingsArray.reduce((sum, s) => sum + (s.tokensPerSecond || 0), 0) / settingsArray.length
+            : 0;
+
+        return new Promise((resolve, reject) => {
+            this.db.run(`
+                INSERT OR REPLACE INTO gpu_optimization_cache 
+                (combination_hash, models_json, settings_json, total_vram_gb, avg_tokens_per_sec, calibrated_at, gpu_name, context_tested)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `, [
+                combinationHash,
+                JSON.stringify(models),
+                JSON.stringify(settings),
+                totalVRAMUsed || 0,
+                avgTokensPerSec,
+                calibratedAt,
+                gpuName || 'Unknown',
+                JSON.stringify(contextTested || {})
+            ], function(err) {
+                if (err) {
+                    logError('Failed to save GPU optimization:', err);
+                    return reject(err);
+                }
+                logInfo(`Saved GPU optimization for ${combinationHash}`);
+                resolve({ id: this.lastID, combinationHash });
+            });
+        });
+    }
+
+    /**
+     * Get GPU optimization settings by combination hash
+     * @param {string} combinationHash 
+     * @returns {Promise<Object|null>}
+     */
+    async getGPUOptimization(combinationHash) {
+        return new Promise((resolve, reject) => {
+            this.db.get(
+                'SELECT * FROM gpu_optimization_cache WHERE combination_hash = ?',
+                [combinationHash],
+                (err, row) => {
+                    if (err) {
+                        logError('Failed to get GPU optimization:', err);
+                        return reject(err);
+                    }
+                    if (!row) return resolve(null);
+                    
+                    resolve({
+                        id: row.id,
+                        combinationHash: row.combination_hash,
+                        models: JSON.parse(row.models_json),
+                        settings: JSON.parse(row.settings_json),
+                        totalVRAMUsed: row.total_vram_gb,
+                        avgTokensPerSec: row.avg_tokens_per_sec,
+                        calibratedAt: row.calibrated_at,
+                        gpuName: row.gpu_name,
+                        contextTested: row.context_tested ? JSON.parse(row.context_tested) : null
+                    });
+                }
+            );
+        });
+    }
+
+    /**
+     * Delete GPU optimization settings by combination hash
+     * @param {string} combinationHash 
+     */
+    async deleteGPUOptimization(combinationHash) {
+        return new Promise((resolve, reject) => {
+            this.db.run(
+                'DELETE FROM gpu_optimization_cache WHERE combination_hash = ?',
+                [combinationHash],
+                function(err) {
+                    if (err) {
+                        logError('Failed to delete GPU optimization:', err);
+                        return reject(err);
+                    }
+                    logInfo(`Deleted GPU optimization for ${combinationHash}`);
+                    resolve({ changes: this.changes });
+                }
+            );
+        });
+    }
+
+    /**
+     * Get all GPU optimization entries
+     * @returns {Promise<Array>}
+     */
+    async getAllGPUOptimizations() {
+        return new Promise((resolve, reject) => {
+            this.db.all(
+                'SELECT * FROM gpu_optimization_cache ORDER BY calibrated_at DESC',
+                [],
+                (err, rows) => {
+                    if (err) {
+                        logError('Failed to get all GPU optimizations:', err);
+                        return reject(err);
+                    }
+                    resolve((rows || []).map(row => ({
+                        id: row.id,
+                        combinationHash: row.combination_hash,
+                        models: JSON.parse(row.models_json),
+                        settings: JSON.parse(row.settings_json),
+                        totalVRAMUsed: row.total_vram_gb,
+                        avgTokensPerSec: row.avg_tokens_per_sec,
+                        calibratedAt: row.calibrated_at,
+                        gpuName: row.gpu_name
+                    })));
+                }
+            );
         });
     }
 
