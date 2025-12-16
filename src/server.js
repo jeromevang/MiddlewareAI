@@ -4410,6 +4410,238 @@ const MIDDLEWARE_TOOLS = {
                 required: ['path', 'content']
             }
         }
+    },
+    file_patch: {
+        type: 'function',
+        function: {
+            name: 'file_patch',
+            description: 'Apply a patch/diff to an existing file. Safer than file_write for making targeted changes.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: {
+                        type: 'string',
+                        description: 'File path relative to workspace root'
+                    },
+                    search: {
+                        type: 'string',
+                        description: 'The exact text to find in the file'
+                    },
+                    replace: {
+                        type: 'string',
+                        description: 'The text to replace it with'
+                    },
+                    all: {
+                        type: 'boolean',
+                        description: 'Replace all occurrences (default: false, only first)'
+                    }
+                },
+                required: ['path', 'search', 'replace']
+            }
+        }
+    },
+    run_command: {
+        type: 'function',
+        function: {
+            name: 'run_command',
+            description: 'Execute a shell command in the workspace. Returns stdout and stderr. Use with caution - only safe commands are allowed.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    command: {
+                        type: 'string',
+                        description: 'The command to execute (e.g., "npm test", "git status", "ls -la")'
+                    },
+                    cwd: {
+                        type: 'string',
+                        description: 'Working directory relative to workspace (default: workspace root)'
+                    },
+                    timeout: {
+                        type: 'number',
+                        description: 'Command timeout in milliseconds (default: 30000, max: 60000)'
+                    }
+                },
+                required: ['command']
+            }
+        }
+    },
+    grep: {
+        type: 'function',
+        function: {
+            name: 'grep',
+            description: 'Search for a pattern in files using regex. Returns matching lines with context.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    pattern: {
+                        type: 'string',
+                        description: 'Regex pattern to search for'
+                    },
+                    path: {
+                        type: 'string',
+                        description: 'File or directory path to search in (default: ".")'
+                    },
+                    file_pattern: {
+                        type: 'string',
+                        description: 'Glob pattern to filter files (e.g., "*.js", "*.ts")'
+                    },
+                    context_lines: {
+                        type: 'number',
+                        description: 'Number of lines before/after match to include (default: 2)'
+                    },
+                    max_results: {
+                        type: 'number',
+                        description: 'Maximum matches to return (default: 20)'
+                    },
+                    case_insensitive: {
+                        type: 'boolean',
+                        description: 'Case insensitive search (default: false)'
+                    }
+                },
+                required: ['pattern']
+            }
+        }
+    },
+    memory_store: {
+        type: 'function',
+        function: {
+            name: 'memory_store',
+            description: 'Store a value in agent memory. Use to remember important information across conversation turns.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    key: {
+                        type: 'string',
+                        description: 'A unique key to identify this memory (e.g., "project_structure", "user_preferences")'
+                    },
+                    value: {
+                        type: 'string',
+                        description: 'The value to store (any text)'
+                    },
+                    scope: {
+                        type: 'string',
+                        enum: ['session', 'permanent'],
+                        description: 'Memory scope - "session" (cleared on restart) or "permanent" (persisted to database)'
+                    },
+                    category: {
+                        type: 'string',
+                        description: 'Optional category for organizing memories (e.g., "code", "preferences", "context")'
+                    }
+                },
+                required: ['key', 'value']
+            }
+        }
+    },
+    memory_retrieve: {
+        type: 'function',
+        function: {
+            name: 'memory_retrieve',
+            description: 'Retrieve a value from agent memory by key.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    key: {
+                        type: 'string',
+                        description: 'The key to look up'
+                    },
+                    scope: {
+                        type: 'string',
+                        enum: ['session', 'permanent', 'all'],
+                        description: 'Where to look - "session", "permanent", or "all" (default)'
+                    }
+                },
+                required: ['key']
+            }
+        }
+    },
+    memory_list: {
+        type: 'function',
+        function: {
+            name: 'memory_list',
+            description: 'List all stored memories, optionally filtered by category.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    category: {
+                        type: 'string',
+                        description: 'Filter by category (optional)'
+                    },
+                    scope: {
+                        type: 'string',
+                        enum: ['session', 'permanent', 'all'],
+                        description: 'Filter by scope (default: "all")'
+                    }
+                },
+                required: []
+            }
+        }
+    },
+    repo_map: {
+        type: 'function',
+        function: {
+            name: 'repo_map',
+            description: 'Get a structural map of the codebase showing files, classes, functions, and their relationships.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: {
+                        type: 'string',
+                        description: 'Directory to analyze (default: workspace root)'
+                    },
+                    depth: {
+                        type: 'number',
+                        description: 'Max depth to traverse (default: 3)'
+                    },
+                    include_symbols: {
+                        type: 'boolean',
+                        description: 'Include function/class names (default: true)'
+                    },
+                    file_pattern: {
+                        type: 'string',
+                        description: 'Glob pattern to filter files (e.g., "**/*.ts")'
+                    }
+                },
+                required: []
+            }
+        }
+    },
+    browser_automation: {
+        type: 'function',
+        function: {
+            name: 'browser_automation',
+            description: 'Control a browser to navigate, interact with pages, or extract data. Powered by Playwright.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    action: {
+                        type: 'string',
+                        enum: ['navigate', 'click', 'type', 'screenshot', 'evaluate', 'extract', 'scroll'],
+                        description: 'The action to perform'
+                    },
+                    url: {
+                        type: 'string',
+                        description: 'URL to navigate to (for "navigate" action)'
+                    },
+                    selector: {
+                        type: 'string',
+                        description: 'CSS selector for element (for click/type/extract actions)'
+                    },
+                    text: {
+                        type: 'string',
+                        description: 'Text to type (for "type" action)'
+                    },
+                    js: {
+                        type: 'string',
+                        description: 'JavaScript to execute (for "evaluate" action)'
+                    },
+                    wait_for: {
+                        type: 'string',
+                        description: 'Optional selector to wait for after action'
+                    }
+                },
+                required: ['action']
+            }
+        }
     }
 };
 
@@ -4488,18 +4720,30 @@ function detectClient(req, tools = []) {
  */
 function getToolsToInject(isCursor, hasExistingTools) {
     if (isCursor) {
-        // Cursor has its own file reading/search tools but NOT web search
-        // Inject: rag_search (semantic codebase search), web_search, fetch_url, npm_info
+        // Cursor has its own file/code tools. We inject complementary tools:
+        // - rag_search: semantic codebase search (Cursor has codebase_search but this is different)
+        // - web_search, fetch_url, npm_info: web/package lookup
+        // - memory_store, memory_retrieve: agent state persistence
+        // - browser_automation: browser control (Cursor has MCP browser but not always enabled)
         return [
             MIDDLEWARE_TOOLS.rag_search,
             MIDDLEWARE_TOOLS.web_search,
             MIDDLEWARE_TOOLS.fetch_url,
-            MIDDLEWARE_TOOLS.npm_info
+            MIDDLEWARE_TOOLS.npm_info,
+            MIDDLEWARE_TOOLS.memory_store,
+            MIDDLEWARE_TOOLS.memory_retrieve,
+            MIDDLEWARE_TOOLS.memory_list,
+            MIDDLEWARE_TOOLS.browser_automation
         ];
     }
     
     // For other clients (Continue, etc.): inject all middleware tools
-    // This enables RAG search, file reading, summaries, and web tools
+    // This enables full agentic capabilities:
+    // - File operations: file_read, file_write, file_patch, file_list, file_search
+    // - Code intelligence: rag_search, get_file_summary, repo_map, grep
+    // - Web access: web_search, fetch_url, npm_info
+    // - Memory: memory_store, memory_retrieve, memory_list
+    // - Automation: run_command, browser_automation
     return Object.values(MIDDLEWARE_TOOLS);
 }
 
@@ -4987,6 +5231,648 @@ async function executeMiddlewareTool(toolName, args) {
                 }
             }
             
+            case 'file_patch': {
+                const fs = require('fs').promises;
+                const path = require('path');
+                const filePath = args.path;
+                const search = args.search;
+                const replace = args.replace;
+                const replaceAll = args.all || false;
+                
+                if (!filePath) {
+                    return { success: false, error: 'Path is required' };
+                }
+                if (!search) {
+                    return { success: false, error: 'Search text is required' };
+                }
+                if (replace === undefined) {
+                    return { success: false, error: 'Replace text is required' };
+                }
+                
+                const fullPath = path.resolve(process.cwd(), filePath);
+                
+                // Security checks
+                if (!fullPath.startsWith(process.cwd())) {
+                    return { success: false, error: 'Path must be within workspace' };
+                }
+                
+                const dangerousPaths = ['.git', 'node_modules', '.env', 'package-lock.json'];
+                if (dangerousPaths.some(p => filePath.includes(p))) {
+                    return { success: false, error: `Cannot modify protected path: ${filePath}` };
+                }
+                
+                try {
+                    const content = await fs.readFile(fullPath, 'utf-8');
+                    
+                    if (!content.includes(search)) {
+                        return { success: false, error: `Search text not found in file: ${search.slice(0, 50)}...` };
+                    }
+                    
+                    let newContent;
+                    let replacements = 0;
+                    
+                    if (replaceAll) {
+                        const parts = content.split(search);
+                        replacements = parts.length - 1;
+                        newContent = parts.join(replace);
+                    } else {
+                        newContent = content.replace(search, replace);
+                        replacements = 1;
+                    }
+                    
+                    await fs.writeFile(fullPath, newContent, 'utf-8');
+                    
+                    return {
+                        success: true,
+                        result: {
+                            path: filePath,
+                            replacements,
+                            message: `Made ${replacements} replacement(s) in ${filePath}`
+                        }
+                    };
+                } catch (patchError) {
+                    console.error('[Tools] file_patch error:', patchError.message);
+                    return { success: false, error: `Failed to patch file: ${patchError.message}` };
+                }
+            }
+            
+            case 'run_command': {
+                const { exec } = require('child_process');
+                const path = require('path');
+                const command = args.command;
+                const cwd = args.cwd || '.';
+                const timeout = Math.min(args.timeout || 30000, 60000);
+                
+                if (!command) {
+                    return { success: false, error: 'Command is required' };
+                }
+                
+                // Security: block dangerous commands
+                const dangerousPatterns = [
+                    /rm\s+-rf\s+\//i,
+                    /del\s+\/s\s+\/q\s+c:/i,
+                    /format\s+c:/i,
+                    /mkfs/i,
+                    /dd\s+if=/i,
+                    /:\s*\(\s*\)\s*\{/,  // Fork bomb
+                    /wget.*\|.*sh/i,
+                    /curl.*\|.*sh/i,
+                    /powershell.*-enc/i,
+                    /\.\/.*\.sh/i,
+                ];
+                
+                if (dangerousPatterns.some(p => p.test(command))) {
+                    return { success: false, error: 'Command blocked for security reasons' };
+                }
+                
+                const workDir = path.resolve(process.cwd(), cwd);
+                if (!workDir.startsWith(process.cwd())) {
+                    return { success: false, error: 'Working directory must be within workspace' };
+                }
+                
+                try {
+                    const result = await new Promise((resolve, reject) => {
+                        exec(command, { 
+                            cwd: workDir, 
+                            timeout,
+                            maxBuffer: 1024 * 1024 // 1MB
+                        }, (error, stdout, stderr) => {
+                            if (error && error.killed) {
+                                reject(new Error('Command timed out'));
+                            } else {
+                                resolve({
+                                    exitCode: error ? error.code || 1 : 0,
+                                    stdout: stdout.slice(0, 10000),
+                                    stderr: stderr.slice(0, 5000)
+                                });
+                            }
+                        });
+                    });
+                    
+                    return {
+                        success: true,
+                        result: {
+                            command,
+                            ...result,
+                            truncated: result.stdout.length >= 10000 || result.stderr.length >= 5000
+                        }
+                    };
+                } catch (cmdError) {
+                    console.error('[Tools] run_command error:', cmdError.message);
+                    return { success: false, error: `Command failed: ${cmdError.message}` };
+                }
+            }
+            
+            case 'grep': {
+                const fs = require('fs').promises;
+                const path = require('path');
+                const pattern = args.pattern;
+                const searchPath = args.path || '.';
+                const filePattern = args.file_pattern;
+                const contextLines = Math.min(args.context_lines || 2, 5);
+                const maxResults = Math.min(args.max_results || 20, 100);
+                const caseInsensitive = args.case_insensitive || false;
+                
+                if (!pattern) {
+                    return { success: false, error: 'Pattern is required' };
+                }
+                
+                const fullPath = path.resolve(process.cwd(), searchPath);
+                if (!fullPath.startsWith(process.cwd())) {
+                    return { success: false, error: 'Path must be within workspace' };
+                }
+                
+                try {
+                    const regex = new RegExp(pattern, caseInsensitive ? 'gi' : 'g');
+                    const results = [];
+                    
+                    async function searchFile(filePath) {
+                        try {
+                            const content = await fs.readFile(filePath, 'utf-8');
+                            const lines = content.split('\n');
+                            const relativePath = path.relative(process.cwd(), filePath);
+                            
+                            lines.forEach((line, idx) => {
+                                if (results.length >= maxResults) return;
+                                if (regex.test(line)) {
+                                    regex.lastIndex = 0; // Reset regex
+                                    const startLine = Math.max(0, idx - contextLines);
+                                    const endLine = Math.min(lines.length - 1, idx + contextLines);
+                                    
+                                    const context = lines.slice(startLine, endLine + 1).map((l, i) => ({
+                                        lineNum: startLine + i + 1,
+                                        content: l.slice(0, 200),
+                                        isMatch: startLine + i === idx
+                                    }));
+                                    
+                                    results.push({
+                                        file: relativePath,
+                                        line: idx + 1,
+                                        match: line.slice(0, 200),
+                                        context
+                                    });
+                                }
+                            });
+                        } catch {
+                            // Skip unreadable files
+                        }
+                    }
+                    
+                    async function searchDir(dir, depth = 0) {
+                        if (depth > 5 || results.length >= maxResults) return;
+                        
+                        let entries;
+                        try {
+                            entries = await fs.readdir(dir, { withFileTypes: true });
+                        } catch {
+                            return;
+                        }
+                        
+                        for (const entry of entries) {
+                            if (results.length >= maxResults) break;
+                            
+                            if (entry.name.startsWith('.') || 
+                                ['node_modules', 'dist', 'build', '.git', '__pycache__', 'coverage'].includes(entry.name)) {
+                                continue;
+                            }
+                            
+                            const entryPath = path.join(dir, entry.name);
+                            
+                            if (entry.isDirectory()) {
+                                await searchDir(entryPath, depth + 1);
+                            } else {
+                                // Check file pattern
+                                if (filePattern) {
+                                    const minimatch = require('minimatch');
+                                    if (!minimatch(entry.name, filePattern, { matchBase: true })) {
+                                        continue;
+                                    }
+                                }
+                                await searchFile(entryPath);
+                            }
+                        }
+                    }
+                    
+                    const stat = await fs.stat(fullPath);
+                    if (stat.isDirectory()) {
+                        await searchDir(fullPath);
+                    } else {
+                        await searchFile(fullPath);
+                    }
+                    
+                    return {
+                        success: true,
+                        result: {
+                            pattern,
+                            path: searchPath,
+                            matches: results,
+                            total: results.length,
+                            truncated: results.length >= maxResults
+                        }
+                    };
+                } catch (grepError) {
+                    console.error('[Tools] grep error:', grepError.message);
+                    return { success: false, error: `Grep failed: ${grepError.message}` };
+                }
+            }
+            
+            case 'memory_store': {
+                const key = args.key;
+                const value = args.value;
+                const scope = args.scope || 'session';
+                const category = args.category || 'general';
+                
+                if (!key) {
+                    return { success: false, error: 'Key is required' };
+                }
+                if (value === undefined) {
+                    return { success: false, error: 'Value is required' };
+                }
+                
+                try {
+                    // Use global memory store
+                    if (!global.agentMemory) {
+                        global.agentMemory = { session: {}, permanent: {} };
+                    }
+                    
+                    if (scope === 'permanent') {
+                        // Store in SQLite for persistence
+                        const db = require('./sqlite_cache.js');
+                        await db.saveAgentMemory(key, value, category);
+                        global.agentMemory.permanent[key] = { value, category, updatedAt: Date.now() };
+                    } else {
+                        // Session memory (in-memory only)
+                        global.agentMemory.session[key] = { value, category, updatedAt: Date.now() };
+                    }
+                    
+                    return {
+                        success: true,
+                        result: {
+                            key,
+                            scope,
+                            category,
+                            message: `Stored "${key}" in ${scope} memory`
+                        }
+                    };
+                } catch (memError) {
+                    console.error('[Tools] memory_store error:', memError.message);
+                    return { success: false, error: `Failed to store memory: ${memError.message}` };
+                }
+            }
+            
+            case 'memory_retrieve': {
+                const key = args.key;
+                const scope = args.scope || 'all';
+                
+                if (!key) {
+                    return { success: false, error: 'Key is required' };
+                }
+                
+                try {
+                    if (!global.agentMemory) {
+                        global.agentMemory = { session: {}, permanent: {} };
+                    }
+                    
+                    let result = null;
+                    let foundIn = null;
+                    
+                    // Check session first
+                    if (scope === 'session' || scope === 'all') {
+                        if (global.agentMemory.session[key]) {
+                            result = global.agentMemory.session[key];
+                            foundIn = 'session';
+                        }
+                    }
+                    
+                    // Check permanent if not found or scope is permanent
+                    if (!result && (scope === 'permanent' || scope === 'all')) {
+                        // Try cached permanent memory first
+                        if (global.agentMemory.permanent[key]) {
+                            result = global.agentMemory.permanent[key];
+                            foundIn = 'permanent';
+                        } else {
+                            // Fall back to database
+                            const db = require('./sqlite_cache.js');
+                            const dbValue = await db.getAgentMemory(key);
+                            if (dbValue) {
+                                result = dbValue;
+                                foundIn = 'permanent';
+                                // Cache it
+                                global.agentMemory.permanent[key] = result;
+                            }
+                        }
+                    }
+                    
+                    if (!result) {
+                        return { success: false, error: `Memory key not found: ${key}` };
+                    }
+                    
+                    return {
+                        success: true,
+                        result: {
+                            key,
+                            value: result.value,
+                            category: result.category,
+                            scope: foundIn,
+                            updatedAt: result.updatedAt
+                        }
+                    };
+                } catch (memError) {
+                    console.error('[Tools] memory_retrieve error:', memError.message);
+                    return { success: false, error: `Failed to retrieve memory: ${memError.message}` };
+                }
+            }
+            
+            case 'memory_list': {
+                const category = args.category;
+                const scope = args.scope || 'all';
+                
+                try {
+                    if (!global.agentMemory) {
+                        global.agentMemory = { session: {}, permanent: {} };
+                    }
+                    
+                    const memories = [];
+                    
+                    // List session memories
+                    if (scope === 'session' || scope === 'all') {
+                        for (const [key, data] of Object.entries(global.agentMemory.session)) {
+                            if (!category || data.category === category) {
+                                memories.push({ key, scope: 'session', category: data.category });
+                            }
+                        }
+                    }
+                    
+                    // List permanent memories
+                    if (scope === 'permanent' || scope === 'all') {
+                        const db = require('./sqlite_cache.js');
+                        const dbMemories = await db.listAgentMemories(category);
+                        for (const mem of dbMemories) {
+                            memories.push({ key: mem.key, scope: 'permanent', category: mem.category });
+                        }
+                    }
+                    
+                    return {
+                        success: true,
+                        result: {
+                            memories,
+                            total: memories.length
+                        }
+                    };
+                } catch (memError) {
+                    console.error('[Tools] memory_list error:', memError.message);
+                    return { success: false, error: `Failed to list memories: ${memError.message}` };
+                }
+            }
+            
+            case 'repo_map': {
+                const fs = require('fs').promises;
+                const path = require('path');
+                const searchPath = args.path || '.';
+                const maxDepth = Math.min(args.depth || 3, 5);
+                const includeSymbols = args.include_symbols !== false;
+                const filePattern = args.file_pattern;
+                
+                const fullPath = path.resolve(process.cwd(), searchPath);
+                if (!fullPath.startsWith(process.cwd())) {
+                    return { success: false, error: 'Path must be within workspace' };
+                }
+                
+                try {
+                    const map = {
+                        root: path.relative(process.cwd(), fullPath) || '.',
+                        structure: [],
+                        symbols: []
+                    };
+                    
+                    // Simple symbol extraction regex patterns
+                    const patterns = {
+                        jsFunction: /(?:function\s+(\w+)|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?\(|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?function)/g,
+                        jsClass: /class\s+(\w+)/g,
+                        pyFunction: /def\s+(\w+)\s*\(/g,
+                        pyClass: /class\s+(\w+)/g,
+                        tsInterface: /interface\s+(\w+)/g,
+                        tsType: /type\s+(\w+)\s*=/g,
+                        export: /export\s+(?:default\s+)?(?:function|class|const|let|var|interface|type)\s+(\w+)/g
+                    };
+                    
+                    async function extractSymbols(filePath) {
+                        try {
+                            const content = await fs.readFile(filePath, 'utf-8');
+                            const ext = path.extname(filePath).toLowerCase();
+                            const relativePath = path.relative(process.cwd(), filePath);
+                            const symbols = [];
+                            
+                            const extractMatches = (regex, type) => {
+                                let match;
+                                while ((match = regex.exec(content)) !== null) {
+                                    const name = match[1] || match[2] || match[3];
+                                    if (name && name.length > 1) {
+                                        symbols.push({ name, type, file: relativePath });
+                                    }
+                                }
+                                regex.lastIndex = 0;
+                            };
+                            
+                            if (['.js', '.ts', '.jsx', '.tsx', '.mjs'].includes(ext)) {
+                                extractMatches(patterns.jsFunction, 'function');
+                                extractMatches(patterns.jsClass, 'class');
+                                extractMatches(patterns.tsInterface, 'interface');
+                                extractMatches(patterns.tsType, 'type');
+                                extractMatches(patterns.export, 'export');
+                            } else if (['.py'].includes(ext)) {
+                                extractMatches(patterns.pyFunction, 'function');
+                                extractMatches(patterns.pyClass, 'class');
+                            }
+                            
+                            return symbols;
+                        } catch {
+                            return [];
+                        }
+                    }
+                    
+                    async function buildMap(dir, depth = 0, prefix = '') {
+                        if (depth > maxDepth) return;
+                        
+                        let entries;
+                        try {
+                            entries = await fs.readdir(dir, { withFileTypes: true });
+                        } catch {
+                            return;
+                        }
+                        
+                        entries.sort((a, b) => {
+                            if (a.isDirectory() && !b.isDirectory()) return -1;
+                            if (!a.isDirectory() && b.isDirectory()) return 1;
+                            return a.name.localeCompare(b.name);
+                        });
+                        
+                        for (const entry of entries) {
+                            if (entry.name.startsWith('.') || 
+                                ['node_modules', 'dist', 'build', '.git', '__pycache__', 'coverage', '.next'].includes(entry.name)) {
+                                continue;
+                            }
+                            
+                            const entryPath = path.join(dir, entry.name);
+                            const relativePath = path.relative(process.cwd(), entryPath);
+                            const indent = '  '.repeat(depth);
+                            
+                            if (entry.isDirectory()) {
+                                map.structure.push(`${indent}📁 ${entry.name}/`);
+                                await buildMap(entryPath, depth + 1, prefix + entry.name + '/');
+                            } else {
+                                // Check file pattern
+                                if (filePattern) {
+                                    const minimatch = require('minimatch');
+                                    if (!minimatch(entry.name, filePattern, { matchBase: true })) {
+                                        continue;
+                                    }
+                                }
+                                
+                                map.structure.push(`${indent}📄 ${entry.name}`);
+                                
+                                if (includeSymbols) {
+                                    const symbols = await extractSymbols(entryPath);
+                                    map.symbols.push(...symbols.slice(0, 20)); // Limit per file
+                                }
+                            }
+                        }
+                    }
+                    
+                    await buildMap(fullPath);
+                    
+                    // Limit total symbols
+                    map.symbols = map.symbols.slice(0, 200);
+                    
+                    return {
+                        success: true,
+                        result: {
+                            root: map.root,
+                            structure: map.structure.join('\n'),
+                            symbols: map.symbols,
+                            totalFiles: map.structure.filter(s => s.includes('📄')).length,
+                            totalDirs: map.structure.filter(s => s.includes('📁')).length,
+                            totalSymbols: map.symbols.length
+                        }
+                    };
+                } catch (mapError) {
+                    console.error('[Tools] repo_map error:', mapError.message);
+                    return { success: false, error: `Failed to build repo map: ${mapError.message}` };
+                }
+            }
+            
+            case 'browser_automation': {
+                const action = args.action;
+                const url = args.url;
+                const selector = args.selector;
+                const text = args.text;
+                const js = args.js;
+                const waitFor = args.wait_for;
+                
+                if (!action) {
+                    return { success: false, error: 'Action is required' };
+                }
+                
+                try {
+                    // Lazy load playwright
+                    let playwright;
+                    try {
+                        playwright = require('playwright');
+                    } catch {
+                        return { success: false, error: 'Playwright not installed. Run: npm install playwright' };
+                    }
+                    
+                    // Use shared browser instance
+                    if (!global.browserInstance) {
+                        global.browserInstance = await playwright.chromium.launch({ headless: true });
+                    }
+                    
+                    if (!global.browserPage) {
+                        const context = await global.browserInstance.newContext();
+                        global.browserPage = await context.newPage();
+                    }
+                    
+                    const page = global.browserPage;
+                    let result = {};
+                    
+                    switch (action) {
+                        case 'navigate':
+                            if (!url) {
+                                return { success: false, error: 'URL is required for navigate action' };
+                            }
+                            await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                            result = { url: page.url(), title: await page.title() };
+                            break;
+                            
+                        case 'click':
+                            if (!selector) {
+                                return { success: false, error: 'Selector is required for click action' };
+                            }
+                            await page.click(selector, { timeout: 10000 });
+                            result = { clicked: selector };
+                            break;
+                            
+                        case 'type':
+                            if (!selector || !text) {
+                                return { success: false, error: 'Selector and text are required for type action' };
+                            }
+                            await page.fill(selector, text);
+                            result = { typed: text, into: selector };
+                            break;
+                            
+                        case 'screenshot':
+                            const screenshot = await page.screenshot({ type: 'png', fullPage: false });
+                            result = { 
+                                screenshot: `data:image/png;base64,${screenshot.toString('base64')}`.slice(0, 1000) + '...',
+                                message: 'Screenshot captured (base64 truncated)'
+                            };
+                            break;
+                            
+                        case 'evaluate':
+                            if (!js) {
+                                return { success: false, error: 'JavaScript code is required for evaluate action' };
+                            }
+                            const evalResult = await page.evaluate(js);
+                            result = { result: evalResult };
+                            break;
+                            
+                        case 'extract':
+                            if (!selector) {
+                                return { success: false, error: 'Selector is required for extract action' };
+                            }
+                            const elements = await page.$$(selector);
+                            const extracted = [];
+                            for (const el of elements.slice(0, 20)) {
+                                extracted.push({
+                                    text: (await el.innerText()).slice(0, 200),
+                                    tag: await el.evaluate(e => e.tagName.toLowerCase())
+                                });
+                            }
+                            result = { elements: extracted, total: elements.length };
+                            break;
+                            
+                        case 'scroll':
+                            await page.evaluate(() => window.scrollBy(0, window.innerHeight));
+                            result = { scrolled: true };
+                            break;
+                            
+                        default:
+                            return { success: false, error: `Unknown browser action: ${action}` };
+                    }
+                    
+                    // Wait for element if specified
+                    if (waitFor) {
+                        await page.waitForSelector(waitFor, { timeout: 10000 });
+                        result.waitedFor = waitFor;
+                    }
+                    
+                    return { success: true, result };
+                } catch (browserError) {
+                    console.error('[Tools] browser_automation error:', browserError.message);
+                    return { success: false, error: `Browser automation failed: ${browserError.message}` };
+                }
+            }
+            
             default:
                 return { success: false, error: `Unknown middleware tool: ${toolName}` };
         }
@@ -5399,22 +6285,122 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         let nonStreamPayload;
         
         if (hasToolCalls) {
-            // For tool calling, use proxyChatCompletion to preserve tool support
-            nonStreamPayload = {
-                model: modelToUse,
-                messages: enhancedMessages,
-                temperature,
-                stream: false,
-                tools: toolsToUse,
-                tool_choice: toolChoiceToUse || 'auto',
-                ...rest,
-            };
-            completionResponse = await proxyChatCompletion(nonStreamPayload, null);
-            // completionResponse is the full OpenAI response object
-            content = completionResponse?.choices?.[0]?.message?.content || '';
+            // =========================
+            // Tool Execution Loop
+            // =========================
+            // This loop handles cases where the LLM calls middleware tools.
+            // We execute those tools internally, add results to messages,
+            // and re-prompt the LLM until we get a final text response.
+            // This prevents tool calls from being passed back to clients
+            // that don't support them (like Continue).
+            
+            const MAX_TOOL_ITERATIONS = 10; // Prevent infinite loops
+            let currentMessages = [...enhancedMessages];
+            let iteration = 0;
+            let finalResponse = null;
+            
+            while (iteration < MAX_TOOL_ITERATIONS) {
+                iteration++;
+                console.log(`[Tools] Tool execution loop iteration ${iteration}`);
+                
+                // Build the request payload
+                nonStreamPayload = {
+                    model: modelToUse,
+                    messages: currentMessages,
+                    temperature,
+                    stream: false,
+                    tools: toolsToUse,
+                    tool_choice: iteration === 1 ? (toolChoiceToUse || 'auto') : 'auto',
+                    ...rest,
+                };
+                
+                // Call the LLM
+                completionResponse = await proxyChatCompletion(nonStreamPayload, null);
+                const assistantMessage = completionResponse?.choices?.[0]?.message;
+                
+                if (!assistantMessage) {
+                    console.error('[Tools] No assistant message in response');
+                    break;
+                }
+                
+                // Check if the LLM made tool calls
+                const toolCalls = assistantMessage.tool_calls || [];
+                
+                if (toolCalls.length === 0) {
+                    // No tool calls - LLM gave us a final text response
+                    console.log(`[Tools] Final response received after ${iteration} iteration(s)`);
+                    finalResponse = completionResponse;
+                    break;
+                }
+                
+                // Check which tool calls are middleware tools
+                const middlewareToolCalls = toolCalls.filter(tc => isMiddlewareTool(tc.function?.name));
+                const externalToolCalls = toolCalls.filter(tc => !isMiddlewareTool(tc.function?.name));
+                
+                console.log(`[Tools] LLM called ${toolCalls.length} tools: ${middlewareToolCalls.length} middleware, ${externalToolCalls.length} external`);
+                
+                // If all tool calls are external (client tools), pass back to client
+                if (middlewareToolCalls.length === 0 && externalToolCalls.length > 0) {
+                    console.log('[Tools] All tool calls are external - returning to client');
+                    finalResponse = completionResponse;
+                    break;
+                }
+                
+                // Add assistant message with tool_calls to conversation
+                currentMessages.push({
+                    role: 'assistant',
+                    content: assistantMessage.content || null,
+                    tool_calls: toolCalls
+                });
+                
+                // Execute middleware tools and collect results
+                for (const toolCall of middlewareToolCalls) {
+                    const toolName = toolCall.function?.name;
+                    let args = {};
+                    try {
+                        args = JSON.parse(toolCall.function?.arguments || '{}');
+                    } catch (parseErr) {
+                        console.error(`[Tools] Failed to parse arguments for ${toolName}:`, parseErr.message);
+                    }
+                    
+                    console.log(`[Tools] Executing middleware tool: ${toolName}`, Object.keys(args));
+                    const result = await executeMiddlewareTool(toolName, args);
+                    
+                    // Add tool result to messages
+                    currentMessages.push({
+                        role: 'tool',
+                        tool_call_id: toolCall.id,
+                        content: JSON.stringify(result.success ? result.result : { error: result.error })
+                    });
+                }
+                
+                // For external tool calls, we need to add placeholder results
+                // since we can't execute them (they're client-side tools)
+                for (const toolCall of externalToolCalls) {
+                    const toolName = toolCall.function?.name;
+                    console.log(`[Tools] External tool called but not executed: ${toolName}`);
+                    currentMessages.push({
+                        role: 'tool',
+                        tool_call_id: toolCall.id,
+                        content: JSON.stringify({ 
+                            error: `Tool '${toolName}' is a client-side tool and cannot be executed by the middleware. Please use a different approach or available middleware tools.` 
+                        })
+                    });
+                }
+            }
+            
+            if (!finalResponse) {
+                console.error(`[Tools] Tool loop exceeded max iterations (${MAX_TOOL_ITERATIONS})`);
+                finalResponse = completionResponse || {
+                    choices: [{ message: { role: 'assistant', content: 'Tool execution loop exceeded maximum iterations.' } }]
+                };
+            }
+            
+            // Extract final content
+            content = finalResponse?.choices?.[0]?.message?.content || '';
             content = sanitizeAssistantText(content);
             
-            // For tool calls, return the full response structure
+            // Persist the conversation turn
             const persistedTurn = await persistConversationTurn({
                 sessionId,
                 userPrompt,
@@ -5428,25 +6414,39 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             });
             void pushSessionUpdate({ sessionId, turn: persistedTurn });
             
-            // Return OpenAI-compatible format with tool_calls if present
-            const responseMessage = completionResponse?.choices?.[0]?.message || { role: 'assistant', content };
+            // Return OpenAI-compatible format
+            // Include tool_calls in response ONLY if there are external tools the client should handle
+            const responseMessage = finalResponse?.choices?.[0]?.message || { role: 'assistant', content };
+            const externalToolCalls = (responseMessage.tool_calls || []).filter(tc => !isMiddlewareTool(tc.function?.name));
+            
+            const finalMessage = {
+                role: 'assistant',
+                content: content
+            };
+            
+            // Only include tool_calls if there are external ones for the client
+            if (externalToolCalls.length > 0) {
+                finalMessage.tool_calls = externalToolCalls;
+            }
+            
             res.json({
-                id: completionResponse?.id || `chatcmpl-${Date.now()}`,
+                id: finalResponse?.id || `chatcmpl-${Date.now()}`,
                 object: 'chat.completion',
-                created: completionResponse?.created || Math.floor(Date.now() / 1000),
+                created: finalResponse?.created || Math.floor(Date.now() / 1000),
                 model: modelToUse,
                 choices: [{
                     index: 0,
-                    message: responseMessage,
-                    finish_reason: completionResponse?.choices?.[0]?.finish_reason || 'stop'
+                    message: finalMessage,
+                    finish_reason: finalResponse?.choices?.[0]?.finish_reason || 'stop'
                 }],
-                usage: completionResponse?.usage || {
+                usage: finalResponse?.usage || {
                     prompt_tokens: budgetInfo?.usedTokens || 0,
                     completion_tokens: Math.ceil((content?.length || 0) / 4),
                     total_tokens: (budgetInfo?.usedTokens || 0) + Math.ceil((content?.length || 0) / 4)
                 },
                 session_id: sessionId,
-                context_mode: appliedContextMode || sessionMode
+                context_mode: appliedContextMode || sessionMode,
+                tool_iterations: iteration
             });
         } else {
             // Standard completion flow

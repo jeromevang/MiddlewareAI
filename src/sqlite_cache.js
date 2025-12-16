@@ -135,6 +135,21 @@ class SQLiteCacheManager {
                         CREATE INDEX IF NOT EXISTS idx_gpu_opt_hash ON gpu_optimization_cache(combination_hash)
                     `);
 
+                    // Agent memory table for persistent storage
+                    this.db.run(`
+                        CREATE TABLE IF NOT EXISTS agent_memory (
+                            key TEXT PRIMARY KEY,
+                            value TEXT NOT NULL,
+                            category TEXT DEFAULT 'general',
+                            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        )
+                    `);
+
+                    this.db.run(`
+                        CREATE INDEX IF NOT EXISTS idx_agent_memory_category ON agent_memory(category)
+                    `);
+
                     // Create indexes for faster queries
                     this.db.run(`
                         CREATE INDEX IF NOT EXISTS idx_file_path ON cached_chunks(file_path)
@@ -1155,6 +1170,125 @@ class SQLiteCacheManager {
                     })));
                 }
             );
+        });
+    }
+
+    // =========================
+    // Agent Memory Operations
+    // =========================
+
+    /**
+     * Save a value to agent permanent memory
+     * @param {string} key - Unique key
+     * @param {string} value - Value to store
+     * @param {string} category - Optional category
+     */
+    async saveAgentMemory(key, value, category = 'general') {
+        return new Promise((resolve, reject) => {
+            this.db.run(`
+                INSERT OR REPLACE INTO agent_memory (key, value, category, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            `, [key, value, category], function(err) {
+                if (err) {
+                    logError('Failed to save agent memory:', err);
+                    return reject(err);
+                }
+                resolve({ key, category, updated: true });
+            });
+        });
+    }
+
+    /**
+     * Get a value from agent permanent memory
+     * @param {string} key - Key to retrieve
+     */
+    async getAgentMemory(key) {
+        return new Promise((resolve, reject) => {
+            this.db.get(
+                'SELECT * FROM agent_memory WHERE key = ?',
+                [key],
+                (err, row) => {
+                    if (err) {
+                        logError('Failed to get agent memory:', err);
+                        return reject(err);
+                    }
+                    if (!row) {
+                        return resolve(null);
+                    }
+                    resolve({
+                        key: row.key,
+                        value: row.value,
+                        category: row.category,
+                        createdAt: row.created_at,
+                        updatedAt: row.updated_at
+                    });
+                }
+            );
+        });
+    }
+
+    /**
+     * Delete a value from agent permanent memory
+     * @param {string} key - Key to delete
+     */
+    async deleteAgentMemory(key) {
+        return new Promise((resolve, reject) => {
+            this.db.run(
+                'DELETE FROM agent_memory WHERE key = ?',
+                [key],
+                function(err) {
+                    if (err) {
+                        logError('Failed to delete agent memory:', err);
+                        return reject(err);
+                    }
+                    resolve({ deleted: this.changes > 0 });
+                }
+            );
+        });
+    }
+
+    /**
+     * List all agent memories, optionally filtered by category
+     * @param {string} category - Optional category filter
+     */
+    async listAgentMemories(category = null) {
+        return new Promise((resolve, reject) => {
+            let query = 'SELECT key, category, updated_at FROM agent_memory';
+            let params = [];
+            
+            if (category) {
+                query += ' WHERE category = ?';
+                params.push(category);
+            }
+            
+            query += ' ORDER BY updated_at DESC';
+            
+            this.db.all(query, params, (err, rows) => {
+                if (err) {
+                    logError('Failed to list agent memories:', err);
+                    return reject(err);
+                }
+                resolve((rows || []).map(row => ({
+                    key: row.key,
+                    category: row.category,
+                    updatedAt: row.updated_at
+                })));
+            });
+        });
+    }
+
+    /**
+     * Clear all agent memories (dangerous!)
+     */
+    async clearAgentMemories() {
+        return new Promise((resolve, reject) => {
+            this.db.run('DELETE FROM agent_memory', function(err) {
+                if (err) {
+                    logError('Failed to clear agent memories:', err);
+                    return reject(err);
+                }
+                resolve({ cleared: this.changes });
+            });
         });
     }
 

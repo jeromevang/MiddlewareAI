@@ -317,3 +317,75 @@ When `runBootstrap()` builds presets, it:
 
 ### Settings UI
 Access via `/settings` route or "System Settings" quick link on dashboard.
+
+## Tool Calling System
+
+### Overview
+The middleware implements a comprehensive tool calling system that enables agentic capabilities for LLMs. Tools are automatically injected into chat completions and executed internally by the middleware.
+
+### Tool Execution Loop
+When the LLM calls a middleware tool, the middleware:
+1. Detects the tool call in the LLM response
+2. Executes the tool internally
+3. Adds the result back to the message history
+4. Re-prompts the LLM with the tool result
+5. Repeats until the LLM returns a final text response
+
+This loop runs for up to 10 iterations to prevent infinite loops.
+
+### Available Tools (17 total)
+
+#### Code Intelligence
+| Tool | Description |
+|------|-------------|
+| `rag_search` | Semantic search of indexed codebase |
+| `get_file_summary` | Get AI-generated file summary |
+| `repo_map` | Generate code structure map with symbols |
+| `grep` | Regex pattern search with context |
+
+#### File Operations
+| Tool | Description |
+|------|-------------|
+| `file_read` | Read file contents |
+| `file_write` | Write/create files (with safety checks) |
+| `file_patch` | Apply targeted text replacements |
+| `file_list` | List directory contents |
+| `file_search` | Search files by name or content |
+
+#### Web Access
+| Tool | Description |
+|------|-------------|
+| `web_search` | DuckDuckGo web search |
+| `fetch_url` | Fetch and extract web page content |
+| `npm_info` | Get npm package information |
+
+#### Agent Memory
+| Tool | Description |
+|------|-------------|
+| `memory_store` | Store key-value in session/permanent memory |
+| `memory_retrieve` | Retrieve stored memory by key |
+| `memory_list` | List all stored memories |
+
+#### Automation
+| Tool | Description |
+|------|-------------|
+| `run_command` | Execute shell commands (with security) |
+| `browser_automation` | Playwright browser control |
+
+### Client-Aware Tool Injection
+
+| Client | Tools Injected |
+|--------|----------------|
+| **Cursor** | `rag_search`, `web_search`, `fetch_url`, `npm_info`, `memory_*`, `browser_automation` |
+| **Continue/Other** | All 17 tools |
+
+Detection methods:
+- `x-cursor-session` header
+- Presence of Cursor-specific tools (codebase_search, grep, read_file, etc.)
+
+### Security Measures
+- Path validation (must be within workspace)
+- Dangerous path blocking (.git, node_modules, .env)
+- Executable file blocking (.exe, .dll, .sh, .bat)
+- Command pattern blocking (rm -rf /, format, fork bombs)
+- Maximum output truncation
