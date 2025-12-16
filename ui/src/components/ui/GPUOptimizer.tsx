@@ -5,7 +5,7 @@
  * and shows cached settings with manual override capabilities.
  */
 
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Loader2, Zap, RefreshCw, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 
@@ -82,15 +82,16 @@ export function GPUOptimizer() {
     retry: 3,
   });
 
-  // Fetch cached settings
-  const { data: cachedSettings } = useQuery<CachedSettings>({
+  // Fetch cached settings - poll faster when optimizing
+  const { data: cachedSettings, refetch: refetchSettings } = useQuery<CachedSettings>({
     queryKey: ['gpuSettings'],
     queryFn: async () => {
       const res = await fetch('/gpu/settings');
       if (!res.ok) throw new Error('Failed to fetch GPU settings');
       return res.json();
     },
-    staleTime: 10000,
+    staleTime: 2000,
+    refetchInterval: gpuStatus?.optimization?.isOptimizing ? 2000 : 30000,
   });
 
   // Trigger optimization mutation
@@ -153,6 +154,18 @@ export function GPUOptimizer() {
   const isOptimizing = gpuStatus?.optimization?.isOptimizing;
   const progress = gpuStatus?.optimization?.progress || 0;
   const message = gpuStatus?.optimization?.message || '';
+  
+  // Track previous optimization state to detect completion
+  const wasOptimizingRef = useRef(false);
+  
+  useEffect(() => {
+    // If optimization just completed (was true, now false), refetch settings
+    if (wasOptimizingRef.current && !isOptimizing) {
+      console.log('[GPUOptimizer] Optimization completed, refetching settings...');
+      refetchSettings();
+    }
+    wasOptimizingRef.current = !!isOptimizing;
+  }, [isOptimizing, refetchSettings]);
 
   const handleManualOverride = (modelId: string, role: string) => {
     const gpu = manualOverrides[modelId];
