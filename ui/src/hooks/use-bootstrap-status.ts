@@ -5,7 +5,7 @@
  * Handles the blocking loading screen state.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import type { BootstrapStatus, BootstrapPhase } from '../components/BootstrapLoadingScreen';
 
 interface UseBootstrapStatusOptions {
@@ -26,6 +26,15 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
   const [status, setStatus] = useState<BootstrapStatus>(INITIAL_STATUS);
   const [isComplete, setIsComplete] = useState(false);
   const [wsConnected, setWsConnected] = useState(false);
+  const hasStartedRef = useRef(false);
+  const onCompleteRef = useRef(onComplete);
+  const onErrorRef = useRef(onError);
+  
+  // Keep refs up to date without triggering re-renders
+  useEffect(() => {
+    onCompleteRef.current = onComplete;
+    onErrorRef.current = onError;
+  }, [onComplete, onError]);
 
   // Poll for bootstrap status (fallback when WebSocket message not received)
   const pollBootstrapStatus = useCallback(async () => {
@@ -50,11 +59,11 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
       
       if (data.progress >= 100 || mappedStatus.phase === 'complete') {
         setIsComplete(true);
-        onComplete?.();
+        onCompleteRef.current?.();
       }
       
       if (data.error) {
-        onError?.(data.error);
+        onErrorRef.current?.(data.error);
       }
       
       return mappedStatus;
@@ -62,17 +71,33 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
       console.error('[Bootstrap] Failed to poll status:', error);
       return null;
     }
-  }, [onComplete, onError]);
+  }, []);
 
   // Check LM Studio connection
   const checkLMStudioConnection = useCallback(async (): Promise<boolean> => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:68',message:'checkLMStudioConnection START',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     try {
       const res = await fetch('/lmstudio/health');
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:72',message:'checkLMStudioConnection RESPONSE',data:{ok:res.ok,status:res.status},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       if (!res.ok) return false;
       const data = await res.json();
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:76',message:'checkLMStudioConnection DATA',data:{ready:data.ready,status:data.status,connected:data.connected,keys:Object.keys(data)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
+      const result = data.ready === true || data.status === 'ok' || data.connected === true;
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:79',message:'checkLMStudioConnection RESULT',data:{result},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       // API returns: { status: "ok", ready: true, ... }
-      return data.ready === true || data.status === 'ok' || data.connected === true;
-    } catch {
+      return result;
+    } catch (error) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:84',message:'checkLMStudioConnection ERROR',data:{error:String(error)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       return false;
     }
   }, []);
@@ -80,12 +105,24 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
   // Main effect - handles startup flow
   useEffect(() => {
     if (!enabled) return;
+    
+    // Prevent multiple executions - this is the key fix for infinite re-renders
+    if (hasStartedRef.current) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:100',message:'runStartupFlow SKIPPED (already started)',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX'})}).catch(()=>{});
+      // #endregion
+      return;
+    }
+    hasStartedRef.current = true;
 
     let mounted = true;
     let pollTimer: ReturnType<typeof setTimeout> | null = null;
     let retryCount = 0;
 
     const runStartupFlow = async () => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:88',message:'runStartupFlow START',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       // Phase 1: Check LM Studio connection
       setStatus({
         phase: 'connecting',
@@ -94,10 +131,16 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
       });
 
       let lmConnected = await checkLMStudioConnection();
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:99',message:'First LM Studio check done',data:{lmConnected,retryCount},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       
       // Retry loop for LM Studio connection
       while (!lmConnected && mounted) {
         retryCount++;
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:106',message:'Retry loop iteration',data:{retryCount,lmConnected},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
         setStatus({
           phase: 'waiting-lmstudio',
           progress: 5,
@@ -114,6 +157,9 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
 
       if (!mounted) return;
 
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:125',message:'LM Studio connected, proceeding to discover',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
+      // #endregion
       // Phase 2: LM Studio connected, start polling bootstrap status
       setStatus({
         phase: 'discovering',
@@ -140,8 +186,14 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
     return () => {
       mounted = false;
       if (pollTimer) clearTimeout(pollTimer);
+      // Reset the ref on cleanup so StrictMode remount can run
+      hasStartedRef.current = false;
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/1125f441-1d5b-4fd7-b3b9-6ab8dc90022a',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'use-bootstrap-status.ts:cleanup',message:'Effect cleanup - resetting hasStartedRef',data:{},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'FIX2'})}).catch(()=>{});
+      // #endregion
     };
-  }, [enabled, pollBootstrapStatus, checkLMStudioConnection]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [enabled]); // Only depend on enabled - callbacks use refs to prevent re-execution
 
   // WebSocket listener for real-time updates
   useEffect(() => {
@@ -173,11 +225,11 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
           
           if (wsStatus.phase === 'complete') {
             setIsComplete(true);
-            onComplete?.();
+            onCompleteRef.current?.();
           }
           
           if (wsStatus.phase === 'error' && wsStatus.error) {
-            onError?.(wsStatus.error);
+            onErrorRef.current?.(wsStatus.error);
           }
         }
       } catch (err) {
@@ -192,7 +244,7 @@ export function useBootstrapStatus(options: UseBootstrapStatusOptions = {}) {
     return () => {
       ws.close();
     };
-  }, [enabled, onComplete, onError]);
+  }, [enabled]); // Only depend on enabled - callbacks use refs
 
   const retry = useCallback(async () => {
     setStatus(INITIAL_STATUS);
