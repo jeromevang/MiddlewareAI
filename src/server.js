@@ -2548,13 +2548,14 @@ app.get('/rag/tier', (req, res) => {
  * POST /rag/tier - Change RAG pipeline tier (triggers re-index)
  */
 app.post('/rag/tier', async (req, res) => {
+    console.log(`[RAG TIER API] Called with tier: ${req.body?.tier}`);
     try {
         const { tier } = req.body || {};
         const validTiers = ['low', 'medium', 'high'];
-        
+
         if (!tier || !validTiers.includes(tier)) {
-            return res.status(400).json({ 
-                error: `Invalid tier. Must be one of: ${validTiers.join(', ')}` 
+            return res.status(400).json({
+                error: `Invalid tier. Must be one of: ${validTiers.join(', ')}`
             });
         }
         
@@ -2576,19 +2577,75 @@ app.post('/rag/tier', async (req, res) => {
         // Update the tier
         setRagPipelineTier(tier);
         const newConfig = getRagPipelineConfig(tier);
-        
+
         appendLog(`RAG pipeline tier changed: ${previousTier} -> ${tier}`, 'info');
-        
-        // Trigger re-index if needed
+        console.log(`[RAG Tier Change] About to start model management: ${previousTier} -> ${tier}`);
+
+        // Manage RAG models FIRST (before re-indexing)
+        console.log(`[RAG Tier Change] STARTING model management: ${previousTier} -> ${tier}`);
+        try {
+            console.log(`[RAG Tier Change] Inside try block`);
+            appendLog('Managing RAG models for tier change...', 'info');
+            const { openModel, unloadModel, listLoadedModels } = require('./lmstudio/model_manager.js');
+
+            // Get currently loaded models
+            const loadedModels = await listLoadedModels();
+            const loadedModelIds = loadedModels.map(m => m.id || m.identifier);
+            console.log(`[RAG Tier Change] Currently loaded: ${loadedModelIds.join(', ')}`);
+
+            // Unload old RAG summarizer if different
+            if (previousTier && previousTier !== tier) {
+                const prevConfig = getRagPipelineConfig(previousTier);
+                if (prevConfig) {
+                    const prevSummarizerId = prevConfig.ragSummarizer.identifier;
+                    console.log(`[RAG Tier Change] Previous RAG summarizer: ${prevSummarizerId}`);
+                    if (loadedModelIds.includes(prevSummarizerId)) {
+                        try {
+                            console.log(`[RAG Tier Change] Unloading old RAG summarizer: ${prevSummarizerId}`);
+                            await unloadModel(prevSummarizerId);
+                            appendLog(`Unloaded old RAG summarizer: ${prevSummarizerId}`, 'info');
+                        } catch (error) {
+                            appendLog(`Failed to unload old RAG summarizer ${prevSummarizerId}: ${error.message}`, 'warn');
+                        }
+                    } else {
+                        console.log(`[RAG Tier Change] Old RAG summarizer ${prevSummarizerId} not loaded`);
+                    }
+                }
+            }
+
+            // Load new RAG summarizer if not already loaded
+            const newSummarizerId = newConfig.ragSummarizer.identifier;
+            console.log(`[RAG Tier Change] New RAG summarizer: ${newSummarizerId}`);
+            if (!loadedModelIds.includes(newSummarizerId)) {
+                try {
+                    console.log(`[RAG Tier Change] Loading new RAG summarizer: ${newSummarizerId}`);
+                    await openModel(newSummarizerId);
+                    appendLog(`Loaded new RAG summarizer: ${newSummarizerId}`, 'info');
+                } catch (error) {
+                    appendLog(`Failed to load new RAG summarizer ${newSummarizerId}: ${error.message}`, 'warn');
+                }
+            } else {
+                console.log(`[RAG Tier Change] New RAG summarizer ${newSummarizerId} already loaded`);
+            }
+        } catch (error) {
+            console.error(`[RAG Tier Change] Failed to manage RAG models: ${error.message}`);
+            appendLog(`Failed to manage RAG models during tier change: ${error.message}`, 'error');
+        }
+
+        // Trigger re-index if needed (after model management)
         if (needsReindex && isRagFeatureEnabled()) {
             appendLog('Re-indexing triggered due to tier change...', 'info');
-            
+
             // Clear existing index first (dimension may change)
             await faissIndexManager.clear();
             await sqliteCacheManager.clearChunks();
-            
+
             // Start re-index in background
-            void startIndexer({ reason: `tier-change-${tier}`, background: true });
+            try {
+                void startIndexer({ reason: `tier-change-${tier}`, background: true });
+            } catch (error) {
+                appendLog(`Re-indexing failed to start: ${error.message}`, 'warn');
+            }
         }
         
         res.json({

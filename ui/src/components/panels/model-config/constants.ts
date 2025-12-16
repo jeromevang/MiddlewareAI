@@ -14,13 +14,13 @@ export const RAG_TIERS: Record<RagTier, RagTierConfig> = {
     description: "Fast indexing, good for quick iterations",
     targetGPU: "RTX 3060 / 8GB VRAM",
     embedder: {
-      model_name: "jinaai/jina-embeddings-v2-small-en",
-      identifier: "jinaai/jina-embeddings-v2-small-en",
-      dimension: 512
+      model_name: "Xenova/all-MiniLM-L6-v2",
+      identifier: "Xenova/all-MiniLM-L6-v2",
+      dimension: 384
     },
     ragSummarizer: {
-      model_name: "microsoft/phi-2",
-      identifier: "microsoft/phi-2"
+      model_name: "qwen2.5-coder-0.5b-instruct",
+      identifier: "qwen2.5-coder-0.5b-instruct"
     }
   },
   medium: {
@@ -28,13 +28,13 @@ export const RAG_TIERS: Record<RagTier, RagTierConfig> = {
     description: "Balanced quality and speed",
     targetGPU: "RTX 4070 / 12GB VRAM",
     embedder: {
-      model_name: "jinaai/jina-embeddings-v2-base-en",
-      identifier: "jinaai/jina-embeddings-v2-base-en",
+      model_name: "Xenova/all-MiniLM-L6-v2",
+      identifier: "Xenova/all-MiniLM-L6-v2",
       dimension: 768
     },
     ragSummarizer: {
-      model_name: "codellama/CodeLlama-7b-Instruct-hf",
-      identifier: "codellama/CodeLlama-7b-Instruct-hf"
+      model_name: "qwen2.5-coder-1.5b-instruct",
+      identifier: "qwen2.5-coder-1.5b-instruct"
     }
   },
   high: {
@@ -42,13 +42,13 @@ export const RAG_TIERS: Record<RagTier, RagTierConfig> = {
     description: "Best quality summaries, slower indexing",
     targetGPU: "RTX 5080 / 16GB VRAM",
     embedder: {
-      model_name: "thenlper/gte-large",
-      identifier: "thenlper/gte-large",
-      dimension: 1024
+      model_name: "nomic-ai/nomic-embed-text-v1.5",
+      identifier: "text-embedding-nomic-embed-text-v1.5@q8_0",
+      dimension: 768
     },
     ragSummarizer: {
-      model_name: "codellama/CodeLlama-13b-Instruct-hf",
-      identifier: "codellama/CodeLlama-13b-Instruct-hf"
+      model_name: "Qwen2.5 7B Instruct 1M",
+      identifier: "qwen2.5-7b-instruct-1m"
     }
   }
 };

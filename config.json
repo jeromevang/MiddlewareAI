@@ -33,7 +33,7 @@
     "endpoint": null
   },
   "ragPipeline": {
-    "tier": "medium",
+    "tier": "high",
     "locked": true,
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },

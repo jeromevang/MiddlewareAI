@@ -682,6 +682,8 @@ async function waitForServerReady(timeoutMs = 30000) {
 async function ensurePresetModelsLoaded(presetName) {
     const { getPreset, findLMStudioModelId, isModelAvailable } = require('../model_db_service.js');
     const { getRoleDefaults } = require('./model_sync.js');
+    const { getRagSummarizerConfig } = require('../rag_pipeline_config.js');
+    const { getConfig } = require('../config.js');
 
     const result = {
         loaded: [],
@@ -696,6 +698,10 @@ async function ensurePresetModelsLoaded(presetName) {
         throw new Error(`Preset '${presetName}' not found`);
     }
 
+    // Get current RAG tier for RAG pipeline models
+    const config = getConfig();
+    const ragTier = config.ragPipeline?.tier || 'medium';
+
     // Build list of required models for this preset with their roles
     const requiredModels = [];
 
@@ -704,31 +710,65 @@ async function ensurePresetModelsLoaded(presetName) {
         console.log(`[LM Studio] Embedding model: ${preset.embedding} (local, no loading needed)`);
     }
 
-    // RAG Summarizer - uses summarizer role defaults
-    if (preset.ragSummarizer) {
-        requiredModels.push({ 
-            type: 'ragSummarizer', 
+    // RAG Summarizer - ALWAYS comes from RAG pipeline config (closed system)
+    const ragSummarizerConfig = getRagSummarizerConfig(ragTier);
+    if (ragSummarizerConfig) {
+        requiredModels.push({
+            type: 'ragSummarizer',
             role: 'summarizer',
-            presetId: preset.ragSummarizer,
+            presetId: ragSummarizerConfig.identifier,
             loadOptions: getRoleDefaults('summarizer')
         });
+        console.log(`[LM Studio] Using RAG summarizer from pipeline (${ragTier} tier): ${ragSummarizerConfig.identifier}`);
     }
 
-    // Rolling Summarizer - uses summarizer role defaults
-    if (preset.rollingSummarizer) {
-        requiredModels.push({ 
-            type: 'rollingSummarizer', 
+    // Rolling Summarizer - priority: user selection > preset options > default
+    let rollingSummarizerId = null;
+
+    // First check for user selections in config (highest priority)
+    const userSelection = config.models?.perQualityRollingSummarizers?.[presetName];
+    if (userSelection) {
+        rollingSummarizerId = userSelection;
+        console.log(`[LM Studio] Using user-selected rolling summarizer for ${presetName}: ${rollingSummarizerId}`);
+    }
+    // Then try the new role-based options if they exist
+    else if (preset.rollingSummarizerOptions && preset.rollingSummarizerOptions.length > 0) {
+        rollingSummarizerId = preset.rollingSummarizerOptions[0]; // Use first/best option
+        console.log(`[LM Studio] Using first rolling summarizer option from preset: ${rollingSummarizerId}`);
+    }
+    // Fall back to old single string format
+    else if (preset.rollingSummarizer) {
+        rollingSummarizerId = preset.rollingSummarizer;
+        console.log(`[LM Studio] Using legacy rolling summarizer from preset: ${rollingSummarizerId}`);
+    }
+    // Last resort: use default for this tier
+    else {
+        const defaultConfig = getDefaultRollingSummarizer(presetName);
+        rollingSummarizerId = defaultConfig?.identifier;
+        console.log(`[LM Studio] Using default rolling summarizer for ${presetName}: ${rollingSummarizerId}`);
+    }
+
+    if (rollingSummarizerId) {
+        requiredModels.push({
+            type: 'rollingSummarizer',
             role: 'summarizer',
-            presetId: preset.rollingSummarizer,
+            presetId: rollingSummarizerId,
             loadOptions: getRoleDefaults('summarizer')
         });
+        console.log(`[LM Studio] Using rolling summarizer: ${rollingSummarizerId}`);
     }
 
-    // Main model - uses main role defaults (max GPU, higher temp, etc.)
+    // Main model - can come from new role-based options or old format
+    let mainModelId = null;
+
+    // First try the new role-based main options if they exist
     if (preset.mainOptions && preset.mainOptions.length > 0) {
-        const mainModelId = preset.mainOptions[0];
-        requiredModels.push({ 
-            type: 'main', 
+        mainModelId = preset.mainOptions[0]; // Use first option
+    }
+
+    if (mainModelId) {
+        requiredModels.push({
+            type: 'main',
             role: 'main',
             presetId: mainModelId,
             loadOptions: getRoleDefaults('main')
@@ -811,7 +851,6 @@ async function ensurePresetModelsLoaded(presetName) {
     modelsToKeep.forEach(id => console.log(`[LM Studio] Keeping already loaded: ${id}`));
 
     // Load new models with role-specific settings
-    let mainModelId = null;
     for (const model of modelsToLoad) {
         try {
             console.log(`[LM Studio] Loading model: ${model.actualId} (${model.type}, role: ${model.role})`);

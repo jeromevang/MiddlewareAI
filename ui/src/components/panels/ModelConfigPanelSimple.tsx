@@ -226,11 +226,11 @@ export default function ModelConfigPanel() {
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <span className="text-white/60">Embedder:</span>
-                      <span className="ml-2 text-white">{getModelDisplayName('jinaai/jina-embeddings-v2-base-code')}</span>
+                      <span className="ml-2 text-white">{getModelDisplayName(RAG_TIERS[ragTier].embedder.identifier)}</span>
                     </div>
                     <div>
                       <span className="text-white/60">RAG Summarizer:</span>
-                      <span className="ml-2 text-white">{getModelDisplayName('microsoft/phi-3.1-mini-128k-instruct')}</span>
+                      <span className="ml-2 text-white">{getModelDisplayName(RAG_TIERS[ragTier].ragSummarizer.identifier)}</span>
                     </div>
                   </div>
                 </div>
