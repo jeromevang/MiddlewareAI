@@ -11,6 +11,12 @@
       "darwin": "~/.lmstudio/bin/lms"
     }
   },
+  "logging": {
+    "level": "info",
+    "maxSize": "20m",
+    "maxFiles": "14d",
+    "errorMaxFiles": "30d"
+  },
   "system": {
     "minMainContextTokens": 16384,
     "summarizerContextTokens": 4096,
@@ -20,6 +26,11 @@
     "filterBelowMinContext": true,
     "autoLoadModels": true,
     "autoLoadDelayMs": 2000
+  },
+  "telemetry": {
+    "enabled": false,
+    "requireConsent": true,
+    "endpoint": null
   },
   "ragPipeline": {
     "tier": "medium",

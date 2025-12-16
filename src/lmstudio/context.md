@@ -48,6 +48,38 @@ The old fuzzy matching system (`normalizeModelIdForMatching`, `tokenOverlapScore
 {
   main: { temperature: 0.4, topP: 0.9, gpu: "max", contextLength: "VRAM-aware (8K min)" },
   summarizer: { temperature: 0, topP: 0.5, gpu: 0.3, maxTokens: 500, contextLength: 4096 },
+```
+
+## Production-Ready Features
+
+### 🔄 Smart Auto-Loading
+- **Startup Auto-Loading**: Automatically loads active preset on server startup
+- **Background Loading**: Non-blocking, 2-second delay to avoid startup delays
+- **Smart Unloading**: Only unloads models not needed for active preset
+- **Configurable**: Can be disabled via `system.autoLoadModels: false`
+
+### 🔍 Model Matching & Loading
+- **Exact Matching**: Uses `modelIdMatchesExactly()` for preset loading decisions
+- **Smart Pooling**: Checks what's already loaded before loading new models
+- **Role-Based Settings**: Applies correct GPU offload and context limits per role
+- **Error Recovery**: Graceful handling of loading failures
+
+### 🏥 Health Monitoring
+- **LM Studio Health**: `GET /lmstudio/health` endpoint with connection status
+- **Model Status**: Tracks loaded models and loading states
+- **Connection Validation**: Verifies LM Studio connectivity on health checks
+
+### 📊 Resource Management
+- **Memory Monitoring**: Tracks model memory usage and VRAM consumption
+- **Connection Limits**: Prevents excessive concurrent model operations
+- **Timeout Handling**: Configurable timeouts for all LM Studio operations
+- **Retry Logic**: Automatic retry for transient failures
+
+### 🛡️ Security & Reliability
+- **Input Validation**: All model identifiers validated before operations
+- **Rate Limiting**: Model loading operations are rate-limited
+- **Error Boundaries**: Model loading failures don't crash the server
+- **Lock Management**: Model locks prevent concurrent operations
   embedder: { gpu: "off", contextLength: "model's native" }
 }
 ```

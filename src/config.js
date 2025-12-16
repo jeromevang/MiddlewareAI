@@ -45,6 +45,15 @@ function validateConfig(config) {
         }
     }
 
+    // Validate LM Studio URL format
+    if (config.lmstudio?.url) {
+        try {
+            new URL(config.lmstudio.url);
+        } catch (e) {
+            throw new Error(`Invalid LM Studio URL format: ${config.lmstudio.url}`);
+        }
+    }
+
     // User-selectable models only (embedding and ragSummarization come from RAG pipeline)
     const requiredUserModels = ['rollingSummarization', 'main'];
     for (const modelKey of requiredUserModels) {

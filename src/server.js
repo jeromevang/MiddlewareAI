@@ -23,6 +23,8 @@ const path = require('path');
 const http = require('http');
 const crypto = require('crypto');
 const WebSocketLib = require('ws');
+const rateLimit = require('express-rate-limit');
+const Joi = require('joi');
 const { WebSocketServer } = WebSocketLib;
 const { embedText, summarizeConversation, generateCompletion, proxyChatCompletion, warmModel, warmEmbeddingModel, waitForModelsLoaded, unloadModel, unloadAllModels, listLoadedModels, getServerStatus, startLMStudioServer, stopLMStudioServer, checkLMStudioHealth, ensureRequiredModelsLoaded, ensurePresetModelsLoaded, switchMainModel, initializeLMStudioWithModels } = require('./lmstudio_client.js');
 const { SQLiteCacheManager } = require('./sqlite_cache.js');
@@ -34,6 +36,8 @@ const { main: runIndexer } = require('./middleware.js'); // to trigger reindex
 const { getIndexingStatus, initializeIndexingStatusFromDatabase } = require('./indexer/indexer.js');
 const { logDebugEvent, isTelemetryEnabled, setTelemetryOverride, getTelemetryOverride } = require('./debug_logger.js');
 const { createRagService } = require('./services/rag_service.js');
+const { logger, requestLogger, createChildLogger } = require('./logger.js');
+const os = require('os');
 const {
     getSummaryKeepRecentTurns,
     setSummaryKeepRecentTurns,
@@ -75,13 +79,75 @@ const { runBootstrap, getBootstrapStatus } = require('./model_bootstrap.js');
 
 // Global error logging to avoid silent crashes (opt-in via debug logger)
 process.on('unhandledRejection', (err) => {
-    console.error('[Fatal] Unhandled rejection:', err);
+    logger.error('Unhandled rejection:', { error: err?.message || String(err), stack: err?.stack });
     void logDebugEvent({
         location: 'server.js:unhandledRejection',
         message: 'unhandled rejection',
         data: { error: err?.message || String(err), stack: err?.stack },
         hypothesisId: 'HX'
     });
+});
+
+// Graceful shutdown handlers
+let serverShutdown = false;
+
+function gracefulShutdown(signal) {
+    if (serverShutdown) return;
+    serverShutdown = true;
+
+    logger.info(`Received ${signal}, initiating graceful shutdown...`);
+
+    // Stop accepting new connections
+    if (httpServer) {
+        httpServer.close(() => {
+            logger.info('HTTP server closed');
+        });
+    }
+
+    // Close WebSocket server
+    teardownWebsocketServer();
+
+    // Close database connections
+    if (sqliteCacheManager) {
+        sqliteCacheManager.close().catch(err => {
+            logger.error('Error closing SQLite connection:', err);
+        });
+    }
+
+    // Stop any active indexing
+    stopActiveIndexer('shutdown').then(() => {
+        logger.info('Active indexer stopped');
+    }).catch(err => {
+        logger.error('Error stopping indexer:', err);
+    });
+
+    // Unload all models
+    unloadAllModels().then(() => {
+        logger.info('All models unloaded');
+    }).catch(err => {
+        logger.error('Error unloading models:', err);
+    });
+
+    // Give everything 5 seconds to cleanup, then force exit
+    setTimeout(() => {
+        logger.error('Forced shutdown after timeout');
+        process.exit(1);
+    }, 5000);
+
+    // Normal exit after cleanup
+    setTimeout(() => {
+        logger.info('Graceful shutdown completed');
+        process.exit(0);
+    }, 1000);
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (err) => {
+    logger.error('Uncaught exception:', { error: err.message, stack: err.stack });
+    gracefulShutdown('uncaughtException');
 });
 process.on('uncaughtException', (err) => {
     console.error('[Fatal] Uncaught exception:', err);
@@ -103,6 +169,101 @@ process.on('exit', (code) => {
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
+
+// Add request logging middleware
+app.use(requestLogger);
+
+// Rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Stricter rate limiting for sensitive endpoints
+const strictLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 10, // limit each IP to 10 requests per windowMs
+    message: 'Too many sensitive requests, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+// Apply general rate limiting
+app.use('/api/', limiter);
+
+// Apply strict rate limiting to sensitive endpoints
+app.use('/presets', strictLimiter);
+app.use('/models/download', strictLimiter);
+app.use('/lmstudio/models', strictLimiter);
+
+// Input validation middleware
+function validateInput(schema) {
+    return (req, res, next) => {
+        const { error } = schema.validate(req.body, { abortEarly: false });
+        if (error) {
+            logger.warn('Input validation failed:', {
+                path: req.path,
+                method: req.method,
+                errors: error.details.map(d => d.message)
+            });
+            return res.status(400).json({
+                error: 'Validation failed',
+                details: error.details.map(d => ({
+                    field: d.path.join('.'),
+                    message: d.message
+                }))
+            });
+        }
+        next();
+    };
+}
+
+// Validation schemas
+const presetModelSchema = Joi.object({
+    quality: Joi.string().valid('high', 'medium', 'low').required(),
+    modelId: Joi.string().min(1).max(200).required()
+});
+
+const presetSummarizerSchema = Joi.object({
+    quality: Joi.string().valid('high', 'medium', 'low').required(),
+    summarizerId: Joi.string().min(1).max(200).required()
+});
+
+const customPresetSchema = Joi.object({
+    main: Joi.string().min(1).max(200).allow(null),
+    rollingSummarizer: Joi.string().min(1).max(200).allow(null)
+});
+
+const modelLockSchema = Joi.object({
+    modelId: Joi.string().min(1).max(200).required(),
+    lockType: Joi.string().valid('loaded', 'preset').optional()
+});
+
+const downloadSchema = Joi.object({
+    modelId: Joi.string().min(1).max(200).required(),
+    quantization: Joi.string().valid('q4_k_m', 'q5_k_m', 'q8_0', 'q3_k_m', 'q2_k').optional()
+});
+
+const searchQuerySchema = Joi.object({
+    query: Joi.string().min(1).max(100).required(),
+    limit: Joi.number().integer().min(1).max(50).optional()
+});
+
+const chatCompletionSchema = Joi.object({
+    messages: Joi.array().items(
+        Joi.object({
+            role: Joi.string().valid('system', 'user', 'assistant').required(),
+            content: Joi.string().min(1).max(10000).required()
+        })
+    ).min(1).required(),
+    model: Joi.string().optional(),
+    temperature: Joi.number().min(0).max(2).optional(),
+    max_tokens: Joi.number().integer().min(1).max(32768).optional(),
+    stream: Joi.boolean().optional()
+});
 
 const sqliteCacheManager = new SQLiteCacheManager();
 const faissIndexManager = new FAISSIndexManager();
@@ -1494,8 +1655,145 @@ app.get('/lmstudio/health', async (req, res) => {
         const health = await checkLMStudioHealth();
         res.json({ status: 'ok', ...health });
     } catch (error) {
-        console.error('[API] Health check failed:', error.message);
+        logger.error('LM Studio health check failed:', error);
         res.status(503).json({ error: 'LM Studio health check failed', details: error.message });
+    }
+});
+
+/**
+ * GET /health - Basic health check
+ */
+app.get('/health', (req, res) => {
+    const health = {
+        status: 'ok',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime(),
+        version: process.version,
+        memory: {
+            used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+            total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+            external: Math.round(process.memoryUsage().external / 1024 / 1024)
+        },
+        system: {
+            platform: os.platform(),
+            arch: os.arch(),
+            cpus: os.cpus().length,
+            totalMemory: Math.round(os.totalmem() / 1024 / 1024 / 1024),
+            freeMemory: Math.round(os.freemem() / 1024 / 1024 / 1024)
+        }
+    };
+    res.json(health);
+});
+
+/**
+ * GET /health/detailed - Comprehensive health check with all components
+ */
+app.get('/health/detailed', async (req, res) => {
+    try {
+        const health = {
+            status: 'ok',
+            timestamp: new Date().toISOString(),
+            uptime: process.uptime(),
+            version: process.version,
+
+            // System metrics
+            system: {
+                platform: os.platform(),
+                arch: os.arch(),
+                cpus: os.cpus().length,
+                loadAverage: os.loadavg(),
+                totalMemory: Math.round(os.totalmem() / 1024 / 1024 / 1024),
+                freeMemory: Math.round(os.freemem() / 1024 / 1024 / 1024),
+                uptime: os.uptime()
+            },
+
+            // Process metrics
+            process: {
+                pid: process.pid,
+                memory: {
+                    rss: Math.round(process.memoryUsage().rss / 1024 / 1024),
+                    heapUsed: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+                    heapTotal: Math.round(process.memoryUsage().heapTotal / 1024 / 1024),
+                    external: Math.round(process.memoryUsage().external / 1024 / 1024)
+                },
+                cpuUsage: process.cpuUsage()
+            },
+
+            // Application components
+            components: {}
+        };
+
+        // Check LM Studio
+        try {
+            const lmHealth = await checkLMStudioHealth();
+            health.components.lmstudio = {
+                status: lmHealth.ready ? 'ok' : 'error',
+                message: lmHealth.ready ? 'Server running' : 'Server not responding',
+                modelsLoaded: lmHealth.models?.length || 0
+            };
+        } catch (e) {
+            health.components.lmstudio = {
+                status: 'error',
+                message: e.message
+            };
+        }
+
+        // Check SQLite database
+        try {
+            const dbStats = await sqliteCacheManager.getStats();
+            health.components.sqlite = {
+                status: dbStats.chunkCount >= 0 ? 'ok' : 'error',
+                message: 'Database accessible',
+                chunkCount: dbStats.chunkCount,
+                fileCount: dbStats.fileCount
+            };
+        } catch (e) {
+            health.components.sqlite = {
+                status: 'error',
+                message: e.message
+            };
+        }
+
+        // Check FAISS index
+        try {
+            const faissStats = {
+                entries: faissIndexManager.idMap?.length || 0,
+                dim: faissIndexManager.dim || 0
+            };
+            health.components.faiss = {
+                status: faissStats.entries >= 0 ? 'ok' : 'error',
+                message: faissStats.entries > 0 ? 'Index loaded' : 'Index empty',
+                entries: faissStats.entries,
+                dimension: faissStats.dim
+            };
+        } catch (e) {
+            health.components.faiss = {
+                status: 'error',
+                message: e.message
+            };
+        }
+
+        // Check WebSocket connections
+        health.components.websocket = {
+            status: wss ? 'ok' : 'error',
+            message: wss ? 'Server running' : 'Server not initialized',
+            connections: wss?.clients?.size || 0
+        };
+
+        // Overall status
+        const componentStatuses = Object.values(health.components).map(c => c.status);
+        if (componentStatuses.includes('error')) {
+            health.status = 'degraded';
+        }
+
+        res.json(health);
+    } catch (error) {
+        logger.error('Detailed health check failed:', error);
+        res.status(500).json({
+            status: 'error',
+            timestamp: new Date().toISOString(),
+            error: error.message
+        });
     }
 });
 
@@ -2081,11 +2379,11 @@ app.get('/presets/custom', (req, res) => {
 
 /**
  * POST /presets/custom - Save custom preset configuration
- * 
+ *
  * NOTE: Only main and rollingSummarizer are user-selectable.
  * Embedder and RAG summarizer are part of the CLOSED RAG pipeline.
  */
-app.post('/presets/custom', async (req, res) => {
+app.post('/presets/custom', validateInput(customPresetSchema), async (req, res) => {
     try {
         const { main, rollingSummarizer } = req.body || {};
         
@@ -2113,7 +2411,7 @@ app.post('/presets/custom', async (req, res) => {
 /**
  * POST /presets/quality-model - Save selected model for a quality preset and load it
  */
-app.post('/presets/quality-model', async (req, res) => {
+app.post('/presets/quality-model', validateInput(presetModelSchema), async (req, res) => {
     console.log('[API] /presets/quality-model called with:', req.body);
     try {
         const { quality, modelId } = req.body || {};
@@ -2161,7 +2459,7 @@ app.post('/presets/quality-model', async (req, res) => {
 /**
  * POST /presets/quality-summarizer - Save selected summarizer model for a quality preset and load it
  */
-app.post('/presets/quality-summarizer', async (req, res) => {
+app.post('/presets/quality-summarizer', validateInput(presetSummarizerSchema), async (req, res) => {
     console.log('[API] /presets/quality-summarizer called with:', req.body);
     try {
         const { quality, summarizerId } = req.body || {};

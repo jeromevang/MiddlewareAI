@@ -6,6 +6,7 @@
 - Provides utilities for FAISS storage, SQLite caching, and file system operations.
 - Auto-starts background indexing on server startup to populate FAISS/SQLite.
 - Manages model database with curated presets, LLM discovery, and active model tracking.
+- **Production-ready with comprehensive logging, monitoring, and security features.**
 
 ## Entry Files
 - `middleware.js`: Main entry point for the rolling summaries + Mini-RAG logic.
@@ -169,3 +170,46 @@ Search and download models from Hugging Face:
 | `/presets/optimize` | POST | Run LLM optimization |
 | `/models/search` | GET | Search Hugging Face |
 | `/models/download-hf` | POST | Download from HF |
+
+## Production-Ready Features
+
+### 🔐 Security & Validation
+- **Input Validation**: All API endpoints use Joi schemas for comprehensive input validation
+- **Rate Limiting**: Express-rate-limit protects against abuse (100 req/15min general, 10 req/15min sensitive)
+- **Telemetry Consent**: Debug telemetry requires explicit user consent via config
+- **Secure Headers**: Rate limiting includes standard security headers
+
+### 📊 Monitoring & Health Checks
+- **Health Endpoints**:
+  - `GET /health` - Basic health with system metrics
+  - `GET /health/detailed` - Comprehensive component health
+  - `GET /lmstudio/health` - LM Studio specific health
+  - `GET /debug/system-health` - RAG component health
+- **System Metrics**: CPU, memory, disk usage tracking
+- **Component Monitoring**: LM Studio, SQLite, FAISS, WebSocket status
+- **Performance Monitoring**: Request/response times, error rates
+
+### 🚀 Logging & Observability
+- **Winston Logger**: Structured logging with multiple transports
+  - Console: Development logs with colors
+  - Daily rotating files: Production logs (20MB, 14 days retention)
+  - Error files: Separate error logging (30 days retention)
+- **Log Levels**: error, warn, info, http, verbose, debug, silly
+- **Request Logging**: Automatic HTTP request/response logging
+- **Child Loggers**: Component-specific logging contexts
+
+### 🛡️ Reliability & Resilience
+- **Graceful Shutdown**: SIGINT/SIGTERM handlers with 5-second cleanup timeout
+  - Closes HTTP server
+  - Terminates WebSocket connections
+  - Closes database connections
+  - Unloads models
+  - Stops active indexing
+- **Error Boundaries**: Uncaught exception handling with graceful shutdown
+- **Connection Management**: Proper cleanup of resources
+
+### ⚙️ Configuration Management
+- **LM Studio Configurable**: URL, timeout, retries configurable via config.json
+- **Logging Configurable**: Level, file sizes, retention periods
+- **Auto-loading Configurable**: Enable/disable model auto-loading on startup
+- **Validation**: Runtime config validation with helpful error messages

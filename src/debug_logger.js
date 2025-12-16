@@ -15,6 +15,22 @@ function isTelemetryEnabled() {
     if (telemetryOverride !== null) {
         return telemetryOverride;
     }
+
+    // Check config first (requires explicit consent)
+    try {
+        const { getConfig } = require('./config.js');
+        const config = getConfig();
+        if (config.telemetry?.requireConsent && !config.telemetry?.enabled) {
+            return false;
+        }
+        if (config.telemetry?.enabled) {
+            return true;
+        }
+    } catch (e) {
+        // Fall back to env var if config fails
+    }
+
+    // Fall back to environment variable
     const flag = process.env.ENABLE_DEBUG_TELEMETRY;
     if (!flag) {
         return false;
