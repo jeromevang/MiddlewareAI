@@ -67,7 +67,7 @@ export function GPUOptimizer() {
   const [manualOverrides, setManualOverrides] = useState<Record<string, number>>({});
 
   // Fetch GPU status
-  const { data: gpuStatus, isLoading: statusLoading } = useQuery<GPUStatus>({
+  const { data: gpuStatus, isLoading: statusLoading, error: statusError } = useQuery<GPUStatus>({
     queryKey: ['gpuStatus'],
     queryFn: async () => {
       const res = await fetch('/gpu/status');
@@ -79,6 +79,7 @@ export function GPUOptimizer() {
       return query.state.data?.optimization?.isOptimizing ? 1000 : 10000;
     },
     staleTime: 2000,
+    retry: 3,
   });
 
   // Fetch cached settings
@@ -153,6 +154,9 @@ export function GPUOptimizer() {
   const progress = gpuStatus?.optimization?.progress || 0;
   const message = gpuStatus?.optimization?.message || '';
 
+  // Debug logging
+  console.log('[GPUOptimizer] Status:', { gpuStatus, statusLoading, statusError });
+
   const handleManualOverride = (modelId: string, role: string) => {
     const gpu = manualOverrides[modelId];
     if (gpu !== undefined) {
@@ -166,6 +170,17 @@ export function GPUOptimizer() {
         <div className="flex items-center gap-2 text-white/60">
           <Loader2 className="w-4 h-4 animate-spin" />
           Loading GPU status...
+        </div>
+      </div>
+    );
+  }
+
+  if (statusError) {
+    return (
+      <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg">
+        <div className="flex items-center gap-2 text-red-400">
+          <Zap className="w-4 h-4" />
+          <span>GPU monitoring error: {statusError.message}</span>
         </div>
       </div>
     );

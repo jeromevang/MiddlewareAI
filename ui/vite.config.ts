@@ -26,6 +26,9 @@ const proxiedRoutes = [
   "/summary",
   "/rag",
   "/debug",
+  "/gpu",
+  "/health",
+  "/bootstrap",
 ];
 
 export default defineConfig(({ command }) => {
