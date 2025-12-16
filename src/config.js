@@ -13,7 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getRagPipelineConfig, getFixedEmbedderConfig, getRagSummarizerConfig } = require('./rag_pipeline_config.js');
+const { getRagPipelineConfig, getFixedEmbedderConfig, getEmbedderConfig, getRagSummarizerConfig } = require('./rag_pipeline_config.js');
 
 const CONFIG_PATH = path.join(__dirname, '../config.json');
 
@@ -161,7 +161,8 @@ function getModelConfig(role) {
     
     // CLOSED RAG PIPELINE - These are NOT user configurable
     if (role === 'embedding') {
-        const embedder = getFixedEmbedderConfig();
+        // Use tier-specific embedder (not deprecated fixed config)
+        const embedder = getEmbedderConfig(tier);
         return {
             ...embedder,
             engine: 'local',
