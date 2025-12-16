@@ -209,19 +209,25 @@ async function getDownloadedModels() {
  * Analyze a model using the bootstrap LLM for specific capabilities
  */
 async function analyzeModelWithLLM(modelInfo) {
+    const sizeGB = modelInfo.sizeGB || 0;
     const prompt = `Analyze this AI model for a coding assistant middleware system.
 
 Model: ${modelInfo.name || modelInfo.id}
 Full ID: ${modelInfo.id}
-Size: ${modelInfo.sizeGB ? `${modelInfo.sizeGB.toFixed(1)}GB` : 'Unknown'}
+Size: ${sizeGB ? `${sizeGB.toFixed(1)}GB` : 'Unknown'}
 Context: ${modelInfo.maxContextLength || 'Unknown'} tokens
 Tool Use: ${modelInfo.trainedForToolUse ? 'Yes' : 'No'}
 
 Evaluate this model for THREE specific roles in a coding assistant:
 
-**Main Chat**: Complex reasoning, tool use, code generation, instruction following
-**RAG Summarization**: Code semantics understanding, chunk summarization, relationship analysis
-**Rolling Summarization**: Conversation memory management, coherence maintenance, context compression
+**Main Chat**: Complex reasoning, tool use, code generation, instruction following. Any size model.
+**RAG Summarization**: Code semantics understanding, chunk summarization. MUST be small (<4GB) for speed.
+**Rolling Summarization**: Conversation memory management, context compression. MUST be small (<4GB) for speed.
+
+CRITICAL RULE: Summarizer roles (rag_summarizer, rolling_summarizer) REQUIRE small, fast models.
+- Models >4GB should have LOW scores (0.1-0.2) for summarizer roles
+- Models <2GB are IDEAL for summarization (0.7-0.9 scores)
+- Models 2-4GB are acceptable for summarization (0.4-0.6 scores)
 
 Rate each capability 0.0-1.0 and assign the SINGLE best primary role.
 
@@ -271,16 +277,24 @@ Respond with ONLY valid JSON:
     }
 }
 
+// Summarizers should ALWAYS be small and fast, regardless of quality tier
+const MAX_SUMMARIZER_SIZE_GB = 4;  // 4GB max for summarizer models
+const IDEAL_SUMMARIZER_SIZE_GB = 2; // 2GB or less is ideal
+
 /**
  * Heuristic-based model analysis with capability evaluation
  * Uses pre-computed tiers from model_sync when available
+ * 
+ * KEY DESIGN: Summarizers are always small/fast models. The quality tier
+ * only affects the main model. This ensures summarizers don't compete
+ * for VRAM and remain snappy.
  */
 function analyzeModelHeuristic(modelInfo) {
     const name = (modelInfo.name || modelInfo.id || '').toLowerCase();
     const hasToolUse = modelInfo.trainedForToolUse || false;
     const sizeGB = modelInfo.sizeGB || 0;
 
-    // Determine tier based on size
+    // Determine tier based on size (used for main model quality)
     let tier = 'medium';
     if (sizeGB > 10 || name.includes('70b') || name.includes('65b')) {
         tier = 'high';
@@ -295,29 +309,50 @@ function analyzeModelHeuristic(modelInfo) {
         rolling_summarizer: 0.5
     };
 
+    // ============================================
+    // SUMMARIZER SIZE ENFORCEMENT (Critical!)
+    // Summarizers MUST be small and fast
+    // ============================================
+    
+    if (sizeGB > MAX_SUMMARIZER_SIZE_GB) {
+        // Large models should NOT be summarizers - heavy penalty
+        capabilities.rag_summarizer = 0.1;
+        capabilities.rolling_summarizer = 0.1;
+    } else if (sizeGB <= IDEAL_SUMMARIZER_SIZE_GB) {
+        // Small models are ideal for summarization - big bonus
+        capabilities.rag_summarizer += 0.35;
+        capabilities.rolling_summarizer += 0.4;
+    } else {
+        // Medium-small models (2-4GB) are acceptable summarizers
+        capabilities.rag_summarizer += 0.15;
+        capabilities.rolling_summarizer += 0.2;
+    }
+
     // Tool use models are great for main chat
     if (hasToolUse) {
         capabilities.main += 0.3;
     }
 
-    // Coding-focused models excel at RAG summarization
+    // Coding-focused models excel at RAG summarization (if small enough)
     if (name.includes('coder') || name.includes('code') || name.includes('deepseek')) {
-        capabilities.rag_summarizer += 0.4;
+        if (sizeGB <= MAX_SUMMARIZER_SIZE_GB) {
+            capabilities.rag_summarizer += 0.3; // Great for code summarization
+        }
         capabilities.main += 0.2;
     }
 
-    // Instruction-tuned models good for conversation management
+    // Instruction-tuned models good for conversation management (if small enough)
     if (name.includes('instruct') || name.includes('chat')) {
-        capabilities.rolling_summarizer += 0.3;
+        if (sizeGB <= MAX_SUMMARIZER_SIZE_GB) {
+            capabilities.rolling_summarizer += 0.25;
+        }
         capabilities.main += 0.2;
     }
 
-    // Size-based capability adjustments
+    // Size-based capability adjustments for MAIN role only
     if (tier === 'high') {
-        capabilities.main += 0.2; // Large models good for complex tasks
-        capabilities.rag_summarizer += 0.1; // Good at understanding complex code
+        capabilities.main += 0.25; // Large models good for complex tasks
     } else if (tier === 'low') {
-        capabilities.rolling_summarizer += 0.2; // Fast models good for memory tasks
         capabilities.main -= 0.1; // Less capable for complex reasoning
     }
 
@@ -336,8 +371,8 @@ function analyzeModelHeuristic(modelInfo) {
     const toolDesc = hasToolUse ? 'with tool use' : '';
     const roleDesc = {
         main: 'best for complex reasoning and tool use',
-        rag_summarizer: 'best for code understanding and summarization',
-        rolling_summarizer: 'best for conversation memory management'
+        rag_summarizer: 'ideal for fast code summarization',
+        rolling_summarizer: 'ideal for fast conversation memory'
     }[primaryRole];
 
     const reason = `${sizeDesc} ${tier}-tier model ${toolDesc} - ${roleDesc}`;
@@ -482,15 +517,49 @@ async function updatePresetsWithModels(analyzedModels, modelDbService) {
     const tiers = ['high', 'medium', 'low'];
     const roles = ['main', 'rag_summarizer', 'rolling_summarizer'];
 
+    // ============================================
+    // KEY: Summarizers should be small and fast for ALL presets
+    // Pool all summarizer-capable models across tiers
+    // ============================================
+    const allRagSummarizers = [
+        ...roleCategories.rag_summarizer.high,
+        ...roleCategories.rag_summarizer.medium,
+        ...roleCategories.rag_summarizer.low
+    ];
+    const allRollingSummarizers = [
+        ...roleCategories.rolling_summarizer.high,
+        ...roleCategories.rolling_summarizer.medium,
+        ...roleCategories.rolling_summarizer.low
+    ];
+
+    // Sort pooled summarizers by capability (best first)
+    const sortedRagSummarizers = sortModelsByCapability([...new Set(allRagSummarizers)], analyzedModels, 'rag_summarizer');
+    const sortedRollingSummarizers = sortModelsByCapability([...new Set(allRollingSummarizers)], analyzedModels, 'rolling_summarizer');
+
+    console.log(`[Bootstrap] Pooled summarizers - RAG: ${sortedRagSummarizers.length}, Rolling: ${sortedRollingSummarizers.length}`);
+
     for (const tier of tiers) {
+        if (!db.presets[tier]) db.presets[tier] = {};
+
         for (const role of roles) {
-            const models = roleCategories[role]?.[tier] || [];
-            if (models.length > 0) {
+            let models;
+            
+            if (role === 'main') {
+                // Main models follow tier-based selection
+                models = roleCategories[role]?.[tier] || [];
+            } else if (role === 'rag_summarizer') {
+                // RAG summarizers: use the SAME pooled small models for ALL tiers
+                models = sortedRagSummarizers;
+            } else if (role === 'rolling_summarizer') {
+                // Rolling summarizers: use the SAME pooled small models for ALL tiers
+                models = sortedRollingSummarizers;
+            }
+
+            if (models && models.length > 0) {
                 const fieldName = role === 'main' ? 'mainOptions' :
                                 role === 'rolling_summarizer' ? 'rollingSummarizerOptions' :
                                 'ragSummarizerOptions';
 
-                if (!db.presets[tier]) db.presets[tier] = {};
                 db.presets[tier][fieldName] = updateRoleWithLocks(tier, role, models);
             }
         }
