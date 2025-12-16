@@ -34,6 +34,20 @@ let bootstrapState = {
 };
 
 /**
+ * Generate capability tags from analysis
+ */
+function getCapabilityTags(analysis) {
+    const tags = [];
+    if (analysis.capabilities) {
+        if (analysis.capabilities.main > 0.7) tags.push('Tool Use');
+        if (analysis.capabilities.rag_summarizer > 0.7) tags.push('Code Analysis');
+        if (analysis.capabilities.rolling_summarizer > 0.7) tags.push('Memory Management');
+    }
+    tags.push('Coding'); // All models get coding tag for now
+    return tags;
+}
+
+/**
  * Get current bootstrap status
  */
 function getBootstrapStatus() {
@@ -169,41 +183,64 @@ async function getDownloadedModels() {
 }
 
 /**
- * Analyze a model using the bootstrap LLM
+ * Analyze a model using the bootstrap LLM for specific capabilities
  */
 async function analyzeModelWithLLM(modelInfo) {
-    const prompt = `Analyze this AI model and categorize it for a coding assistant app.
+    const prompt = `Analyze this AI model for a coding assistant middleware system.
 
 Model: ${modelInfo.name || modelInfo.id}
 Full ID: ${modelInfo.id}
+Size: ${modelInfo.sizeGB ? `${modelInfo.sizeGB.toFixed(1)}GB` : 'Unknown'}
+Context: ${modelInfo.maxContextLength || 'Unknown'} tokens
+Tool Use: ${modelInfo.trainedForToolUse ? 'Yes' : 'No'}
 
-Based on the model name/size, categorize into ONE tier:
-- "high": 7B+ params, complex coding tasks, needs 12GB+ VRAM
-- "medium": 3-7B params, balanced performance, needs 8GB VRAM  
-- "low": <3B params, fast/lightweight, works on 4GB VRAM
+Evaluate this model for THREE specific roles in a coding assistant:
+
+**Main Chat**: Complex reasoning, tool use, code generation, instruction following
+**RAG Summarization**: Code semantics understanding, chunk summarization, relationship analysis
+**Rolling Summarization**: Conversation memory management, coherence maintenance, context compression
+
+Rate each capability 0.0-1.0 and assign the SINGLE best primary role.
 
 Respond with ONLY valid JSON:
-{"tier": "high" or "medium" or "low", "confidence": 0.0-1.0, "reason": "brief explanation"}`;
+{
+  "primaryRole": "main"|"rag_summarizer"|"rolling_summarizer",
+  "capabilities": {
+    "main": 0.0-1.0,
+    "rag_summarizer": 0.0-1.0,
+    "rolling_summarizer": 0.0-1.0
+  },
+  "tier": "high"|"medium"|"low",
+  "confidence": 0.0-1.0,
+  "reason": "brief explanation of role assignment"
+}`;
 
     try {
         const response = await axios.post(`${LM_STUDIO_URL}/v1/chat/completions`, {
             model: 'local-model',
             messages: [
-                { role: 'system', content: 'You are a model analyzer. Respond only with valid JSON.' },
+                { role: 'system', content: 'You are an expert model evaluator for coding assistants. Respond only with valid JSON.' },
                 { role: 'user', content: prompt }
             ],
             temperature: 0.1,
-            max_tokens: 150
+            max_tokens: 300
         }, { timeout: 30000 });
 
         const content = response.data?.choices?.[0]?.message?.content || '';
-        
+
         // Extract JSON from response
         const jsonMatch = content.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-            return JSON.parse(jsonMatch[0]);
+            const result = JSON.parse(jsonMatch[0]);
+
+            // Validate the response structure
+            if (!result.primaryRole || !result.capabilities || !result.tier) {
+                throw new Error('Invalid response structure');
+            }
+
+            return result;
         }
-        
+
         throw new Error('No valid JSON in response');
     } catch (error) {
         console.warn('[Bootstrap] LLM analysis failed, using heuristic:', error.message);
@@ -212,104 +249,127 @@ Respond with ONLY valid JSON:
 }
 
 /**
- * Heuristic-based model categorization
+ * Heuristic-based model analysis with capability evaluation
  * Uses pre-computed tiers from model_sync when available
  */
 function analyzeModelHeuristic(modelInfo) {
-    // If model_sync already computed tiers, use them directly
-    if (modelInfo.tiers && modelInfo.tiers.length > 0) {
-        // Use the highest tier the model fits in
-        const tier = modelInfo.tiers.includes('high') ? 'high' :
-                     modelInfo.tiers.includes('medium') ? 'medium' : 'low';
-        
-        const reason = modelInfo.trainedForToolUse 
-            ? `${modelInfo.paramsString || 'Unknown'} model with tool use (${modelInfo.function})`
-            : `${modelInfo.paramsString || 'Unknown'} model (${modelInfo.function})`;
-            
-        return { tier, confidence: 0.9, reason };
-    }
-    
-    // Fallback to name-based heuristics if no pre-computed data
     const name = (modelInfo.name || modelInfo.id || '').toLowerCase();
-    
-    // Use sizeGB if available
-    if (modelInfo.sizeGB) {
-        const sizeGB = modelInfo.sizeGB;
-        if (sizeGB > 10) {
-            return { tier: 'high', confidence: 0.85, reason: `Large model (${sizeGB.toFixed(1)}GB)` };
-        } else if (sizeGB > 3) {
-            return { tier: 'medium', confidence: 0.85, reason: `Medium model (${sizeGB.toFixed(1)}GB)` };
-        } else {
-            return { tier: 'low', confidence: 0.85, reason: `Small model (${sizeGB.toFixed(1)}GB)` };
-        }
+    const hasToolUse = modelInfo.trainedForToolUse || false;
+    const sizeGB = modelInfo.sizeGB || 0;
+
+    // Determine tier based on size
+    let tier = 'medium';
+    if (sizeGB > 10 || name.includes('70b') || name.includes('65b')) {
+        tier = 'high';
+    } else if (sizeGB < 3 || name.includes('1b') || name.includes('0.5b') || name.includes('tiny') || name.includes('mini')) {
+        tier = 'low';
     }
-    
-    // Size-based heuristics from name
-    if (name.includes('70b') || name.includes('72b') || name.includes('65b')) {
-        return { tier: 'high', confidence: 0.9, reason: 'Very large model (65B+)' };
+
+    // Evaluate capabilities based on model characteristics
+    let capabilities = {
+        main: 0.5,
+        rag_summarizer: 0.5,
+        rolling_summarizer: 0.5
+    };
+
+    // Tool use models are great for main chat
+    if (hasToolUse) {
+        capabilities.main += 0.3;
     }
-    if (name.includes('7b') || name.includes('8b') || name.includes('13b') || name.includes('14b')) {
-        return { tier: 'high', confidence: 0.8, reason: 'Large model (7B-14B)' };
-    }
-    if (name.includes('3b') || name.includes('4b') || name.includes('6b')) {
-        return { tier: 'medium', confidence: 0.8, reason: 'Medium model (3B-6B)' };
-    }
-    if (name.includes('1b') || name.includes('2b') || name.includes('0.5b') || name.includes('500m')) {
-        return { tier: 'low', confidence: 0.8, reason: 'Small model (<3B)' };
-    }
-    
-    // Name-based heuristics
-    if (name.includes('tiny') || name.includes('mini') || name.includes('small')) {
-        return { tier: 'low', confidence: 0.7, reason: 'Name suggests small model' };
-    }
+
+    // Coding-focused models excel at RAG summarization
     if (name.includes('coder') || name.includes('code') || name.includes('deepseek')) {
-        return { tier: 'medium', confidence: 0.6, reason: 'Coding model, assuming medium' };
+        capabilities.rag_summarizer += 0.4;
+        capabilities.main += 0.2;
     }
-    
-    // Default to medium
-    return { tier: 'medium', confidence: 0.5, reason: 'Unknown size, defaulting to medium' };
+
+    // Instruction-tuned models good for conversation management
+    if (name.includes('instruct') || name.includes('chat')) {
+        capabilities.rolling_summarizer += 0.3;
+        capabilities.main += 0.2;
+    }
+
+    // Size-based capability adjustments
+    if (tier === 'high') {
+        capabilities.main += 0.2; // Large models good for complex tasks
+        capabilities.rag_summarizer += 0.1; // Good at understanding complex code
+    } else if (tier === 'low') {
+        capabilities.rolling_summarizer += 0.2; // Fast models good for memory tasks
+        capabilities.main -= 0.1; // Less capable for complex reasoning
+    }
+
+    // Cap capabilities at 1.0
+    Object.keys(capabilities).forEach(key => {
+        capabilities[key] = Math.min(1.0, Math.max(0.0, capabilities[key]));
+    });
+
+    // Determine primary role based on highest capability
+    const primaryRole = Object.entries(capabilities).reduce((a, b) =>
+        capabilities[a[0]] > capabilities[b[0]] ? a : b
+    )[0];
+
+    // Generate reason
+    const sizeDesc = sizeGB > 0 ? `${sizeGB.toFixed(1)}GB` : 'unknown size';
+    const toolDesc = hasToolUse ? 'with tool use' : '';
+    const roleDesc = {
+        main: 'best for complex reasoning and tool use',
+        rag_summarizer: 'best for code understanding and summarization',
+        rolling_summarizer: 'best for conversation memory management'
+    }[primaryRole];
+
+    const reason = `${sizeDesc} ${tier}-tier model ${toolDesc} - ${roleDesc}`;
+
+    return {
+        primaryRole,
+        capabilities,
+        tier,
+        confidence: 0.7,
+        reason
+    };
 }
 
 /**
  * Update models.json presets with analyzed models
- * Only adds main models (with tool use) to mainOptions
+ * Assigns models to optimal roles based on capability analysis
  * Uses exact modelKey from LM Studio
  * Respects preset locks - locked models are not replaced
  */
 async function updatePresetsWithModels(analyzedModels, modelDbService) {
     updateBootstrapStatus({ message: 'Updating presets...', progress: 80 });
-    
+
     const db = modelDbService.loadModelDatabase();
-    
+
     // Get list of models that are locked and should be preserved
     const lockedModels = getPresetLockedModels();
     if (lockedModels.length > 0) {
         console.log(`[Bootstrap] Preserving ${lockedModels.length} locked models:`, lockedModels.join(', '));
     }
-    
-    // Categorize by tier AND function
-    const highMainModels = [];
-    const mediumMainModels = [];
-    const lowMainModels = [];
-    
+
+    // Categorize models by their primary role and tier
+    const roleCategories = {
+        main: { high: [], medium: [], low: [] },
+        rag_summarizer: { high: [], medium: [], low: [] },
+        rolling_summarizer: { high: [], medium: [], low: [] }
+    };
+
     for (const { model, analysis } of analyzedModels) {
         // Use exact modelKey (not path or name)
         const modelKey = model.id;
         if (!modelKey) continue;
-        
-        // Skip embedding models for mainOptions
+
+        // Skip embedding models
         if (model.function === 'embedder') {
             console.log(`[Bootstrap] Skipping embedder: ${modelKey}`);
             continue;
         }
-        
+
         // Add/update in modelSpecs with exact modelKey
         if (!db.modelSpecs[modelKey]) {
             db.modelSpecs[modelKey] = {
                 id: modelKey,
                 name: model.name || modelKey,
                 author: modelKey.split('/')[0] || 'Unknown',
-                type: model.function || 'main',
+                type: analysis.primaryRole || model.function || 'main',
                 engine: 'lmstudio',
                 available: true,
                 description: analysis.reason || 'Discovered model',
@@ -317,89 +377,118 @@ async function updatePresetsWithModels(analyzedModels, modelDbService) {
                 paramsString: model.paramsString,
                 trainedForToolUse: model.trainedForToolUse || false,
                 maxContextLength: model.maxContextLength,
-                requirements: { 
+                requirements: {
                     vram: model.sizeGB ? `${model.sizeGB.toFixed(1)}GB` : 'Unknown',
-                    recommendedHardware: analysis.tier === 'high' ? 'RTX 4080+' : 
+                    recommendedHardware: analysis.tier === 'high' ? 'RTX 4080+' :
                                         analysis.tier === 'medium' ? 'RTX 3080+' : 'RTX 3060+'
                 },
-                capabilities: model.trainedForToolUse ? ['Tool Use', 'Coding'] : ['General', 'Coding'],
-                tags: ['discovered', analysis.tier, model.function]
+                capabilities: getCapabilityTags(analysis),
+                tags: ['discovered', analysis.tier, analysis.primaryRole],
+                analysis: {
+                    primaryRole: analysis.primaryRole,
+                    capabilities: analysis.capabilities,
+                    confidence: analysis.confidence
+                }
             };
         } else {
             db.modelSpecs[modelKey].available = true;
             db.modelSpecs[modelKey].sizeGB = model.sizeGB;
             db.modelSpecs[modelKey].trainedForToolUse = model.trainedForToolUse;
+            db.modelSpecs[modelKey].analysis = {
+                primaryRole: analysis.primaryRole,
+                capabilities: analysis.capabilities,
+                confidence: analysis.confidence
+            };
         }
-        
-        // Only main/summarizer models go into mainOptions
-        // Prefer models with tool use for main, but include all LLMs
-        if (model.function !== 'embedder') {
-            // Use pre-computed tiers from model_sync if available
-            const tiers = model.tiers || [];
-            
-            if (tiers.includes('high') || analysis.tier === 'high') {
-                highMainModels.push(modelKey);
-            }
-            if (tiers.includes('medium') || analysis.tier === 'medium') {
-                mediumMainModels.push(modelKey);
-            }
-            if (tiers.includes('low') || analysis.tier === 'low') {
-                lowMainModels.push(modelKey);
-            }
+
+        // Categorize by primary role and tier
+        const primaryRole = analysis.primaryRole || 'main';
+        const tier = analysis.tier || 'medium';
+
+        if (roleCategories[primaryRole] && roleCategories[primaryRole][tier]) {
+            roleCategories[primaryRole][tier].push(modelKey);
         }
     }
     
-    // Sort by: tool use first, then by size (smaller first for each tier)
-    const sortModels = (models, analyzed) => {
+    // Enhanced sorting that considers capability scores
+    const sortModelsByCapability = (models, analyzed, role) => {
         return [...new Set(models)].sort((a, b) => {
+            const aAnalysis = analyzed.find(x => x.model.id === a)?.analysis;
+            const bAnalysis = analyzed.find(x => x.model.id === b)?.analysis;
             const aModel = analyzed.find(x => x.model.id === a)?.model;
             const bModel = analyzed.find(x => x.model.id === b)?.model;
-            
-            // Tool use models first
-            if (aModel?.trainedForToolUse && !bModel?.trainedForToolUse) return -1;
-            if (!aModel?.trainedForToolUse && bModel?.trainedForToolUse) return 1;
-            
-            // Then by size (smaller first)
+
+            // Primary sort: capability score for the target role
+            const aCapability = aAnalysis?.capabilities?.[role] || 0;
+            const bCapability = bAnalysis?.capabilities?.[role] || 0;
+            if (aCapability !== bCapability) {
+                return bCapability - aCapability; // Higher capability first
+            }
+
+            // Secondary sort: tool use models first (for main role)
+            if (role === 'main') {
+                if (aModel?.trainedForToolUse && !bModel?.trainedForToolUse) return -1;
+                if (!aModel?.trainedForToolUse && bModel?.trainedForToolUse) return 1;
+            }
+
+            // Tertiary sort: smaller models first (for efficiency)
             return (aModel?.sizeGB || 0) - (bModel?.sizeGB || 0);
         });
     };
-    
-    // Helper to preserve locked models when updating presets
-    const updatePresetWithLocks = (tier, newModels) => {
-        const sorted = sortModels(newModels, analyzedModels);
-        const existing = db.presets[tier].mainOptions || [];
-        
+
+    // Helper to preserve locked models when updating role assignments
+    const updateRoleWithLocks = (tier, role, newModels) => {
+        const sorted = sortModelsByCapability(newModels, analyzedModels, role);
+        const existing = db.presets[tier][role === 'main' ? 'mainOptions' : role === 'rolling_summarizer' ? 'rollingSummarizerOptions' : 'ragSummarizerOptions'] || [];
+
         // Locked models always stay at the beginning (preserved)
         const locked = existing.filter(id => isPresetLocked(id));
-        
+
         // Unlocked models can be replaced
         const unlocked = existing.filter(id => !isPresetLocked(id) && sorted.includes(id));
-        
+
         // New models not in existing
         const newOnes = sorted.filter(id => !existing.includes(id));
-        
+
         // Combine: locked first, then unlocked existing, then new
         const combined = [...new Set([...locked, ...unlocked, ...newOnes])];
-        return combined.slice(0, 10);
+        return combined.slice(0, 5); // Max 5 per role per tier
     };
-    
-    // Update presets with sorted models (max 10 per tier), respecting locks
-    if (highMainModels.length > 0) {
-        db.presets.high.mainOptions = updatePresetWithLocks('high', highMainModels);
+
+    // Update presets with role-assigned models, respecting locks
+    const tiers = ['high', 'medium', 'low'];
+    const roles = ['main', 'rag_summarizer', 'rolling_summarizer'];
+
+    for (const tier of tiers) {
+        for (const role of roles) {
+            const models = roleCategories[role]?.[tier] || [];
+            if (models.length > 0) {
+                const fieldName = role === 'main' ? 'mainOptions' :
+                                role === 'rolling_summarizer' ? 'rollingSummarizerOptions' :
+                                'ragSummarizerOptions';
+
+                if (!db.presets[tier]) db.presets[tier] = {};
+                db.presets[tier][fieldName] = updateRoleWithLocks(tier, role, models);
+            }
+        }
     }
-    
-    if (mediumMainModels.length > 0) {
-        db.presets.medium.mainOptions = updatePresetWithLocks('medium', mediumMainModels);
-    }
-    
-    if (lowMainModels.length > 0) {
-        db.presets.low.mainOptions = updatePresetWithLocks('low', lowMainModels);
-    }
-    
+
     db.lastBootstrap = new Date().toISOString();
     modelDbService.saveModelDatabase(db);
-    
-    console.log(`[Bootstrap] Updated presets: ${db.presets.high.mainOptions?.length || 0} high, ${db.presets.medium.mainOptions?.length || 0} medium, ${db.presets.low.mainOptions?.length || 0} low`);
+
+    // Log the results
+    const results = {};
+    for (const tier of tiers) {
+        results[tier] = {};
+        for (const role of roles) {
+            const fieldName = role === 'main' ? 'mainOptions' :
+                            role === 'rolling_summarizer' ? 'rollingSummarizerOptions' :
+                            'ragSummarizerOptions';
+            results[tier][role] = db.presets[tier]?.[fieldName]?.length || 0;
+        }
+    }
+
+    console.log(`[Bootstrap] Updated role assignments:`, JSON.stringify(results, null, 2));
 }
 
 /**
