@@ -59,7 +59,7 @@
     "perQualityRollingSummarizers": {
       "high": "mistral-7b-instruct-v0.3",
       "medium": "mistral-7b-instruct-v0.3",
-      "low": "tinyllama-1.1b-chat-v1.0"
+      "low": "qwen2.5-coder-0.5b-instruct"
     }
   },
   "processing": {
@@ -96,7 +96,7 @@
     "default_retention_days": 30
   },
   "customPreset": {
-    "main": "qwen/qwen3-4b-2507",
-    "rollingSummarizer": "qwen2.5-coder-1.5b-instruct"
+    "main": "nextcoder-32b",
+    "rollingSummarizer": "qwen2.5-coder-0.5b-instruct"
   }
 }

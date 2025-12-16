@@ -8,38 +8,39 @@ import type { RagTier, RagTierConfig } from './types';
 // RAG PIPELINE TIERS (Closed System - matches rag_pipeline_config.js)
 // =============================================================================
 
+// MUST MATCH: src/rag_pipeline_config.js
 export const RAG_TIERS: Record<RagTier, RagTierConfig> = {
   low: {
     name: "Low",
-    description: "Fast indexing, good for quick iterations",
+    description: "Fast indexing, lightweight code-aware embeddings",
     targetGPU: "RTX 3060 / 8GB VRAM",
     embedder: {
-      model_name: "Xenova/all-MiniLM-L6-v2",
-      identifier: "Xenova/all-MiniLM-L6-v2",
-      dimension: 384
+      model_name: "nomic-ai/nomic-embed-text-v1.5",
+      identifier: "text-embedding-nomic-embed-text-v1.5@q4_k_m",
+      dimension: 768
     },
     ragSummarizer: {
-      model_name: "qwen2.5-coder-0.5b-instruct",
-      identifier: "qwen2.5-coder-0.5b-instruct"
+      model_name: "Phi 3.1 Mini 128k Instruct",
+      identifier: "phi-3.1-mini-128k-instruct"
     }
   },
   medium: {
     name: "Medium",
-    description: "Balanced quality and speed",
+    description: "Balanced quality and speed for code RAG",
     targetGPU: "RTX 4070 / 12GB VRAM",
     embedder: {
-      model_name: "Xenova/all-MiniLM-L6-v2",
-      identifier: "Xenova/all-MiniLM-L6-v2",
+      model_name: "nomic-ai/nomic-embed-text-v1.5",
+      identifier: "text-embedding-nomic-embed-text-v1.5@q8_0",
       dimension: 768
     },
     ragSummarizer: {
-      model_name: "qwen2.5-coder-1.5b-instruct",
+      model_name: "Qwen2.5 Coder 1.5B Instruct",
       identifier: "qwen2.5-coder-1.5b-instruct"
     }
   },
   high: {
     name: "High",
-    description: "Best quality summaries, slower indexing",
+    description: "Maximum code understanding and summarization quality",
     targetGPU: "RTX 5080 / 16GB VRAM",
     embedder: {
       model_name: "nomic-ai/nomic-embed-text-v1.5",
