@@ -31,7 +31,7 @@ const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js
 const { getProcessingConfig, getModelConfig, getConfig, getLMStudioConfig, getStorageConfig, getSessionConfig, updateConfigFile } = require('./config.js');
 const { getRuntimeMode, isCloudMode, requireModeHealthCheck } = require('./runtime.js');
 const { main: runIndexer } = require('./middleware.js'); // to trigger reindex
-const { getIndexingStatus } = require('./indexer/indexer.js');
+const { getIndexingStatus, initializeIndexingStatusFromDatabase } = require('./indexer/indexer.js');
 const { logDebugEvent, isTelemetryEnabled, setTelemetryOverride, getTelemetryOverride } = require('./debug_logger.js');
 const { createRagService } = require('./services/rag_service.js');
 const {
@@ -2429,11 +2429,16 @@ app.get('/rag/indexing-status', async (req, res) => {
             dim: faissIndexManager.dim || 0
         };
 
+        // When not actively indexing, show actual indexed counts from database
+        // When actively indexing, show current progress counters
+        const filesProcessed = indexerStatus.isActive ? indexerStatus.filesProcessed : dbStats.fileCount || 0;
+        const totalFiles = indexerStatus.isActive ? indexerStatus.totalFiles : dbStats.fileCount || 0;
+
         res.json({
             isIndexing: indexerStatus.isActive,
             currentFile: indexerStatus.currentFile,
-            filesProcessed: indexerStatus.filesProcessed,
-            totalFiles: indexerStatus.totalFiles,
+            filesProcessed,
+            totalFiles,
             chunksProcessed: dbStats.chunkCount || 0,
             totalChunks: dbStats.chunkCount || 0,
             startTime: indexerStatus.startTime,
@@ -4007,6 +4012,15 @@ async function start() {
             }
         } catch (error) {
             console.warn('[Server] Model bootstrap failed:', error.message);
+        }
+
+        // Initialize indexer status from persisted database
+        console.log('[Server] Initializing indexer status from database...');
+        try {
+            await initializeIndexingStatusFromDatabase();
+            console.log('[Server] Indexer status initialized successfully.');
+        } catch (error) {
+            console.warn('[Server] Indexer status initialization failed:', error.message);
         }
 
         // Auto-load active preset models (in background, non-blocking)

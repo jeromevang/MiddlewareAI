@@ -54,11 +54,73 @@ function resetIndexingStatus() {
     };
 }
 
+/**
+ * Initialize indexing status from persisted database stats
+ * This ensures status shows actual indexed data even after server restart
+ */
+async function initializeIndexingStatusFromDatabase() {
+    try {
+        const dbStats = await sqliteCacheManager.getStats();
+        if (dbStats.fileCount > 0 || dbStats.chunkCount > 0) {
+            indexingStatus = {
+                ...indexingStatus,
+                status: 'completed', // Mark as completed since data exists
+                filesProcessed: dbStats.fileCount,
+                totalFiles: dbStats.fileCount,
+                chunksProcessed: dbStats.chunkCount
+            };
+            console.log(`[Indexer] Initialized status from database: ${dbStats.fileCount} files, ${dbStats.chunkCount} chunks`);
+        }
+    } catch (error) {
+        console.warn('[Indexer] Failed to initialize status from database:', error.message);
+    }
+}
+
+/**
+ * Check if indexing is already complete by examining persisted data
+ */
+async function checkIndexingComplete() {
+    try {
+        // Check if FAISS index exists and has data
+        const faissCount = await faissIndexManager.count();
+        if (faissCount === 0) {
+            return false; // No index data
+        }
+
+        // Check if SQLite cache has chunks
+        const dbStats = await sqliteCacheManager.getStats();
+        if (!dbStats || dbStats.totalChunks === 0) {
+            return false; // No cached chunks
+        }
+
+        // Update status to reflect completed indexing
+        updateIndexingStatus({
+            isActive: false,
+            status: 'completed',
+            filesProcessed: dbStats.totalFiles || 0,
+            totalFiles: dbStats.totalFiles || 0,
+            chunksProcessed: dbStats.totalChunks || 0,
+            currentFile: null,
+            error: null,
+            estimatedTimeRemaining: null
+        });
+
+        return true;
+    } catch (error) {
+        console.warn('[Indexer] Failed to check indexing status:', error.message);
+        return false;
+    }
+}
+
 let storesInitialized = false;
 async function ensureStoresInitialized() {
     if (storesInitialized) return;
     await sqliteCacheManager.initialize();
     await faissIndexManager.initialize();
+
+    // Check if indexing is already complete
+    await checkIndexingComplete();
+
     storesInitialized = true;
 }
 
@@ -378,4 +440,4 @@ async function runIndexer({ modelVersion = ragSummarizationModel.identifier, sig
     }
 }
 
-module.exports = { runIndexer, getIndexingStatus };
+module.exports = { runIndexer, getIndexingStatus, initializeIndexingStatusFromDatabase, checkIndexingComplete };
