@@ -4384,6 +4384,196 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
 app.post('/v1/chat/completions', (req, res) => handleChatCompletions(req, res, '/v1/chat/completions'));
 app.post('/chat/completions', (req, res) => handleChatCompletions(req, res, '/chat/completions'));
 
+/**
+ * GET /v1/models - List all available models (OpenAI-compatible)
+ */
+app.get('/v1/models', async (req, res) => {
+    try {
+        const loadedModels = await listLoadedModels();
+        
+        // Format as OpenAI-compatible response
+        const models = loadedModels.map(m => ({
+            id: m.id,
+            object: 'model',
+            created: Math.floor(Date.now() / 1000),
+            owned_by: 'lmstudio',
+            permission: [],
+            root: m.id,
+            parent: null
+        }));
+        
+        res.json({
+            object: 'list',
+            data: models
+        });
+    } catch (error) {
+        console.error('[API] /v1/models failed:', error.message);
+        res.status(500).json({ 
+            error: { 
+                message: error.message, 
+                type: 'server_error' 
+            } 
+        });
+    }
+});
+
+/**
+ * GET /v1/models/:model - Get specific model info (OpenAI-compatible)
+ */
+app.get('/v1/models/:model', async (req, res) => {
+    try {
+        const modelId = req.params.model;
+        const loadedModels = await listLoadedModels();
+        const model = loadedModels.find(m => m.id === modelId || m.id.includes(modelId));
+        
+        if (!model) {
+            return res.status(404).json({
+                error: {
+                    message: `Model '${modelId}' not found`,
+                    type: 'invalid_request_error',
+                    code: 'model_not_found'
+                }
+            });
+        }
+        
+        res.json({
+            id: model.id,
+            object: 'model',
+            created: Math.floor(Date.now() / 1000),
+            owned_by: 'lmstudio',
+            permission: [],
+            root: model.id,
+            parent: null
+        });
+    } catch (error) {
+        console.error('[API] /v1/models/:model failed:', error.message);
+        res.status(500).json({ 
+            error: { 
+                message: error.message, 
+                type: 'server_error' 
+            } 
+        });
+    }
+});
+
+/**
+ * POST /v1/embeddings - Generate embeddings (OpenAI-compatible)
+ */
+app.post('/v1/embeddings', async (req, res) => {
+    try {
+        const { input, model, encoding_format } = req.body;
+        
+        if (!input) {
+            return res.status(400).json({
+                error: {
+                    message: 'Missing required parameter: input',
+                    type: 'invalid_request_error'
+                }
+            });
+        }
+        
+        // Handle both single string and array of strings
+        const texts = Array.isArray(input) ? input : [input];
+        const results = [];
+        let totalTokens = 0;
+        
+        for (let i = 0; i < texts.length; i++) {
+            const text = texts[i];
+            const result = await embedText(text);
+            
+            if (result.failed || !result.embeddingVector) {
+                return res.status(500).json({
+                    error: {
+                        message: result.error || 'Embedding generation failed',
+                        type: 'server_error'
+                    }
+                });
+            }
+            
+            // Estimate tokens (rough approximation)
+            totalTokens += Math.ceil(text.length / 4);
+            
+            results.push({
+                object: 'embedding',
+                index: i,
+                embedding: Array.from(result.embeddingVector)
+            });
+        }
+        
+        res.json({
+            object: 'list',
+            data: results,
+            model: model || 'text-embedding',
+            usage: {
+                prompt_tokens: totalTokens,
+                total_tokens: totalTokens
+            }
+        });
+    } catch (error) {
+        console.error('[API] /v1/embeddings failed:', error.message);
+        res.status(500).json({ 
+            error: { 
+                message: error.message, 
+                type: 'server_error' 
+            } 
+        });
+    }
+});
+
+/**
+ * POST /v1/completions - Legacy text completions (OpenAI-compatible)
+ */
+app.post('/v1/completions', async (req, res) => {
+    try {
+        const { model, prompt, max_tokens, temperature = 0.7, stream = false } = req.body;
+        
+        if (!prompt) {
+            return res.status(400).json({
+                error: {
+                    message: 'Missing required parameter: prompt',
+                    type: 'invalid_request_error'
+                }
+            });
+        }
+        
+        // Convert to chat format and use existing infrastructure
+        const result = await generateCompletion({
+            prompt: prompt,
+            temperature: temperature,
+            model: model
+        });
+        
+        // Extract text from chat completion response
+        const text = result?.choices?.[0]?.message?.content || '';
+        
+        res.json({
+            id: `cmpl-${Date.now()}`,
+            object: 'text_completion',
+            created: Math.floor(Date.now() / 1000),
+            model: model || 'default',
+            choices: [{
+                text: text,
+                index: 0,
+                logprobs: null,
+                finish_reason: 'stop'
+            }],
+            usage: result?.usage || {
+                prompt_tokens: 0,
+                completion_tokens: 0,
+                total_tokens: 0
+            }
+        });
+    } catch (error) {
+        console.error('[API] /v1/completions failed:', error.message);
+        res.status(500).json({ 
+            error: { 
+                message: error.message, 
+                type: 'server_error' 
+            } 
+        });
+    }
+});
+
 // =============================================================================
 // DEBUG / DIAGNOSTICS ENDPOINTS
 // =============================================================================
