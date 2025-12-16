@@ -30,12 +30,13 @@ export function MainModelSelector({
   const [showDetails, setShowDetails] = useState<string | null>(null);
   const queryClient = useQueryClient();
 
-  // Fetch model availability status - poll every 10 seconds
+  // Fetch model availability status - WebSocket provides real-time updates
+  // Only fetch initially and on manual refresh (no polling!)
   const { data: modelStatusData } = useQuery({
     queryKey: ['modelStatus'],
     queryFn: getModelStatus,
-    staleTime: 10000,
-    refetchInterval: 10000,
+    staleTime: 60000, // Consider data fresh for 1 minute
+    refetchInterval: false, // WebSocket handles real-time updates
   });
 
   // Fetch model lock states

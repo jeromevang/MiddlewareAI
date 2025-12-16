@@ -68,6 +68,15 @@ export function useDashboardSocket() {
             setSnapshot(payload.payload as DashboardSnapshot);
           } else if (payload?.type === "session-update" && payload.payload) {
             applySessionUpdate(payload.payload as SessionUpdatePayload);
+          } else if (payload?.type === "model-status" && payload.payload) {
+            // Update model status cache from WebSocket (no polling needed!)
+            const modelData = payload.payload as { loadedModels: string[]; details?: unknown[] };
+            queryClient.setQueryData(['modelStatus'], (old: unknown) => ({
+              ...(old as object || {}),
+              loadedModels: modelData.loadedModels,
+              details: modelData.details,
+              status: 'ok',
+            }));
           }
         } catch (err) {
           console.error("Failed to parse websocket payload", err);

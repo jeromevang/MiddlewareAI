@@ -338,18 +338,12 @@ async function _openModelImpl(modelOrId, options = {}) {
     // Wait for model to be fully loaded
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Invalidate cache after model state change
-    invalidateLoadedModelsCache();
-
-    // Verify model is loaded by checking loaded models list (force refresh)
+    // Sync centralized state and broadcast to frontend via WebSocket
     try {
-        const loadedModels = await listLoadedModels(true);
-        const isLoaded = loadedModels.some(m => modelIdMatches(modelName, m.id));
-        if (!isLoaded) {
-            console.warn(`[LM Studio Load] Model ${modelName} not found in loaded list after CLI load`);
-        }
-    } catch (verifyError) {
-        console.warn(`[LM Studio Load] Could not verify model load:`, verifyError.message);
+        const { syncWithLMStudio } = require('./lmstudio_api.js');
+        await syncWithLMStudio();
+    } catch (syncError) {
+        console.warn(`[LM Studio Load] Failed to sync state:`, syncError.message);
     }
 
     // Warm the model with a simple request
@@ -436,8 +430,13 @@ async function _unloadModelImpl(modelOrId, options = {}) {
         console.log(`[LM Studio Unload] Successfully unloaded model: ${identifier}`);
         console.log(`[LM Studio Unload] CLI output: ${stdout.trim()}`);
 
-        // Invalidate cache after model state change
-        invalidateLoadedModelsCache();
+        // Sync centralized state and broadcast to frontend via WebSocket
+        try {
+            const { syncWithLMStudio } = require('./lmstudio_api.js');
+            await syncWithLMStudio();
+        } catch (syncError) {
+            console.warn(`[LM Studio Unload] Failed to sync state:`, syncError.message);
+        }
 
         return { success: true, output: stdout.trim() };
     } catch (error) {
@@ -468,11 +467,16 @@ async function unloadAllModels() {
         loadedModels.clear();
         loadingModels.clear();
 
-        // Invalidate cache after model state change
-        invalidateLoadedModelsCache();
-
         console.log(`[LM Studio Unload] Successfully unloaded all models`);
         console.log(`[LM Studio Unload] CLI output: ${stdout.trim()}`);
+
+        // Sync centralized state and broadcast to frontend via WebSocket
+        try {
+            const { syncWithLMStudio } = require('./lmstudio_api.js');
+            await syncWithLMStudio();
+        } catch (syncError) {
+            console.warn(`[LM Studio Unload] Failed to sync state:`, syncError.message);
+        }
 
         return { success: true, output: stdout.trim() };
     } catch (error) {
@@ -489,51 +493,22 @@ let _loadedModelsCache = { data: null, timestamp: 0 };
 const LOADED_MODELS_CACHE_TTL_MS = 5000; // 5 seconds
 
 /**
- * List loaded models from LM Studio with caching
- * @param {boolean} forceRefresh - Bypass cache and fetch fresh data
+ * List loaded models - uses centralized state (NO API call)
+ * The centralized LM Studio API tracks all model state
  * @returns {Promise<Array>} - Array of loaded model objects
  */
-async function listLoadedModels(forceRefresh = false) {
-    const now = Date.now();
-    
-    // Return cached result if fresh enough and not forcing refresh
-    if (!forceRefresh && _loadedModelsCache.data && (now - _loadedModelsCache.timestamp < LOADED_MODELS_CACHE_TTL_MS)) {
-        return _loadedModelsCache.data;
-    }
-
-    try {
-        const res = await axios.get(`${LM_STUDIO_URL}/api/v0/models`, { timeout: LM_STUDIO_TIMEOUT_MS });
-        const models = res.data?.data || [];
-        const loaded = models.filter(m => m.state === 'loaded').map(m => ({
-            id: m.id,
-            name: m.name,
-            state: m.state,
-            size: m.size,
-            context_length: m.context_length
-        }));
-
-        // Update cache
-        _loadedModelsCache = { data: loaded, timestamp: now };
-
-        // Only log when model list changes (prevents log flooding)
-        const currentIds = loaded.map(m => m.id).sort().join(',');
-        if (_lastLoadedModelIds !== currentIds) {
-            console.log(`[LM Studio Models] Loaded models changed: ${loaded.length} models`, loaded.map(m => m.id).join(', '));
-            _lastLoadedModelIds = currentIds;
-        }
-        
-        return loaded;
-    } catch (error) {
-        console.error(`[LM Studio Models] Failed to list models:`, error.message);
-        throw error;
-    }
+async function listLoadedModels() {
+    // Use centralized state - no API call needed!
+    const { getLoadedModels } = require('./lmstudio_api.js');
+    return getLoadedModels();
 }
 
 /**
  * Invalidate the loaded models cache (call after load/unload operations)
+ * @deprecated - No longer needed with centralized state tracking
  */
 function invalidateLoadedModelsCache() {
-    _loadedModelsCache = { data: null, timestamp: 0 };
+    // No-op - centralized state is always current
 }
 
 /**

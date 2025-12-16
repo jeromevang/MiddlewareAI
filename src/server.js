@@ -5014,15 +5014,16 @@ async function start() {
             console.warn('[Server] Config validation found issues - please check logs');
         }
 
-        // Initialize LM Studio and load required models
-        console.log('[Server] Initializing LM Studio...');
+        // Initialize centralized LM Studio API (unloads all models for clean state)
+        console.log('[Server] Initializing LM Studio API...');
         try {
-            // await initializeLMStudioWithModels();
-            console.log('[Server] LM Studio initialization skipped');
-            console.log('[Server] LM Studio initialization successful');
+            const { initialize: initializeLMStudioAPI, setBroadcastCallback } = require('./lmstudio/lmstudio_api.js');
+            setBroadcastCallback(broadcastWsMessage);
+            await initializeLMStudioAPI();
+            console.log('[Server] LM Studio API initialized (all models unloaded for clean state)');
         } catch (error) {
-            console.warn('[Server] LM Studio initialization failed, continuing without models:', error.message);
-            console.warn('[Server] You may need to start LM Studio manually and load models');
+            console.warn('[Server] LM Studio API initialization failed:', error.message);
+            console.warn('[Server] You may need to start LM Studio manually');
         }
 
         // Initialize model database (validate presets, check availability)

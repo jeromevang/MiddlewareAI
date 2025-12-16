@@ -63,12 +63,12 @@ export function ModelManagementPanel() {
     staleTime: 5000,
   });
 
-  // Fetch model status (loaded models) - poll every 10 seconds
+  // Fetch model status (loaded models) - WebSocket provides real-time updates
   const { data: statusData } = useQuery({
     queryKey: ['modelStatus'],
     queryFn: getModelStatus,
-    staleTime: 10000,
-    refetchInterval: 10000,
+    staleTime: 60000, // Consider data fresh for 1 minute
+    refetchInterval: false, // WebSocket handles real-time updates
   });
 
   // Toggle lock mutation
