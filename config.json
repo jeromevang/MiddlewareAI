@@ -32,8 +32,8 @@
       "userSelectable": true
     },
     "rollingSummarization": {
-      "model_name": "phi-3.1-mini-128k-instruct",
-      "identifier": "phi-3.1-mini-128k-instruct",
+      "model_name": "qwen2.5-coder-0.5b-instruct",
+      "identifier": "qwen2.5-coder-0.5b-instruct",
       "context_length": 4096,
       "userSelectable": true
     },

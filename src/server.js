@@ -2316,19 +2316,30 @@ app.post('/rag/ensure-models', async (req, res) => {
             return res.status(400).json({ error: 'Invalid tier' });
         }
 
-        const { openModel, unloadModel } = require('./lmstudio/model_manager.js');
+        const { openModel, unloadModel, listLoadedModels } = require('./lmstudio/model_manager.js');
 
-        // If we have a previous tier, unload its RAG summarizer (embedders are local, not LM Studio models)
+        // Get currently loaded models to avoid unnecessary operations
+        const loadedModels = await listLoadedModels();
+        const loadedModelIds = loadedModels.map(m => m.id || m.identifier);
+        console.log(`[RAG] Currently loaded models:`, loadedModelIds);
+
+        // If we have a previous tier, unload its RAG summarizer (only if loaded)
         if (previousTier && previousTier !== tier) {
             console.log(`[RAG] Unloading previous tier RAG summarizer: ${previousTier} -> ${tier}`);
             const prevConfig = getRagPipelineConfig(previousTier);
             if (prevConfig) {
-                console.log(`[RAG] Previous config: summarizer=${prevConfig.ragSummarizer.identifier}`);
-                try {
-                    await unloadModel(prevConfig.ragSummarizer.identifier);
-                    console.log(`[RAG] ✅ Unloaded RAG summarizer: ${prevConfig.ragSummarizer.identifier}`);
-                } catch (error) {
-                    console.warn(`[RAG] ❌ Failed to unload RAG summarizer ${prevConfig.ragSummarizer.identifier}:`, error.message);
+                const prevSummarizerId = prevConfig.ragSummarizer.identifier;
+                console.log(`[RAG] Previous config: summarizer=${prevSummarizerId}`);
+
+                if (loadedModelIds.includes(prevSummarizerId)) {
+                    try {
+                        await unloadModel(prevSummarizerId);
+                        console.log(`[RAG] ✅ Unloaded RAG summarizer: ${prevSummarizerId}`);
+                    } catch (error) {
+                        console.warn(`[RAG] ❌ Failed to unload RAG summarizer ${prevSummarizerId}:`, error.message);
+                    }
+                } else {
+                    console.log(`[RAG] Previous RAG summarizer ${prevSummarizerId} was not loaded, skipping unload`);
                 }
             } else {
                 console.log(`[RAG] No previous config found for tier: ${previousTier}`);
@@ -2340,17 +2351,21 @@ app.post('/rag/ensure-models', async (req, res) => {
         // Note: Embedders are local @xenova/transformers models, not LM Studio models
         console.log(`[RAG] Embedder is local model: ${pipelineConfig.embedder.identifier} (no LM Studio loading needed)`);
 
-        // Load new RAG summarizer
+        // Load new RAG summarizer (only if not already loaded)
         const summarizerId = pipelineConfig.ragSummarizer.identifier;
-        console.log(`Ensuring RAG summarizer is loaded: ${summarizerId}`);
-        try {
-            await openModel(summarizerId);
-            console.log(`[RAG] ✅ RAG summarizer ${summarizerId} is ready`);
-        } catch (error) {
-            console.warn(`[RAG] ❌ Failed to load RAG summarizer ${summarizerId}:`, error.message);
+        if (!loadedModelIds.includes(summarizerId)) {
+            console.log(`[RAG] Loading RAG summarizer: ${summarizerId}`);
+            try {
+                await openModel(summarizerId);
+                console.log(`[RAG] ✅ RAG summarizer ${summarizerId} is ready`);
+            } catch (error) {
+                console.warn(`[RAG] ❌ Failed to load RAG summarizer ${summarizerId}:`, error.message);
+            }
+        } else {
+            console.log(`[RAG] RAG summarizer ${summarizerId} already loaded, skipping`);
         }
 
-        res.json({ status: 'ok', message: 'Models loading initiated' });
+        res.json({ status: 'ok', message: 'Models managed successfully' });
     } catch (error) {
         console.error('[API] Failed to ensure models:', error.message);
         res.status(500).json({ error: 'Failed to ensure models', details: error.message });
