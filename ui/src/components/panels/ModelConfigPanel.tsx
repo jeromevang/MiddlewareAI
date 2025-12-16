@@ -102,7 +102,7 @@ export default function ModelConfigPanel() {
   // RAG Tier Change Mutation
   const changeRagTierMutation = useMutation({
     mutationFn: async (tier: string) => {
-      const currentTier = configData?.rag?.activeTier || 'medium';
+      const currentTier = configData?.config?.ragPipeline?.tier || 'medium';
 
       // Check if re-indexing is needed
       const reindexRes = await fetch(`/rag/check-reindex?from=${currentTier}&to=${tier}`);
@@ -434,8 +434,8 @@ export default function ModelConfigPanel() {
                 <MainModelSelector
                   quality={quality}
                   preset={presets[quality]}
-                  selectedMainModel={configData?.models.perQualityMainModels?.[quality] || null}
-                  selectedSummarizerModel={configData?.models.perQualityRollingSummarizers?.[quality] || null}
+                  selectedMainModel={configData?.config?.models?.perQualityMainModels?.[quality] || ''}
+                  selectedSummarizerModel={configData?.config?.models?.perQualityRollingSummarizers?.[quality] || ''}
                   onMainModelSelect={(modelId) => handleMainModelChange.mutate(modelId)}
                   onSummarizerModelSelect={(summarizerId) => handleSummarizerModelChange.mutate(summarizerId)}
                   onModelDownload={(modelId) => handleDownloadModel.mutate(modelId)}

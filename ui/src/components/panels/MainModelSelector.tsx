@@ -102,13 +102,9 @@ export function MainModelSelector({
   };
 
   const mainOptions = preset?.mainOptions || [];
-
-  // For quality presets, we need to determine available summarizer options
-  // For now, let's assume summarizer options are the same as main options but smaller models
-  const allSummarizerOptions = mainOptions.filter((modelId: string) => {
-    const modelName = modelId.toLowerCase();
-    return modelName.includes('1.5b') || modelName.includes('0.5b') || modelName.includes('3b') || modelName.includes('7b');
-  }).slice(0, 5); // Limit to 5 options
+  
+  // Use actual rollingSummarizerOptions from preset instead of filtering mainOptions
+  const allSummarizerOptions = preset?.rollingSummarizerOptions || [];
 
   if (!mainOptions.length) {
     return (
