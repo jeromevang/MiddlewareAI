@@ -99,13 +99,44 @@ async function summarizeChunk(text) {
 }
 
 /**
+ * Get the rolling summarizer model based on active preset
+ * Priority: perQualityRollingSummarizers[activePreset] > config.rollingSummarization
+ */
+function getRollingSummarizerForPreset() {
+    const { getConfig } = require('../config.js');
+    const config = getConfig();
+    const activePreset = config.models?.activePreset;
+    
+    // Try to get preset-specific rolling summarizer
+    if (activePreset && activePreset !== 'custom') {
+        const presetSummarizer = config.models?.perQualityRollingSummarizers?.[activePreset];
+        if (presetSummarizer) {
+            console.log(`[Rolling Summary] Using preset '${activePreset}' summarizer: ${presetSummarizer}`);
+            // Return config object with the preset summarizer
+            const baseConfig = getModelConfig('rollingSummarization');
+            return { ...baseConfig, identifier: presetSummarizer, model_name: presetSummarizer };
+        }
+    } else if (activePreset === 'custom') {
+        const customSummarizer = config.customPreset?.rollingSummarizer;
+        if (customSummarizer) {
+            console.log(`[Rolling Summary] Using custom preset summarizer: ${customSummarizer}`);
+            const baseConfig = getModelConfig('rollingSummarization');
+            return { ...baseConfig, identifier: customSummarizer, model_name: customSummarizer };
+        }
+    }
+    
+    // Fall back to default config
+    return getModelConfig('rollingSummarization');
+}
+
+/**
  * Summarize conversation history for rolling memory.
  * Uses a model optimized for context retention and dialogue understanding.
  */
 async function summarizeConversation(text) {
     const requestId = generateRequestId();
     let retries = MAX_RETRIES;
-    const rollingModel = getModelConfig('rollingSummarization');
+    const rollingModel = getRollingSummarizerForPreset();
     
     // Use model's configured context length, default to 4096
     const modelContext = rollingModel.context_length || 4096;
@@ -196,19 +227,50 @@ async function cloudCompletion({ prompt, systemPrompt = null, temperature = 0.2 
     return response.data;
 }
 
-async function generateCompletion({ prompt, systemPrompt = null, temperature = 0.2 }) {
+/**
+ * Get the main model based on active preset
+ * Priority: perQualityMainModels[activePreset] > config.main
+ */
+function getMainModelForPreset() {
+    const { getConfig } = require('../config.js');
+    const config = getConfig();
+    const activePreset = config.models?.activePreset;
+    
+    // Try to get preset-specific main model
+    if (activePreset && activePreset !== 'custom') {
+        const presetMain = config.models?.perQualityMainModels?.[activePreset];
+        if (presetMain) {
+            console.log(`[Main Model] Using preset '${activePreset}' model: ${presetMain}`);
+            const baseConfig = getModelConfig('main');
+            return { ...baseConfig, identifier: presetMain, model_name: presetMain };
+        }
+    } else if (activePreset === 'custom') {
+        const customMain = config.customPreset?.main;
+        if (customMain) {
+            console.log(`[Main Model] Using custom preset model: ${customMain}`);
+            const baseConfig = getModelConfig('main');
+            return { ...baseConfig, identifier: customMain, model_name: customMain };
+        }
+    }
+    
+    // Fall back to default config
+    return getModelConfig('main');
+}
+
+async function generateCompletion({ prompt, systemPrompt = null, temperature = 0.2, model = null }) {
     if (isCloudMode()) {
         return cloudCompletion({ prompt, systemPrompt, temperature });
     }
 
     const requestId = generateRequestId();
-    const mainModel = getModelConfig('main');
+    // Use provided model or get from preset
+    const mainModel = model ? { identifier: model } : getMainModelForPreset();
     let retries = MAX_RETRIES;
 
     while (retries > 0) {
         try {
             await ensureModelLoaded(mainModel.identifier);
-            console.log(`[LM Studio Request] ${requestId} - Generating completion...`);
+            console.log(`[LM Studio Request] ${requestId} - Generating completion with ${mainModel.identifier}...`);
 
             const messages = [];
             if (systemPrompt) {
@@ -381,7 +443,8 @@ async function proxyChatCompletion(payload, resStream = null) {
     }
 
     const requestId = generateRequestId();
-    const mainModel = getModelConfig('main');
+    // Use preset-aware model resolution as fallback
+    const mainModel = getMainModelForPreset();
     const body = {
         model: payload.model || mainModel.identifier,
         messages: payload.messages || [],

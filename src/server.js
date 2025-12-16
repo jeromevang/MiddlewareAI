@@ -2043,6 +2043,26 @@ app.post('/lmstudio/models/load-preset/:preset', async (req, res) => {
             // Don't fail the request for config update issues
         }
 
+        // Sync lastActiveModel to match the new preset's main model
+        // This ensures consistency between preset selection and active model tracking
+        try {
+            const config = getConfig();
+            let newMainModel = null;
+            
+            if (preset === 'custom') {
+                newMainModel = config.customPreset?.main;
+            } else {
+                newMainModel = config.models?.perQualityMainModels?.[preset];
+            }
+            
+            if (newMainModel) {
+                setActiveModel(newMainModel);
+                appendLog(`Synced lastActiveModel to preset main: ${newMainModel}`, 'info');
+            }
+        } catch (syncError) {
+            console.warn(`[API] Failed to sync lastActiveModel: ${syncError.message}`);
+        }
+
         res.json({
             status: 'ok',
             message: `Preset '${preset}' models loaded successfully`,
