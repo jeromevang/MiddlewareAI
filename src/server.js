@@ -6183,12 +6183,228 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         
         if (stream) {
             const lmStarted = Date.now();
+            
+            // =========================
+            // Streaming with Tool Execution Loop
+            // =========================
+            // When tools are enabled, we need to handle tool calls internally.
+            // We use non-streaming internally to detect tool_calls, execute them,
+            // and only stream the final response back to the client.
+            
+            if (hasToolCalls) {
+                console.log('[Tools] Streaming request with tools - using internal tool loop');
+                
+                // Prepare SSE headers first
+                res.setHeader('Content-Type', 'text/event-stream');
+                res.setHeader('Cache-Control', 'no-cache');
+                res.setHeader('Connection', 'keep-alive');
+                if (!res.writableEnded) {
+                    res.write(`data: ${JSON.stringify({ type: 'session', sessionId })}\n\n`);
+                }
+                
+                const MAX_TOOL_ITERATIONS = 10;
+                let currentMessages = [...enhancedMessages];
+                let iteration = 0;
+                let finalContent = '';
+                let toolIterations = 0;
+                
+                try {
+                    while (iteration < MAX_TOOL_ITERATIONS) {
+                        iteration++;
+                        console.log(`[Tools] Streaming tool loop iteration ${iteration}`);
+                        
+                        // Use non-streaming to detect tool_calls
+                        const loopPayload = {
+                            model: modelToUse,
+                            messages: currentMessages,
+                            temperature,
+                            stream: false,
+                            tools: toolsToUse,
+                            tool_choice: iteration === 1 ? (toolChoiceToUse || 'auto') : 'auto',
+                            ...rest,
+                        };
+                        
+                        const loopResponse = await proxyChatCompletion(loopPayload, null);
+                        const assistantMessage = loopResponse?.choices?.[0]?.message;
+                        
+                        if (!assistantMessage) {
+                            console.error('[Tools] No assistant message in response');
+                            break;
+                        }
+                        
+                        const toolCalls = assistantMessage.tool_calls || [];
+                        
+                        if (toolCalls.length === 0) {
+                            // No tool calls - we have the final response
+                            console.log(`[Tools] Final streaming response after ${iteration} iteration(s)`);
+                            finalContent = assistantMessage.content || '';
+                            toolIterations = iteration;
+                            break;
+                        }
+                        
+                        // Check which are middleware tools
+                        const middlewareToolCalls = toolCalls.filter(tc => isMiddlewareTool(tc.function?.name));
+                        const externalToolCalls = toolCalls.filter(tc => !isMiddlewareTool(tc.function?.name));
+                        
+                        console.log(`[Tools] LLM called ${toolCalls.length} tools: ${middlewareToolCalls.length} middleware, ${externalToolCalls.length} external`);
+                        
+                        // If all external, we can't help - return what we have
+                        if (middlewareToolCalls.length === 0 && externalToolCalls.length > 0) {
+                            console.log('[Tools] All tool calls are external - returning partial response');
+                            finalContent = assistantMessage.content || 'I tried to use tools that are not available. Please try a different approach.';
+                            toolIterations = iteration;
+                            break;
+                        }
+                        
+                        // Add assistant message with tool_calls
+                        currentMessages.push({
+                            role: 'assistant',
+                            content: assistantMessage.content || null,
+                            tool_calls: toolCalls
+                        });
+                        
+                        // Execute middleware tools
+                        for (const toolCall of middlewareToolCalls) {
+                            const toolName = toolCall.function?.name;
+                            let args = {};
+                            try {
+                                args = JSON.parse(toolCall.function?.arguments || '{}');
+                            } catch (parseErr) {
+                                console.error(`[Tools] Failed to parse arguments for ${toolName}:`, parseErr.message);
+                            }
+                            
+                            console.log(`[Tools] Executing middleware tool: ${toolName}`);
+                            const result = await executeMiddlewareTool(toolName, args);
+                            
+                            currentMessages.push({
+                                role: 'tool',
+                                tool_call_id: toolCall.id,
+                                content: JSON.stringify(result.success ? result.result : { error: result.error })
+                            });
+                        }
+                        
+                        // Handle external tool calls with error message
+                        for (const toolCall of externalToolCalls) {
+                            const toolName = toolCall.function?.name;
+                            currentMessages.push({
+                                role: 'tool',
+                                tool_call_id: toolCall.id,
+                                content: JSON.stringify({ 
+                                    error: `Tool '${toolName}' is a client-side tool and cannot be executed by the middleware.` 
+                                })
+                            });
+                        }
+                    }
+                    
+                    if (!finalContent && iteration >= MAX_TOOL_ITERATIONS) {
+                        finalContent = 'Tool execution exceeded maximum iterations.';
+                    }
+                    
+                    finalContent = sanitizeAssistantText(finalContent);
+                    
+                    // Now stream the final content as SSE
+                    // Simulate streaming by chunking the response
+                    const chunkSize = 20; // Characters per chunk
+                    for (let i = 0; i < finalContent.length; i += chunkSize) {
+                        const chunk = finalContent.slice(i, i + chunkSize);
+                        if (!res.writableEnded) {
+                            res.write(`data: ${JSON.stringify({
+                                id: `chatcmpl-${Date.now()}`,
+                                object: 'chat.completion.chunk',
+                                created: Math.floor(Date.now() / 1000),
+                                model: modelToUse,
+                                choices: [{
+                                    index: 0,
+                                    delta: { content: chunk },
+                                    finish_reason: null
+                                }]
+                            })}\n\n`);
+                        }
+                    }
+                    
+                    // Send final chunk
+                    if (!res.writableEnded) {
+                        res.write(`data: ${JSON.stringify({
+                            id: `chatcmpl-${Date.now()}`,
+                            object: 'chat.completion.chunk',
+                            created: Math.floor(Date.now() / 1000),
+                            model: modelToUse,
+                            choices: [{
+                                index: 0,
+                                delta: {},
+                                finish_reason: 'stop'
+                            }],
+                            tool_iterations: toolIterations
+                        })}\n\n`);
+                        res.write('data: [DONE]\n\n');
+                        res.end();
+                    }
+                    
+                    const lmDuration = Date.now() - lmStarted;
+                    const duration = Date.now() - started;
+                    console.log(`[RESP] ${pathLabel} STREAM+TOOLS 200 in ${duration}ms (LM ${lmDuration}ms) rag=${ragResults.length} iterations=${toolIterations}`);
+                    
+                    const persistedTurn = await persistConversationTurn({
+                        sessionId,
+                        userPrompt,
+                        assistantResponse: finalContent,
+                        rawContextText,
+                        composedContextText: composedPrompt,
+                        budgetInfo,
+                        ragResults,
+                        llmPayloadKind: 'chat',
+                        llmPayload: { model: modelToUse, messages: currentMessages, tools: toolsToUse },
+                    });
+                    void pushSessionUpdate({ sessionId, turn: persistedTurn });
+                    
+                    if (summaryActive) {
+                        recomputeRollingSummary(sessionId, summaryKeepRecentTurns).catch(err => 
+                            console.error('[Server] Failed to update rolling summary:', err)
+                        );
+                    }
+                    
+                    updateMetrics(duration, budgetInfo, true);
+                    recordRequest({
+                        ts: Date.now(),
+                        path: pathLabel,
+                        duration,
+                        ragHits: ragResults.length,
+                        budget: budgetInfo,
+                        status: 200,
+                        sessionId,
+                        contextMode: appliedContextMode || sessionMode
+                    });
+                    return;
+                    
+                } catch (toolErr) {
+                    console.error('[Server] Streaming tool loop failed:', toolErr);
+                    if (!res.writableEnded) {
+                        res.write(`data: ${JSON.stringify({ error: toolErr?.message || 'tool execution failed' })}\n\n`);
+                        res.write('data: [DONE]\n\n');
+                        res.end();
+                    }
+                    metrics.totalErrors += 1;
+                    recordRequest({
+                        ts: Date.now(),
+                        path: pathLabel,
+                        duration: Date.now() - started,
+                        ragHits: ragResults.length,
+                        budget: budgetInfo,
+                        status: 500,
+                        error: toolErr?.message || 'tool execution failed',
+                        sessionId,
+                        contextMode: budgetInfo?.mode || null
+                    });
+                    return;
+                }
+            }
+            
+            // Standard streaming (no tools)
             const chatRequestPayload = {
                 model: modelToUse,
                 messages: enhancedMessages,
                 temperature,
                 stream: true,
-                ...(hasToolCalls ? { tools: toolsToUse, tool_choice: toolChoiceToUse || 'auto' } : {}),
                 ...rest,
             };
             

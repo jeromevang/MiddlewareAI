@@ -333,6 +333,12 @@ When the LLM calls a middleware tool, the middleware:
 
 This loop runs for up to 10 iterations to prevent infinite loops.
 
+**Works for both streaming and non-streaming requests:**
+- **Non-streaming**: Tool loop runs, final response returned as JSON
+- **Streaming**: Tool loop runs internally (non-streaming), final response is chunked and streamed as SSE
+
+The response includes `tool_iterations` to indicate how many loop iterations were needed.
+
 ### Available Tools (17 total)
 
 #### Code Intelligence
