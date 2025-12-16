@@ -2111,7 +2111,7 @@ app.post('/presets/custom', async (req, res) => {
 });
 
 /**
- * POST /presets/quality-model - Save selected model for a quality preset
+ * POST /presets/quality-model - Save selected model for a quality preset and load it
  */
 app.post('/presets/quality-model', async (req, res) => {
     console.log('[API] /presets/quality-model called with:', req.body);
@@ -2135,16 +2135,31 @@ app.post('/presets/quality-model', async (req, res) => {
             return config;
         });
 
-        appendLog(`Quality preset model updated: ${quality}=${modelId}`, 'info');
-        res.json({ status: 'ok', quality, modelId });
+        // Now load the preset to ensure the selected model is actually loaded
+        console.log(`[API] Loading ${quality} preset with new main model: ${modelId}`);
+        const { ensurePresetModelsLoaded } = require('./lmstudio/model_manager.js');
+
+        const loadResult = await ensurePresetModelsLoaded(quality);
+
+        appendLog(`Quality preset updated and loaded: ${quality}=${modelId} (${loadResult.loaded.length} loaded, ${loadResult.kept.length} kept)`, 'info');
+
+        res.json({
+            status: 'ok',
+            quality,
+            modelId,
+            loaded: loadResult.loaded,
+            kept: loadResult.kept,
+            unloaded: loadResult.unloaded,
+            failed: loadResult.failed
+        });
     } catch (error) {
-        console.error('[API] Failed to save quality preset model:', error.message);
-        res.status(500).json({ error: 'Failed to save quality preset model', details: error.message });
+        console.error('[API] Failed to save and load quality preset model:', error.message);
+        res.status(500).json({ error: 'Failed to save and load quality preset model', details: error.message });
     }
 });
 
 /**
- * POST /presets/quality-summarizer - Save selected summarizer model for a quality preset
+ * POST /presets/quality-summarizer - Save selected summarizer model for a quality preset and load it
  */
 app.post('/presets/quality-summarizer', async (req, res) => {
     console.log('[API] /presets/quality-summarizer called with:', req.body);
@@ -2168,11 +2183,26 @@ app.post('/presets/quality-summarizer', async (req, res) => {
             return config;
         });
 
-        appendLog(`Quality preset summarizer updated: ${quality}=${summarizerId}`, 'info');
-        res.json({ status: 'ok', quality, summarizerId });
+        // Now load the preset to ensure the selected summarizer is actually loaded
+        console.log(`[API] Loading ${quality} preset with new rolling summarizer: ${summarizerId}`);
+        const { ensurePresetModelsLoaded } = require('./lmstudio/model_manager.js');
+
+        const loadResult = await ensurePresetModelsLoaded(quality);
+
+        appendLog(`Quality preset summarizer updated and loaded: ${quality}=${summarizerId} (${loadResult.loaded.length} loaded, ${loadResult.kept.length} kept)`, 'info');
+
+        res.json({
+            status: 'ok',
+            quality,
+            summarizerId,
+            loaded: loadResult.loaded,
+            kept: loadResult.kept,
+            unloaded: loadResult.unloaded,
+            failed: loadResult.failed
+        });
     } catch (error) {
-        console.error('[API] Failed to save quality preset summarizer:', error.message);
-        res.status(500).json({ error: 'Failed to save quality preset summarizer', details: error.message });
+        console.error('[API] Failed to save and load quality preset summarizer:', error.message);
+        res.status(500).json({ error: 'Failed to save and load quality preset summarizer', details: error.message });
     }
 });
 
