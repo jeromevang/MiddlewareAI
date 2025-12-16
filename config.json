@@ -25,7 +25,8 @@
     "dynamicContextScaling": true,
     "filterBelowMinContext": true,
     "autoLoadModels": true,
-    "autoLoadDelayMs": 2000
+    "autoLoadDelayMs": 2000,
+    "autoBootstrapOnStartup": true
   },
   "telemetry": {
     "enabled": false,
@@ -38,7 +39,7 @@
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },
   "models": {
-    "activePreset": "medium",
+    "activePreset": "high",
     "main": {
       "model_name": "qwen/qwen3-4b-2507",
       "identifier": "qwen/qwen3-4b-2507",

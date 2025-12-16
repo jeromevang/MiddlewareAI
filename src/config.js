@@ -241,7 +241,10 @@ function getSystemSettings() {
         maxContextCap: 131072,
         vramHeadroomGB: 1.5,
         dynamicContextScaling: true,
-        filterBelowMinContext: true
+        filterBelowMinContext: true,
+        autoBootstrapOnStartup: true,
+        autoLoadModels: true,
+        autoLoadDelayMs: 2000
     };
     return { ...defaults, ...(config.system || {}) };
 }

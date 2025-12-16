@@ -30,8 +30,22 @@ let bootstrapState = {
     message: '',
     startedAt: null,
     completedAt: null,
-    error: null
+    error: null,
+    currentModel: null,
+    modelsAnalyzed: 0,
+    totalModels: 0
 };
+
+// Callback for broadcasting status updates (set by server.js)
+let statusBroadcastCallback = null;
+
+/**
+ * Set the callback function for broadcasting status updates via WebSocket
+ * @param {Function} callback - Function to call with status updates
+ */
+function setStatusBroadcastCallback(callback) {
+    statusBroadcastCallback = callback;
+}
 
 /**
  * Generate capability tags from analysis
@@ -55,11 +69,20 @@ function getBootstrapStatus() {
 }
 
 /**
- * Update bootstrap status
+ * Update bootstrap status and broadcast to WebSocket clients
  */
 function updateBootstrapStatus(updates) {
     bootstrapState = { ...bootstrapState, ...updates };
     console.log(`[Bootstrap] ${updates.message || bootstrapState.message}`);
+    
+    // Broadcast to WebSocket clients if callback is set
+    if (statusBroadcastCallback) {
+        try {
+            statusBroadcastCallback(bootstrapState);
+        } catch (err) {
+            console.warn('[Bootstrap] Failed to broadcast status:', err.message);
+        }
+    }
 }
 
 /**
@@ -535,7 +558,12 @@ async function runBootstrap(modelDbService) {
         }
         
         // Step 3: Analyze each model
-        updateBootstrapStatus({ message: 'Analyzing models...', progress: 30 });
+        updateBootstrapStatus({ 
+            message: 'Analyzing models...', 
+            progress: 30,
+            totalModels: downloadedModels.length,
+            modelsAnalyzed: 0
+        });
         const analyzedModels = [];
         
         for (let i = 0; i < downloadedModels.length; i++) {
@@ -543,7 +571,9 @@ async function runBootstrap(modelDbService) {
             const progress = 30 + Math.round((i / downloadedModels.length) * 40);
             updateBootstrapStatus({ 
                 message: `Analyzing: ${model.name || model.id}...`, 
-                progress 
+                progress,
+                currentModel: model.name || model.id,
+                modelsAnalyzed: i
             });
             
             let analysis;
@@ -602,6 +632,7 @@ async function runBootstrap(modelDbService) {
 module.exports = {
     runBootstrap,
     getBootstrapStatus,
+    setStatusBroadcastCallback,
     getDownloadedModels,
     analyzeModelHeuristic,
     analyzeModelWithLLM

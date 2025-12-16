@@ -11,6 +11,9 @@ interface SystemSettings {
   vramHeadroomGB: number;
   dynamicContextScaling: boolean;
   filterBelowMinContext: boolean;
+  autoBootstrapOnStartup: boolean;
+  autoLoadModels: boolean;
+  autoLoadDelayMs: number;
 }
 
 interface SettingsResponse {
@@ -176,6 +179,9 @@ export function SettingsWorkspace() {
       vramHeadroomGB: 1.5,
       dynamicContextScaling: true,
       filterBelowMinContext: true,
+      autoBootstrapOnStartup: true,
+      autoLoadModels: true,
+      autoLoadDelayMs: 2000,
     });
     setHasChanges(true);
   };
@@ -312,6 +318,44 @@ export function SettingsWorkspace() {
               step={8192}
               suffix="tokens"
               description="Upper limit even with dynamic scaling"
+            />
+          </div>
+        </section>
+
+        {/* Startup Behavior */}
+        <section className="bg-white/5 rounded-xl border border-white/10 p-6 space-y-6">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">🚀</span>
+            <div>
+              <h2 className="text-lg font-semibold text-white">Startup Behavior</h2>
+              <p className="text-sm text-white/50">Configure how the app initializes at startup</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <ToggleInput
+              label="Auto-Bootstrap on Startup"
+              checked={localSettings.autoBootstrapOnStartup}
+              onChange={(v) => updateSetting("autoBootstrapOnStartup", v)}
+              description="Automatically analyze models and build presets when the app starts (shows loading screen)"
+            />
+
+            <ToggleInput
+              label="Auto-Load Models"
+              checked={localSettings.autoLoadModels}
+              onChange={(v) => updateSetting("autoLoadModels", v)}
+              description="Automatically load the active preset's models after bootstrap completes"
+            />
+
+            <NumberInput
+              label="Auto-Load Delay"
+              value={localSettings.autoLoadDelayMs}
+              onChange={(v) => updateSetting("autoLoadDelayMs", v)}
+              min={500}
+              max={10000}
+              step={500}
+              suffix="ms"
+              description="Delay before auto-loading models (allows LM Studio to stabilize)"
             />
           </div>
         </section>

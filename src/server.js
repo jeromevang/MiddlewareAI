@@ -75,7 +75,7 @@ const {
     getModelAvailability,
     getActiveDownloads,
 } = require('./model_db_service.js');
-const { runBootstrap, getBootstrapStatus } = require('./model_bootstrap.js');
+const { runBootstrap, getBootstrapStatus, setStatusBroadcastCallback } = require('./model_bootstrap.js');
 
 // Global error logging to avoid silent crashes (opt-in via debug logger)
 process.on('unhandledRejection', (err) => {
@@ -1056,6 +1056,17 @@ function broadcastWsMessage(message) {
     }
 }
 
+/**
+ * Broadcast bootstrap status to all WebSocket clients
+ * This is called by model_bootstrap.js when status changes
+ */
+function broadcastBootstrapStatus(status) {
+    broadcastWsMessage({ 
+        type: 'bootstrap-status', 
+        status: status 
+    });
+}
+
 async function pushSessionUpdate({ sessionId, turn }) {
     if (!sessionId || !wss || wss.clients.size === 0) {
         return;
@@ -1475,7 +1486,7 @@ app.patch('/api/system-settings', async (req, res) => {
         const updates = req.body || {};
         
         // Validate numeric fields
-        const numericFields = ['minMainContextTokens', 'summarizerContextTokens', 'maxContextCap', 'vramHeadroomGB'];
+        const numericFields = ['minMainContextTokens', 'summarizerContextTokens', 'maxContextCap', 'vramHeadroomGB', 'autoLoadDelayMs'];
         for (const field of numericFields) {
             if (updates[field] !== undefined) {
                 const val = Number(updates[field]);
@@ -1487,7 +1498,7 @@ app.patch('/api/system-settings', async (req, res) => {
         }
         
         // Validate boolean fields
-        const boolFields = ['dynamicContextScaling', 'filterBelowMinContext'];
+        const boolFields = ['dynamicContextScaling', 'filterBelowMinContext', 'autoBootstrapOnStartup', 'autoLoadModels'];
         for (const field of boolFields) {
             if (updates[field] !== undefined && typeof updates[field] !== 'boolean') {
                 return res.status(400).json({ error: `Invalid ${field}: must be boolean` });
@@ -1839,7 +1850,7 @@ app.post('/lmstudio/models/load-preset/:preset', async (req, res) => {
         }
 
         let result;
-        
+
         if (preset === 'custom') {
             // Load models from custom preset config
             const config = getConfig();
@@ -1913,9 +1924,21 @@ app.post('/lmstudio/models/load-preset/:preset', async (req, res) => {
             result = await ensurePresetModelsLoaded(preset);
             appendLog(`Preset '${preset}' models loaded via API: loaded=${result.loaded.length}, kept=${result.kept.length}, unloaded=${result.unloaded.length}`, 'info');
         }
-        
-        res.json({ 
-            status: 'ok', 
+
+        // Update the active preset in config to persist the selection
+        try {
+            updateConfigFile(config => {
+                if (!config.models) config.models = {};
+                config.models.activePreset = preset;
+                return config;
+            });
+        } catch (configError) {
+            appendLog(`Failed to update active preset: ${configError.message}`, 'error');
+            // Don't fail the request for config update issues
+        }
+
+        res.json({
+            status: 'ok',
             message: `Preset '${preset}' models loaded successfully`,
             loaded: result.loaded,
             kept: result.kept,
@@ -4408,17 +4431,27 @@ async function start() {
         }
 
         // Run model bootstrap (analyzes models and populates presets)
-        console.log('[Server] Running model bootstrap...');
-        try {
-            const modelDbService = require('./model_db_service.js');
-            const bootstrapResult = await runBootstrap(modelDbService);
-            if (bootstrapResult.success) {
-                console.log(`[Server] Bootstrap complete: ${bootstrapResult.message}`);
-            } else {
-                console.warn(`[Server] Bootstrap incomplete: ${bootstrapResult.message}`);
+        // Set up WebSocket broadcast callback for bootstrap status updates
+        setStatusBroadcastCallback(broadcastBootstrapStatus);
+        
+        const systemConfig = getConfig().system || {};
+        const autoBootstrapOnStartup = systemConfig.autoBootstrapOnStartup !== false; // Default to true
+        
+        if (autoBootstrapOnStartup) {
+            console.log('[Server] Running model bootstrap...');
+            try {
+                const modelDbService = require('./model_db_service.js');
+                const bootstrapResult = await runBootstrap(modelDbService);
+                if (bootstrapResult.success) {
+                    console.log(`[Server] Bootstrap complete: ${bootstrapResult.message}`);
+                } else {
+                    console.warn(`[Server] Bootstrap incomplete: ${bootstrapResult.message}`);
+                }
+            } catch (error) {
+                console.warn('[Server] Model bootstrap failed:', error.message);
             }
-        } catch (error) {
-            console.warn('[Server] Model bootstrap failed:', error.message);
+        } else {
+            console.log('[Server] Auto-bootstrap disabled (system.autoBootstrapOnStartup = false)');
         }
 
         // Initialize indexer status from persisted database
@@ -4431,7 +4464,7 @@ async function start() {
         }
 
         // Auto-load active preset models (in background, non-blocking)
-        const systemConfig = (getConfig().system || {});
+        // Note: Reusing systemConfig from above (already defined)
         if (systemConfig.autoLoadModels !== false) { // Default to true
             const activePreset = getConfig().models?.activePreset || 'medium';
             const delayMs = systemConfig.autoLoadDelayMs || 2000;

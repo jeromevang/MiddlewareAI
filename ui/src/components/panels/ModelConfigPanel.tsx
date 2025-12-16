@@ -356,7 +356,6 @@ export default function ModelConfigPanel() {
               <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
                 {(['high', 'medium', 'low', 'custom'] as const).map((key) => {
                   const preset = presets[key];
-                  const isCustom = key === 'custom';
 
                   const presetMeta = {
                     high: { name: preset?.name || 'High Quality', description: preset?.description || 'Loading...', color: 'cyan' },
@@ -382,13 +381,14 @@ export default function ModelConfigPanel() {
                       }`}
                       onClick={() => {
                         setQuality(key);
-                        if (!isCustom && key !== quality) {
-                          // Update RAG tier to match the preset quality
-                          const ragTierMap = { high: 'high', medium: 'medium', low: 'low' };
-                          if (ragTierMap[key as keyof typeof ragTierMap]) {
-                            changeRagTierMutation.mutate(ragTierMap[key as keyof typeof ragTierMap]);
-                          }
-                        }
+                        // Temporarily disabled automatic RAG tier changes to prevent model loading issues
+                        // if (!isCustom && key !== quality) {
+                        //   // Update RAG tier to match the preset quality
+                        //   const ragTierMap = { high: 'high', medium: 'medium', low: 'low' };
+                        //   if (ragTierMap[key as keyof typeof ragTierMap]) {
+                        //     changeRagTierMutation.mutate(ragTierMap[key as keyof typeof ragTierMap]);
+                        //   }
+                        // }
                       }}
                     >
                       <h3 className="font-semibold text-white mb-1">{meta.name}</h3>

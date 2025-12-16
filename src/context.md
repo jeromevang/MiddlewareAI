@@ -207,9 +207,113 @@ Search and download models from Hugging Face:
   - Stops active indexing
 - **Error Boundaries**: Uncaught exception handling with graceful shutdown
 - **Connection Management**: Proper cleanup of resources
+- **Operation Queue**: p-queue based model operations with rate limiting (500ms intervals)
 
 ### ⚙️ Configuration Management
 - **LM Studio Configurable**: URL, timeout, retries configurable via config.json
 - **Logging Configurable**: Level, file sizes, retention periods
 - **Auto-loading Configurable**: Enable/disable model auto-loading on startup
 - **Validation**: Runtime config validation with helpful error messages
+
+## Startup & Bootstrap System
+
+### Blocking Startup Loading Screen
+When the application starts, a blocking loading screen is displayed showing:
+- Bootstrap progress bar with percentage
+- Current phase (Connecting, Discovering, Analyzing, Building, Loading, Complete)
+- Current model being analyzed
+- Model count progress (X / Y models)
+
+The loading screen is controlled by:
+- `system.autoBootstrapOnStartup` setting (default: true)
+- WebSocket broadcasting from `model_bootstrap.js`
+- React `BootstrapLoadingScreen` component with framer-motion animations
+
+### LM Studio Connection Retry
+If LM Studio is not running at startup:
+- Shows "Waiting for LM Studio..." with retry count
+- Automatically retries connection every 3 seconds
+- Once connected, proceeds with bootstrap
+
+### Bootstrap Phases
+1. **Connecting** (0-5%): Check LM Studio connection
+2. **Discovering** (5-30%): Scan downloaded models via `lms ls`
+3. **Analyzing** (30-70%): Analyze each model for capabilities
+4. **Building** (70-80%): Update presets with analyzed models
+5. **Loading** (80-95%): Load active preset models
+6. **Complete** (100%): Ready to use
+
+### WebSocket Bootstrap Status
+The server broadcasts bootstrap status via WebSocket:
+```javascript
+broadcastWsMessage({ 
+  type: 'bootstrap-status', 
+  status: {
+    phase: 'analyzing',
+    progress: 45,
+    message: 'Analyzing: qwen2.5-7b-instruct...',
+    currentModel: 'qwen2.5-7b-instruct',
+    modelsAnalyzed: 3,
+    totalModels: 10
+  }
+});
+```
+
+## Model Locking (Preset Lock)
+
+### Purpose
+Lock models to prevent them from being removed from presets during bootstrap re-analysis.
+
+### Lock Types
+| Type | Stored In | Purpose |
+|------|-----------|---------|
+| `preset` | `data/model_locks.json` | Prevents removal from preset lists |
+| `loaded` | (Future) | Prevents unloading from LM Studio |
+
+### UI Integration
+- **Lock buttons on model cards**: Each model in MainModelSelector shows a lock/unlock icon
+- **Dedicated Models tab**: `/models` route with ModelManagementPanel for bulk lock management
+- **Visual indicators**: 
+  - Amber lock icon when locked
+  - "Locked" badge in model details
+  - Amber border on locked model cards
+
+### API Endpoints
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/models/locks` | GET | Get all lock states |
+| `/models/lock/:id` | POST | Lock a model |
+| `/models/lock/:id` | DELETE | Unlock a model |
+| `/models/lock/:id/toggle` | POST | Toggle lock state |
+
+### Bootstrap Respect for Locks
+When `runBootstrap()` builds presets, it:
+1. Gets list of preset-locked models via `getPresetLockedModels()`
+2. Never removes locked models from preset lists
+3. Adds new models alongside locked ones
+
+## System Settings
+
+### Startup Behavior Settings
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `autoBootstrapOnStartup` | true | Run model discovery & analysis at startup |
+| `autoLoadModels` | true | Auto-load active preset after bootstrap |
+| `autoLoadDelayMs` | 2000 | Delay before auto-loading (ms) |
+
+### Context Settings
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `minMainContextTokens` | 16384 | Minimum context for main models |
+| `summarizerContextTokens` | 4096 | Fixed context for summarizers |
+| `maxContextCap` | 131072 | Maximum context cap |
+
+### Resource Settings
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `vramHeadroomGB` | 1.5 | Reserved VRAM for OS |
+| `dynamicContextScaling` | true | Scale context with VRAM |
+| `filterBelowMinContext` | true | Exclude small-context models |
+
+### Settings UI
+Access via `/settings` route or "System Settings" quick link on dashboard.

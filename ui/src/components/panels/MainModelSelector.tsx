@@ -3,10 +3,10 @@
 // =============================================================================
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Check, Download, Loader2, HardDrive, Info, Star } from "lucide-react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Check, Download, Loader2, HardDrive, Info, Star, Lock, Unlock } from "lucide-react";
 import { getModelDisplayName } from './model-config/constants';
-import { getModelStatus } from "../../lib/api";
+import { getModelStatus, getModelLocks, toggleModelLock } from "../../lib/api";
 
 interface MainModelSelectorProps {
   quality: 'high' | 'medium' | 'low';
@@ -28,6 +28,7 @@ export function MainModelSelector({
   onModelDownload,
 }: MainModelSelectorProps) {
   const [showDetails, setShowDetails] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   // Fetch model availability status
   const { data: modelStatusData } = useQuery({
@@ -36,8 +37,30 @@ export function MainModelSelector({
     staleTime: 2000,
   });
 
+  // Fetch model lock states
+  const { data: locksData } = useQuery({
+    queryKey: ['modelLocks'],
+    queryFn: getModelLocks,
+    staleTime: 5000,
+  });
+
+  // Mutation for toggling lock state
+  const toggleLockMutation = useMutation({
+    mutationFn: (modelId: string) => toggleModelLock(modelId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['modelLocks'] });
+    },
+  });
+
   const modelAvailability: Record<string, any> = modelStatusData?.availability || {};
   const activeDownloads: Record<string, any> = modelStatusData?.activeDownloads || {};
+  const loadedModels: string[] = modelStatusData?.loadedModels || [];
+  const modelLocks: Record<string, { preset?: boolean; loaded?: boolean }> = locksData?.locks || {};
+
+  // Check if a model is currently loaded in LM Studio
+  const isModelLoaded = (modelId: string): boolean => {
+    return loadedModels.includes(modelId);
+  };
 
   // Check if a model is available
   const isModelAvailable = (modelId: string): boolean => {
@@ -47,6 +70,17 @@ export function MainModelSelector({
   // Check if a model is currently downloading
   const isModelDownloading = (modelId: string): boolean => {
     return modelAvailability[modelId]?.downloading ?? !!activeDownloads[modelId];
+  };
+
+  // Check if a model is locked (preset lock - prevents removal from presets)
+  const isModelLocked = (modelId: string): boolean => {
+    return !!modelLocks[modelId]?.preset;
+  };
+
+  // Handle lock toggle
+  const handleToggleLock = (modelId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    toggleLockMutation.mutate(modelId);
   };
 
   // Get star rating based on model size (simplified)
@@ -115,18 +149,25 @@ export function MainModelSelector({
                 onClick={() => available ? onSelect(modelId) : onModelDownload(modelId)}
               >
                 <div className="flex items-center gap-3">
-                  {/* Status indicator */}
-                  {(() => {
-                    if (isSelected) {
-                      return <Check className="h-4 w-4 text-green-400 flex-shrink-0" />;
-                    } else if (available) {
-                      return <div className="h-4 w-4 flex-shrink-0" />;
-                    } else if (downloading) {
-                      return <Loader2 className="h-4 w-4 text-amber-400 animate-spin flex-shrink-0" />;
-                    } else {
-                      return <Download className="h-4 w-4 text-amber-400 flex-shrink-0" />;
-                    }
-                  })()}
+                  {/* Status indicators */}
+                  <div className="flex flex-col gap-1">
+                    {(() => {
+                      if (isSelected) {
+                        return <Check className="h-4 w-4 text-green-400 flex-shrink-0" />;
+                      } else if (available) {
+                        return <div className="h-4 w-4 flex-shrink-0" />;
+                      } else if (downloading) {
+                        return <Loader2 className="h-4 w-4 text-amber-400 animate-spin flex-shrink-0" />;
+                      } else {
+                        return <Download className="h-4 w-4 text-amber-400 flex-shrink-0" />;
+                      }
+                    })()}
+
+                    {/* Loaded indicator */}
+                    {isModelLoaded(modelId) && (
+                      <div className="h-2 w-2 bg-green-500 rounded-full flex-shrink-0" title="Loaded in LM Studio" />
+                    )}
+                  </div>
 
                   <div className="flex-1">
                     <div className={`text-sm font-medium ${available ? 'text-white' : 'text-white/60'}`}>
@@ -152,6 +193,28 @@ export function MainModelSelector({
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {/* Lock button - prevents removal from presets */}
+                  {available && (
+                    <button
+                      onClick={(e) => handleToggleLock(modelId, e)}
+                      className={`p-1.5 rounded transition-colors ${
+                        isModelLocked(modelId)
+                          ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
+                          : 'bg-white/5 text-white/40 hover:bg-white/10 hover:text-white/60'
+                      }`}
+                      title={isModelLocked(modelId) 
+                        ? "Locked - Won't be removed during re-analysis. Click to unlock." 
+                        : "Click to lock - Prevent removal during re-analysis"
+                      }
+                    >
+                      {isModelLocked(modelId) ? (
+                        <Lock className="h-3.5 w-3.5" />
+                      ) : (
+                        <Unlock className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  )}
+
                   {/* Download button for unavailable models */}
                   {!available && !downloading && (
                     <button
@@ -221,6 +284,8 @@ export function MainModelSelector({
                       <div className="text-white/60">Status:</div>
                       <div className="text-white">
                         {available ? 'Available' : downloading ? 'Downloading...' : 'Not Downloaded'}
+                        {isModelLoaded(modelId) && <span className="ml-2 text-green-400">• Loaded</span>}
+                        {isModelLocked(modelId) && <span className="ml-2 text-amber-400">• Locked</span>}
                       </div>
                     </div>
                   </div>

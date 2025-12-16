@@ -8,7 +8,8 @@ This module handles all interactions with LM Studio, including model loading, un
 | File | Purpose |
 |------|---------|
 | `model_manager.js` | Load/unload models, health checks, preset loading |
-| `model_sync.js` | **NEW** - Sync models from `lms ls --json`, categorize by function/tier |
+| `model_sync.js` | Sync models from `lms ls --json`, categorize by function/tier |
+| `operation_queue.js` | **NEW** - p-queue based rate limiting for model operations |
 | `chat.js` | Chat completions with streaming support |
 | `embeddings.js` | Embedding generation for RAG |
 | `state.js` | Shared state (loaded models, locks, config) |
@@ -80,6 +81,22 @@ The old fuzzy matching system (`normalizeModelIdForMatching`, `tokenOverlapScore
 - **Rate Limiting**: Model loading operations are rate-limited
 - **Error Boundaries**: Model loading failures don't crash the server
 - **Lock Management**: Model locks prevent concurrent operations
+
+### 🔄 Operation Queue (`operation_queue.js`)
+All model operations (load/unload) are queued via p-queue to prevent LM Studio rate limiting (429 errors):
+
+| Queue | Concurrency | Interval | Purpose |
+|-------|-------------|----------|---------|
+| Model Operations | 1 | 500ms | Load/unload models (serialized) |
+| Read Operations | 2 | 100ms | Status checks, model listing |
+
+**Functions:**
+- `queueModelOperation(fn, options)` - Queue a model operation with priority
+- `queuedLoadModel(loadFn, modelId, options)` - Queued model loading
+- `queuedUnloadModel(unloadFn, modelId)` - Queued model unloading
+- `getQueueStats()` - Get queue statistics (size, pending, completed)
+
+The `openModel()` and `unloadModel()` functions in `model_manager.js` automatically use this queue.
   embedder: { gpu: "off", contextLength: "model's native" }
 }
 ```

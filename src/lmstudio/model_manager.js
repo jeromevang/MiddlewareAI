@@ -8,6 +8,7 @@ const { getLMStudioCLIPath } = require('../lmstudio_manager.js');
 const { setMainModelMaxContext } = require('../processing_state.js');
 const { LM_STUDIO_URL, LM_STUDIO_TIMEOUT_MS, MAX_RETRIES, loadedModels, loadingModels, withLMStudioLock, generateRequestId, setLastLoadedSnapshot, getLastLoadedSnapshot } = require('./state.js');
 const { isLoadLocked } = require('../model_lock_service.js');
+const { queueModelOperation, getQueueStats } = require('./operation_queue.js');
 
 /**
  * Normalize a model ID for comparison purposes
@@ -267,7 +268,11 @@ async function waitForModelsLoaded(modelIds, timeoutMs = 30000, intervalMs = 500
     throw new Error(`Models not loaded within ${timeoutMs}ms: ${[...target].join(', ')}`);
 }
 
-async function openModel(modelOrId, options = {}) {
+/**
+ * Internal model loading implementation
+ * Use openModel() for queued, rate-limited loading
+ */
+async function _openModelImpl(modelOrId, options = {}) {
     const { identifier, loadName } = resolveModelNames(modelOrId);
     const modelName = loadName || identifier;
     const requestId = generateRequestId();
@@ -381,7 +386,24 @@ async function openModel(modelOrId, options = {}) {
     }
 }
 
-async function unloadModel(modelOrId, options = {}) {
+/**
+ * Load a model into LM Studio (queued to prevent rate limiting)
+ * @param {string|Object} modelOrId - Model identifier or config object
+ * @param {Object} options - Load options (role, gpu, contextLength)
+ */
+async function openModel(modelOrId, options = {}) {
+    const { identifier } = resolveModelNames(modelOrId);
+    return queueModelOperation(
+        () => _openModelImpl(modelOrId, options),
+        { name: `load:${identifier}`, priority: options.priority || 1 }
+    );
+}
+
+/**
+ * Internal unload implementation
+ * Use unloadModel() for queued, rate-limited unloading
+ */
+async function _unloadModelImpl(modelOrId, options = {}) {
     const { identifier } = resolveModelNames(modelOrId);
     if (!identifier) {
         throw new Error('Model identifier is required for unloading');
@@ -416,6 +438,19 @@ async function unloadModel(modelOrId, options = {}) {
         console.error(`[LM Studio Unload] Failed to unload model ${identifier}:`, error.message);
         throw new Error(`Failed to unload model ${identifier}: ${error.message}`);
     }
+}
+
+/**
+ * Unload a model from LM Studio (queued to prevent rate limiting)
+ * @param {string|Object} modelOrId - Model identifier or config object
+ * @param {Object} options - Unload options (force)
+ */
+async function unloadModel(modelOrId, options = {}) {
+    const { identifier } = resolveModelNames(modelOrId);
+    return queueModelOperation(
+        () => _unloadModelImpl(modelOrId, options),
+        { name: `unload:${identifier}`, priority: 0 }
+    );
 }
 
 async function unloadAllModels() {
@@ -831,6 +866,7 @@ async function ensurePresetModelsLoaded(presetName) {
     console.log(`[LM Studio] Smart unloading: unload ${modelsToUnload.length}, keep ${modelsToKeep.length}, load ${modelsToLoad.length}`);
 
     // Unload models not needed by new preset (respecting locks)
+    console.log(`[LM Studio] Starting unload of ${modelsToUnload.length} models...`);
     for (const modelId of modelsToUnload) {
         // Check if model is locked before attempting to unload
         if (isLoadLocked(modelId)) {
@@ -838,18 +874,24 @@ async function ensurePresetModelsLoaded(presetName) {
             result.kept.push(modelId);
             continue;
         }
-        
+
         try {
             console.log(`[LM Studio] Unloading unused model: ${modelId}`);
             const unloadResult = await unloadModel(modelId);
             if (unloadResult?.locked) {
+                console.log(`[LM Studio] Model unload blocked by lock: ${modelId}`);
                 result.kept.push(modelId);
             } else {
-            result.unloaded.push(modelId);
+                console.log(`[LM Studio] Successfully unloaded: ${modelId}`);
+                result.unloaded.push(modelId);
             }
         } catch (error) {
             console.warn(`[LM Studio] Failed to unload ${modelId}:`, error.message);
+            // Don't add to failed list for unload errors - they might just be rate limited
         }
+
+        // Add small delay to avoid rate limiting
+        await new Promise(resolve => setTimeout(resolve, 200));
     }
 
     // Track kept models
@@ -1041,4 +1083,5 @@ module.exports = {
     ensurePresetModelsLoaded,
     switchMainModel,
     initializeLMStudioWithModels,
+    getQueueStats,
 };
