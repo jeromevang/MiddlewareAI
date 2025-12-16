@@ -90,6 +90,7 @@ process.on('unhandledRejection', (err) => {
 
 // Graceful shutdown handlers
 let serverShutdown = false;
+let httpServer = null;
 
 function gracefulShutdown(signal) {
     if (serverShutdown) return;
