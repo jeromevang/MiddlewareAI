@@ -234,6 +234,37 @@ async function validateConfigConsistency() {
             }
         }
 
+        // 6. Check for blacklisted models in config
+        const { isModelBlacklisted, MODEL_BLACKLIST } = require('./model_bootstrap.js');
+        
+        // Check default rolling summarizer
+        const defaultRollingSummarizer = config.models?.rollingSummarization?.identifier;
+        if (defaultRollingSummarizer) {
+            const check = isModelBlacklisted(defaultRollingSummarizer);
+            if (check.blacklisted) {
+                warnings.push(`Default rolling summarizer "${defaultRollingSummarizer}" is blacklisted: ${check.reason}. Will be replaced with safe fallback.`);
+            }
+        }
+        
+        // Check per-tier summarizers
+        for (const tier of ['high', 'medium', 'low']) {
+            const tierSummarizer = config.models?.perQualityRollingSummarizers?.[tier];
+            if (tierSummarizer) {
+                const check = isModelBlacklisted(tierSummarizer);
+                if (check.blacklisted) {
+                    warnings.push(`Rolling summarizer for ${tier} ("${tierSummarizer}") is blacklisted: ${check.reason}`);
+                    // Auto-fix: Find a non-blacklisted alternative
+                    const alternatives = presets[tier]?.rollingSummarizerOptions || [];
+                    const safeAlt = alternatives.find(m => !isModelBlacklisted(m).blacklisted);
+                    if (safeAlt) {
+                        if (!config.models.perQualityRollingSummarizers) config.models.perQualityRollingSummarizers = {};
+                        config.models.perQualityRollingSummarizers[tier] = safeAlt;
+                        warnings.push(`Auto-fixed ${tier} summarizer to: ${safeAlt}`);
+                    }
+                }
+            }
+        }
+
         // Log results
         if (issues.length > 0) {
             logger.error('❌ Config validation ERRORS (may cause issues):');
@@ -4034,6 +4065,202 @@ app.post('/lmstudio/restart', async (_req, res) => {
     }
 });
 
+// =========================
+// Custom Middleware Tools
+// =========================
+
+/**
+ * Definition of custom middleware tools that can be exposed to LLMs
+ */
+const MIDDLEWARE_TOOLS = {
+    rag_search: {
+        type: 'function',
+        function: {
+            name: 'rag_search',
+            description: 'Search the indexed codebase for relevant code snippets and documentation. Use this to find code related to a query.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'The search query to find relevant code'
+                    },
+                    topK: {
+                        type: 'number',
+                        description: 'Number of results to return (default: 5)'
+                    }
+                },
+                required: ['query']
+            }
+        }
+    },
+    file_read: {
+        type: 'function',
+        function: {
+            name: 'file_read',
+            description: 'Read the contents of a file from the workspace. Returns the file content as text.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: {
+                        type: 'string',
+                        description: 'The file path relative to workspace root'
+                    }
+                },
+                required: ['path']
+            }
+        }
+    },
+    get_file_summary: {
+        type: 'function',
+        function: {
+            name: 'get_file_summary',
+            description: 'Get the RAG summary for a file. Returns AI-generated summary of the file contents.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: {
+                        type: 'string',
+                        description: 'The file path relative to workspace root'
+                    }
+                },
+                required: ['path']
+            }
+        }
+    }
+};
+
+/**
+ * Execute a custom middleware tool
+ * @param {string} toolName - Name of the tool to execute
+ * @param {object} args - Tool arguments
+ * @returns {Promise<{success: boolean, result?: any, error?: string}>}
+ */
+async function executeMiddlewareTool(toolName, args) {
+    try {
+        switch (toolName) {
+            case 'rag_search': {
+                const query = args.query;
+                const topK = args.topK || 5;
+                if (!query) {
+                    return { success: false, error: 'Query is required' };
+                }
+                const results = await ragSearch(query, topK);
+                const formatted = results.map(r => ({
+                    filePath: r.filePath,
+                    summary: r.summaryText || r.rawText?.slice(0, 500),
+                    relevance: r.distance ? (1 - r.distance).toFixed(3) : 'N/A'
+                }));
+                return { success: true, result: formatted };
+            }
+            
+            case 'file_read': {
+                const filePath = args.path;
+                if (!filePath) {
+                    return { success: false, error: 'Path is required' };
+                }
+                const fs = require('fs').promises;
+                const path = require('path');
+                const fullPath = path.resolve(process.cwd(), filePath);
+                // Security: ensure path is within workspace
+                if (!fullPath.startsWith(process.cwd())) {
+                    return { success: false, error: 'Path must be within workspace' };
+                }
+                const content = await fs.readFile(fullPath, 'utf-8');
+                // Truncate very large files
+                const maxLength = 50000;
+                const truncated = content.length > maxLength 
+                    ? content.slice(0, maxLength) + `\n... (truncated, ${content.length - maxLength} chars remaining)`
+                    : content;
+                return { success: true, result: truncated };
+            }
+            
+            case 'get_file_summary': {
+                const filePath = args.path;
+                if (!filePath) {
+                    return { success: false, error: 'Path is required' };
+                }
+                // Search for the file in RAG index
+                const results = await ragSearch(`file:${filePath}`, 1);
+                const fileResult = results.find(r => r.filePath?.includes(filePath));
+                if (fileResult) {
+                    return { 
+                        success: true, 
+                        result: {
+                            filePath: fileResult.filePath,
+                            summary: fileResult.summaryText || 'No summary available'
+                        }
+                    };
+                }
+                return { success: false, error: `No summary found for file: ${filePath}` };
+            }
+            
+            default:
+                return { success: false, error: `Unknown middleware tool: ${toolName}` };
+        }
+    } catch (error) {
+        console.error(`[Tools] Error executing ${toolName}:`, error.message);
+        return { success: false, error: error.message };
+    }
+}
+
+/**
+ * Check if a tool name is a custom middleware tool
+ */
+function isMiddlewareTool(toolName) {
+    return toolName in MIDDLEWARE_TOOLS;
+}
+
+/**
+ * Get all middleware tool definitions for injection into tools array
+ */
+function getMiddlewareToolDefinitions() {
+    return Object.values(MIDDLEWARE_TOOLS);
+}
+
+/**
+ * Process messages that may contain tool calls - handle middleware tools internally
+ * @param {Array} messages - Chat messages array
+ * @returns {Promise<{processedMessages: Array, toolResults: Array}>}
+ */
+async function processToolCallMessages(messages) {
+    const processedMessages = [];
+    const toolResults = [];
+    
+    for (const msg of messages) {
+        // Check for tool call responses that need our handling
+        if (msg.role === 'assistant' && msg.tool_calls) {
+            processedMessages.push(msg);
+            
+            // Process each tool call
+            for (const toolCall of msg.tool_calls) {
+                const toolName = toolCall.function?.name;
+                if (isMiddlewareTool(toolName)) {
+                    // Execute middleware tool and queue result
+                    const args = JSON.parse(toolCall.function?.arguments || '{}');
+                    const result = await executeMiddlewareTool(toolName, args);
+                    toolResults.push({
+                        tool_call_id: toolCall.id,
+                        role: 'tool',
+                        content: JSON.stringify(result.success ? result.result : { error: result.error })
+                    });
+                }
+            }
+        } else if (msg.role === 'tool') {
+            // Pass through tool responses - don't modify
+            processedMessages.push(msg);
+        } else {
+            processedMessages.push(msg);
+        }
+    }
+    
+    // Append our tool results to the messages
+    return { 
+        processedMessages: [...processedMessages, ...toolResults], 
+        toolResults 
+    };
+}
+
 /**
  * OpenAI-compatible chat completions handler (shared by /v1/chat/completions and /chat/completions).
  */
@@ -4043,10 +4270,39 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
     let ragResults = [];
     let sessionId = DEFAULT_CONVERSATION_ID;
         try {
-        const { messages = [], temperature = 0.2, model: requestedModel, stream = false, topK = 5, conversationId: requestedConversationId, ...rest } = req.body || {};
+        const { messages = [], temperature = 0.2, model: requestedModel, stream = false, topK = 5, conversationId: requestedConversationId, tools: requestTools, tool_choice, ...rest } = req.body || {};
         if (!Array.isArray(messages) || messages.length === 0) {
             return res.status(400).json({ error: 'messages array required' });
         }
+        
+        // =========================
+        // Tool Calling Support
+        // =========================
+        const hasToolCalls = requestTools && Array.isArray(requestTools) && requestTools.length > 0;
+        let toolsToUse = requestTools || [];
+        let workingMessages = [...messages];
+        
+        // If tools are requested, we use a different flow that preserves message structure
+        if (hasToolCalls) {
+            console.log(`[Tools] Request includes ${requestTools.length} tools, tool_choice: ${tool_choice || 'auto'}`);
+            
+            // Inject middleware tools if not already present
+            const middlewareToolDefs = getMiddlewareToolDefinitions();
+            const existingToolNames = new Set(toolsToUse.map(t => t.function?.name));
+            for (const mwTool of middlewareToolDefs) {
+                if (!existingToolNames.has(mwTool.function.name)) {
+                    toolsToUse.push(mwTool);
+                }
+            }
+            
+            // Process any pending tool calls from previous messages
+            const { processedMessages, toolResults } = await processToolCallMessages(workingMessages);
+            if (toolResults.length > 0) {
+                console.log(`[Tools] Processed ${toolResults.length} middleware tool calls`);
+                workingMessages = processedMessages;
+            }
+        }
+        
         const headerConversationId = extractConversationIdFromHeaders(req);
         const resolved = resolveConversationId(requestedConversationId, {
             headerId: headerConversationId,
@@ -4057,15 +4313,18 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         const summaryKeepRecentTurns = summaryActive ? getSummaryKeepRecentTurns() : 0;
 
         // Extract latest user message for RAG
-        const latestUser = [...messages].reverse().find(m => m?.role === 'user');
+        const latestUser = [...workingMessages].reverse().find(m => m?.role === 'user');
         if (!latestUser || !latestUser.content) {
-            return res.status(400).json({ error: 'at least one user message required' });
+            // For tool call flows, user message might not be the latest - allow continuation
+            if (!hasToolCalls) {
+                return res.status(400).json({ error: 'at least one user message required' });
+            }
         }
-        const userPrompt = typeof latestUser.content === 'string'
+        const userPrompt = latestUser ? (typeof latestUser.content === 'string'
             ? latestUser.content
             : Array.isArray(latestUser.content)
                 ? latestUser.content.map(c => c.text || '').join('\n')
-                : JSON.stringify(latestUser.content);
+                : JSON.stringify(latestUser.content)) : '';
         
         // Retrieve latest rolling summary (long-term memory)
         let latestSummary = null;
@@ -4128,23 +4387,55 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
 
         // Build messages with enhanced context
         let enhancedMessages = [];
-        // Add system message with context
-        enhancedMessages.push({
-            role: 'system',
-            content: 'You are a coding assistant. Use the provided context and summaries to answer.\n\n' + composedPrompt
-        });
-        // Add original user messages (but replace last user message with just the prompt since context is in system)
-        for (let i = 0; i < messages.length - 1; i++) {
-            enhancedMessages.push(messages[i]);
+        
+        // Check if this is a tool-calling request - preserve message structure
+        if (hasToolCalls) {
+            // For tool calls: preserve full message structure including tool_calls and tool responses
+            // Only inject RAG context into system message if one exists
+            const existingSystem = workingMessages.find(m => m.role === 'system');
+            if (existingSystem) {
+                // Enhance existing system message with RAG context
+                enhancedMessages.push({
+                    ...existingSystem,
+                    content: existingSystem.content + '\n\n--- Codebase Context ---\n' + composedPrompt
+                });
+                // Add rest of messages (excluding the system we just modified)
+                for (const msg of workingMessages) {
+                    if (msg.role !== 'system') {
+                        enhancedMessages.push(msg);
+                    }
+                }
+            } else {
+                // No system message - prepend one with context
+                enhancedMessages.push({
+                    role: 'system',
+                    content: 'You are a coding assistant with access to tools. Use the provided codebase context.\n\n--- Codebase Context ---\n' + composedPrompt
+                });
+                enhancedMessages.push(...workingMessages);
+            }
+            console.log(`[Tools] Preserved ${enhancedMessages.length} messages with tool structure`);
+        } else {
+            // Standard flow: rebuild messages with context
+            enhancedMessages.push({
+                role: 'system',
+                content: 'You are a coding assistant. Use the provided context and summaries to answer.\n\n' + composedPrompt
+            });
+            // Add original user messages (but replace last user message with just the prompt since context is in system)
+            for (let i = 0; i < workingMessages.length - 1; i++) {
+                enhancedMessages.push(workingMessages[i]);
+            }
+            enhancedMessages.push({ role: 'user', content: userPrompt });
         }
-        enhancedMessages.push({ role: 'user', content: userPrompt });
 
         // Ensure context fits model - summarize if needed
         // This handles both turn-based (engine ON) and context-based (engine OFF) summarization
-        try {
-            enhancedMessages = await ensureContextFitsModel(enhancedMessages);
-        } catch (summaryError) {
-            console.warn('[Summary] Context fitting failed, using original messages:', summaryError?.message || summaryError);
+        // Skip for tool calls to preserve message structure
+        if (!hasToolCalls) {
+            try {
+                enhancedMessages = await ensureContextFitsModel(enhancedMessages);
+            } catch (summaryError) {
+                console.warn('[Summary] Context fitting failed, using original messages:', summaryError?.message || summaryError);
+            }
         }
 
         // Determine which model to use based on active preset
@@ -4186,6 +4477,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                 messages: enhancedMessages,
                 temperature,
                 stream: true,
+                ...(hasToolCalls ? { tools: toolsToUse, tool_choice: tool_choice || 'auto' } : {}),
                 ...rest,
             };
             
@@ -4277,69 +4569,126 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
 
         
         // Non-streaming: get completion and return OpenAI format
-        const chatCompletionRequest = {
-            prompt: composedPrompt,
-            systemPrompt: BASE_SYSTEM_PROMPT,
-            temperature,
-        };
-        const completionResponse = await generateCompletion(chatCompletionRequest);
-        const nonStreamPayload = {
-            ...chatCompletionRequest,
-            model: modelToUse,
-        };
+        let completionResponse;
+        let content;
+        let nonStreamPayload;
         
-        // Extract content
-        const content = sanitizeAssistantText(extractAssistantText(completionResponse));
-
-        const persistedTurn = await persistConversationTurn({
-            sessionId,
-            userPrompt,
-            assistantResponse: content,
-            rawContextText,
-            composedContextText: composedPrompt,
-            budgetInfo,
-            ragResults,
-            llmPayloadKind: 'completion',
-            llmPayload: nonStreamPayload,
-        });
-        void pushSessionUpdate({ sessionId, turn: persistedTurn });
-
-        // Update rolling summary
-        if (summaryActive) {
-            const newRollingSummary = await recomputeRollingSummary(sessionId, summaryKeepRecentTurns);
-            if (newRollingSummary) {
-                metrics.lastSummaryAction = {
-                    ts: Date.now(),
-                    sessionId,
-                    turnCount: newRollingSummary?.turnCount || 0,
-                    summaryText: (newRollingSummary?.summary || '').slice(0, 1200),
-                    summaryLength: newRollingSummary?.summary ? newRollingSummary.summary.length : 0
-                };
-            }
-        }
-
-        // Return OpenAI-compatible format
-        res.json({
-            id: `chatcmpl-${Date.now()}`,
-            object: 'chat.completion',
-            created: Math.floor(Date.now() / 1000),
-            model: modelToUse,
-            choices: [{
-                index: 0,
-                message: {
-                    role: 'assistant',
-                    content: content
+        if (hasToolCalls) {
+            // For tool calling, use proxyChatCompletion to preserve tool support
+            nonStreamPayload = {
+                model: modelToUse,
+                messages: enhancedMessages,
+                temperature,
+                stream: false,
+                tools: toolsToUse,
+                tool_choice: tool_choice || 'auto',
+                ...rest,
+            };
+            completionResponse = await proxyChatCompletion(nonStreamPayload, null);
+            // completionResponse is the full OpenAI response object
+            content = completionResponse?.choices?.[0]?.message?.content || '';
+            content = sanitizeAssistantText(content);
+            
+            // For tool calls, return the full response structure
+            const persistedTurn = await persistConversationTurn({
+                sessionId,
+                userPrompt,
+                assistantResponse: content,
+                rawContextText,
+                composedContextText: composedPrompt,
+                budgetInfo,
+                ragResults,
+                llmPayloadKind: 'chat',
+                llmPayload: nonStreamPayload,
+            });
+            void pushSessionUpdate({ sessionId, turn: persistedTurn });
+            
+            // Return OpenAI-compatible format with tool_calls if present
+            const responseMessage = completionResponse?.choices?.[0]?.message || { role: 'assistant', content };
+            res.json({
+                id: completionResponse?.id || `chatcmpl-${Date.now()}`,
+                object: 'chat.completion',
+                created: completionResponse?.created || Math.floor(Date.now() / 1000),
+                model: modelToUse,
+                choices: [{
+                    index: 0,
+                    message: responseMessage,
+                    finish_reason: completionResponse?.choices?.[0]?.finish_reason || 'stop'
+                }],
+                usage: completionResponse?.usage || {
+                    prompt_tokens: budgetInfo?.usedTokens || 0,
+                    completion_tokens: Math.ceil((content?.length || 0) / 4),
+                    total_tokens: (budgetInfo?.usedTokens || 0) + Math.ceil((content?.length || 0) / 4)
                 },
-                finish_reason: 'stop'
-            }],
-            usage: {
-                prompt_tokens: budgetInfo?.usedTokens || 0,
-                completion_tokens: Math.ceil(content.length / 4),
-                total_tokens: (budgetInfo?.usedTokens || 0) + Math.ceil(content.length / 4)
-            },
-            session_id: sessionId,
-            context_mode: appliedContextMode || sessionMode
-        });
+                session_id: sessionId,
+                context_mode: appliedContextMode || sessionMode
+            });
+        } else {
+            // Standard completion flow
+            const chatCompletionRequest = {
+                prompt: composedPrompt,
+                systemPrompt: BASE_SYSTEM_PROMPT,
+                temperature,
+            };
+            completionResponse = await generateCompletion(chatCompletionRequest);
+            nonStreamPayload = {
+                ...chatCompletionRequest,
+                model: modelToUse,
+            };
+            
+            // Extract content
+            content = sanitizeAssistantText(extractAssistantText(completionResponse));
+
+            const persistedTurn = await persistConversationTurn({
+                sessionId,
+                userPrompt,
+                assistantResponse: content,
+                rawContextText,
+                composedContextText: composedPrompt,
+                budgetInfo,
+                ragResults,
+                llmPayloadKind: 'completion',
+                llmPayload: nonStreamPayload,
+            });
+            void pushSessionUpdate({ sessionId, turn: persistedTurn });
+
+            // Update rolling summary
+            if (summaryActive) {
+                const newRollingSummary = await recomputeRollingSummary(sessionId, summaryKeepRecentTurns);
+                if (newRollingSummary) {
+                    metrics.lastSummaryAction = {
+                        ts: Date.now(),
+                        sessionId,
+                        turnCount: newRollingSummary?.turnCount || 0,
+                        summaryText: (newRollingSummary?.summary || '').slice(0, 1200),
+                        summaryLength: newRollingSummary?.summary ? newRollingSummary.summary.length : 0
+                    };
+                }
+            }
+
+            // Return OpenAI-compatible format
+            res.json({
+                id: `chatcmpl-${Date.now()}`,
+                object: 'chat.completion',
+                created: Math.floor(Date.now() / 1000),
+                model: modelToUse,
+                choices: [{
+                    index: 0,
+                    message: {
+                        role: 'assistant',
+                        content: content
+                    },
+                    finish_reason: 'stop'
+                }],
+                usage: {
+                    prompt_tokens: budgetInfo?.usedTokens || 0,
+                    completion_tokens: Math.ceil(content.length / 4),
+                    total_tokens: (budgetInfo?.usedTokens || 0) + Math.ceil(content.length / 4)
+                },
+                session_id: sessionId,
+                context_mode: appliedContextMode || sessionMode
+            });
+        }
 
         const duration = Date.now() - started;
         updateMetrics(duration, budgetInfo, true);

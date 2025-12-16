@@ -98,9 +98,23 @@ async function summarizeChunk(text) {
     }
 }
 
+// Blacklisted models that should never be used for summarization
+const SUMMARIZER_BLACKLIST = ['tinyllama', 'phi-1', 'orca-mini'];
+const SAFE_FALLBACK_SUMMARIZER = 'qwen2.5-coder-0.5b-instruct';
+
+/**
+ * Check if a model is blacklisted for summarization
+ */
+function isSummarizerBlacklisted(modelId) {
+    if (!modelId) return true;
+    const lower = modelId.toLowerCase();
+    return SUMMARIZER_BLACKLIST.some(pattern => lower.includes(pattern));
+}
+
 /**
  * Get the rolling summarizer model based on active preset
- * Priority: perQualityRollingSummarizers[activePreset] > config.rollingSummarization
+ * Priority: perQualityRollingSummarizers[activePreset] > customPreset > safe fallback
+ * NEVER falls back to blacklisted models like TinyLlama
  */
 function getRollingSummarizerForPreset() {
     const { getConfig } = require('../config.js');
@@ -110,23 +124,39 @@ function getRollingSummarizerForPreset() {
     // Try to get preset-specific rolling summarizer
     if (activePreset && activePreset !== 'custom') {
         const presetSummarizer = config.models?.perQualityRollingSummarizers?.[activePreset];
-        if (presetSummarizer) {
+        if (presetSummarizer && !isSummarizerBlacklisted(presetSummarizer)) {
             console.log(`[Rolling Summary] Using preset '${activePreset}' summarizer: ${presetSummarizer}`);
-            // Return config object with the preset summarizer
             const baseConfig = getModelConfig('rollingSummarization');
             return { ...baseConfig, identifier: presetSummarizer, model_name: presetSummarizer };
+        } else if (presetSummarizer && isSummarizerBlacklisted(presetSummarizer)) {
+            console.warn(`[Rolling Summary] Preset '${activePreset}' summarizer '${presetSummarizer}' is blacklisted, using safe fallback`);
         }
     } else if (activePreset === 'custom') {
         const customSummarizer = config.customPreset?.rollingSummarizer;
-        if (customSummarizer) {
+        if (customSummarizer && !isSummarizerBlacklisted(customSummarizer)) {
             console.log(`[Rolling Summary] Using custom preset summarizer: ${customSummarizer}`);
             const baseConfig = getModelConfig('rollingSummarization');
             return { ...baseConfig, identifier: customSummarizer, model_name: customSummarizer };
+        } else if (customSummarizer && isSummarizerBlacklisted(customSummarizer)) {
+            console.warn(`[Rolling Summary] Custom summarizer '${customSummarizer}' is blacklisted, using safe fallback`);
         }
     }
     
-    // Fall back to default config
-    return getModelConfig('rollingSummarization');
+    // Check if base config has a blacklisted model
+    const baseConfig = getModelConfig('rollingSummarization');
+    if (baseConfig?.identifier && !isSummarizerBlacklisted(baseConfig.identifier)) {
+        console.log(`[Rolling Summary] Using base config summarizer: ${baseConfig.identifier}`);
+        return baseConfig;
+    }
+    
+    // Use safe fallback - never use blacklisted models
+    console.warn(`[Rolling Summary] Base config uses blacklisted model, falling back to: ${SAFE_FALLBACK_SUMMARIZER}`);
+    return {
+        ...baseConfig,
+        identifier: SAFE_FALLBACK_SUMMARIZER,
+        model_name: SAFE_FALLBACK_SUMMARIZER,
+        context_length: 4096
+    };
 }
 
 /**
@@ -549,3 +579,4 @@ module.exports = {
     cloudCompletion,
     cloudProxyCompletion,
 };
+

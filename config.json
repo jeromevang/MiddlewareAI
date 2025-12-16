@@ -26,7 +26,10 @@
     "filterBelowMinContext": true,
     "autoLoadModels": true,
     "autoLoadDelayMs": 2000,
-    "autoBootstrapOnStartup": true
+    "autoBootstrapOnStartup": true,
+    "autoDownloadModels": true,
+    "autoDownloadTier": "medium",
+    "maxAutoDownloadsPerBootstrap": 3
   },
   "telemetry": {
     "enabled": false,
@@ -58,8 +61,8 @@
       "userSelectable": true
     },
     "rollingSummarization": {
-      "model_name": "tinyllama-1.1b-chat-v1.0",
-      "identifier": "tinyllama-1.1b-chat-v1.0",
+      "model_name": "qwen2.5-coder-0.5b-instruct",
+      "identifier": "qwen2.5-coder-0.5b-instruct",
       "context_length": 4096,
       "userSelectable": true
     },
@@ -70,8 +73,8 @@
     },
     "perQualityRollingSummarizers": {
       "high": "qwen2.5-coder-1.5b-instruct",
-      "medium": "tinyllama-1.1b-chat-v1.0",
-      "low": "tinyllama-1.1b-chat-v1.0"
+      "medium": "qwen2.5-coder-1.5b-instruct",
+      "low": "qwen2.5-coder-0.5b-instruct"
     }
   },
   "processing": {

@@ -17,11 +17,160 @@ const { getLMStudioCLIPath } = require('./lmstudio_manager.js');
 const { isPresetLocked, getPresetLockedModels } = require('./model_lock_service.js');
 
 const execAsync = promisify(exec);
+const { getEssentialModels } = require('./recommended_models.js');
 
 // Bootstrap model configuration
 const BOOTSTRAP_MODEL = 'squeeze-ai-lab/TinyAgent-1.1B-GGUF';
 const FALLBACK_MODEL = 'Qwen/Qwen2.5-0.5B-Instruct-GGUF';
 const LM_STUDIO_URL = 'http://localhost:1234';
+
+// =========================
+// Model Blacklist
+// =========================
+// Models that should never be used in presets due to poor quality or issues
+const MODEL_BLACKLIST = [
+    { pattern: 'tinyllama', reason: 'Produces garbage/repetitive output, too small for reliable inference' },
+    { pattern: 'phi-1', reason: 'Too small for meaningful output (1.3B)' },
+    { pattern: 'orca-mini', reason: 'Poor instruction following and coherence' },
+    { pattern: 'stablelm-zephyr-3b', reason: 'Inconsistent output quality' },
+    { pattern: 'pythia', reason: 'Base model without instruction tuning' }
+];
+
+/**
+ * Check if a model is blacklisted
+ * @param {string} modelId - Model identifier to check
+ * @returns {{ blacklisted: boolean, reason?: string }}
+ */
+function isModelBlacklisted(modelId) {
+    if (!modelId) return { blacklisted: false };
+    const lower = modelId.toLowerCase();
+    
+    for (const entry of MODEL_BLACKLIST) {
+        if (lower.includes(entry.pattern)) {
+            return { blacklisted: true, reason: entry.reason };
+        }
+    }
+    return { blacklisted: false };
+}
+
+/**
+ * Filter out blacklisted models from a list
+ * @param {Array} models - Array of model objects with id/name property
+ * @returns {{ allowed: Array, removed: Array<{model: object, reason: string}> }}
+ */
+function filterBlacklistedModels(models) {
+    const allowed = [];
+    const removed = [];
+    
+    for (const model of models) {
+        const id = model.id || model.name || '';
+        const check = isModelBlacklisted(id);
+        if (check.blacklisted) {
+            removed.push({ model, reason: check.reason });
+            console.warn(`[Blacklist] Excluding model '${id}': ${check.reason}`);
+        } else {
+            allowed.push(model);
+        }
+    }
+    
+    return { allowed, removed };
+}
+
+/**
+ * Remove blacklisted models from LM Studio
+ * Attempts to unload and remove using CLI
+ * @returns {Promise<{removed: string[], failed: string[]}>}
+ */
+async function removeBlacklistedModels() {
+    const results = { removed: [], failed: [] };
+    const cliPath = getLMStudioCLIPath();
+    
+    try {
+        // Get list of downloaded models
+        const { stdout } = await execAsync(`"${cliPath}" ls --json`, { timeout: 30000 });
+        const models = JSON.parse(stdout);
+        
+        for (const model of models) {
+            const modelId = model.path || model.id || '';
+            const check = isModelBlacklisted(modelId);
+            
+            if (check.blacklisted) {
+                console.log(`[Blacklist] Attempting to remove blacklisted model: ${modelId}`);
+                
+                try {
+                    // Try to unload first if loaded
+                    await execAsync(`"${cliPath}" unload "${modelId}" -y`, { timeout: 30000 }).catch(() => {});
+                    
+                    // Try to remove (lms rm may not exist in all versions)
+                    try {
+                        await execAsync(`"${cliPath}" rm "${modelId}" -y`, { timeout: 60000 });
+                        results.removed.push(modelId);
+                        console.log(`[Blacklist] Successfully removed: ${modelId}`);
+                    } catch (rmError) {
+                        // rm command might not exist - log for manual removal
+                        console.warn(`[Blacklist] Could not auto-remove ${modelId} (CLI 'rm' may not be supported). Please remove manually.`);
+                        console.warn(`[Blacklist] Reason for removal: ${check.reason}`);
+                        results.failed.push(modelId);
+                    }
+                } catch (error) {
+                    console.error(`[Blacklist] Failed to process ${modelId}:`, error.message);
+                    results.failed.push(modelId);
+                }
+            }
+        }
+    } catch (error) {
+        console.error('[Blacklist] Failed to get model list:', error.message);
+    }
+    
+    return results;
+}
+
+/**
+ * Download essential models for a given tier
+ * Called when no models are found during bootstrap
+ * @param {string} tier - 'high', 'medium', or 'low'
+ * @param {number} maxDownloads - Maximum number of models to download
+ * @returns {Promise<number>} - Number of models downloaded
+ */
+async function downloadEssentialModels(tier, maxDownloads = 3) {
+    const essentials = getEssentialModels(tier);
+    const cliPath = getLMStudioCLIPath();
+    let downloaded = 0;
+    
+    console.log(`[Bootstrap] Downloading up to ${maxDownloads} essential models for tier: ${tier}`);
+    
+    for (const model of essentials) {
+        if (downloaded >= maxDownloads) {
+            console.log(`[Bootstrap] Reached max downloads (${maxDownloads}), stopping`);
+            break;
+        }
+        
+        const modelId = model.id;
+        const quant = model.quant || 'Q4_K_M';
+        
+        updateBootstrapStatus({ 
+            message: `Downloading: ${modelId} (${quant})...`, 
+            progress: 10 + (downloaded * 5)
+        });
+        
+        try {
+            console.log(`[Bootstrap] Downloading ${modelId}@${quant}...`);
+            
+            // Use lms get command
+            const cmd = `"${cliPath}" get "${modelId}@${quant.toLowerCase()}" -y`;
+            await execAsync(cmd, { timeout: 600000 }); // 10 minute timeout for downloads
+            
+            downloaded++;
+            console.log(`[Bootstrap] Successfully downloaded: ${modelId}`);
+        } catch (error) {
+            console.error(`[Bootstrap] Failed to download ${modelId}:`, error.message);
+            // Continue with other downloads
+        }
+    }
+    
+    console.log(`[Bootstrap] Downloaded ${downloaded} essential models`);
+    return downloaded;
+}
 
 // Bootstrap state
 let bootstrapState = {
@@ -603,15 +752,51 @@ async function runBootstrap(modelDbService) {
     let bootstrapModelId = null;
     
     try {
-        // Step 1: Get downloaded models
-        updateBootstrapStatus({ message: 'Scanning downloaded models...', progress: 5 });
-        const downloadedModels = await getDownloadedModels();
-        
-        if (downloadedModels.length === 0) {
-            throw new Error('No models found in LM Studio');
+        // Step 0: Remove blacklisted models
+        updateBootstrapStatus({ message: 'Checking for blacklisted models...', progress: 2 });
+        const blacklistResults = await removeBlacklistedModels();
+        if (blacklistResults.removed.length > 0) {
+            console.log(`[Bootstrap] Removed ${blacklistResults.removed.length} blacklisted models`);
+        }
+        if (blacklistResults.failed.length > 0) {
+            console.warn(`[Bootstrap] ${blacklistResults.failed.length} blacklisted models need manual removal`);
         }
         
-        console.log(`[Bootstrap] Found ${downloadedModels.length} downloaded models`);
+        // Step 1: Get downloaded models
+        updateBootstrapStatus({ message: 'Scanning downloaded models...', progress: 5 });
+        let downloadedModels = await getDownloadedModels();
+        
+        // Filter out any remaining blacklisted models from analysis
+        const { allowed: filteredModels, removed: blacklistedInList } = filterBlacklistedModels(downloadedModels);
+        if (blacklistedInList.length > 0) {
+            console.log(`[Bootstrap] Filtered out ${blacklistedInList.length} blacklisted models from analysis`);
+        }
+        downloadedModels = filteredModels;
+        
+        // Step 1b: Auto-download recommended models if enabled
+        const { getConfig } = require('./config.js');
+        const config = getConfig();
+        const autoDownload = config.system?.autoDownloadModels !== false;
+        const autoDownloadTier = config.system?.autoDownloadTier || 'medium';
+        const maxAutoDownloads = config.system?.maxAutoDownloadsPerBootstrap || 3;
+        
+        if (autoDownload && downloadedModels.length === 0) {
+            // No models at all - download essential models
+            updateBootstrapStatus({ message: 'No models found. Downloading essential models...', progress: 8 });
+            const downloaded = await downloadEssentialModels(autoDownloadTier, maxAutoDownloads);
+            if (downloaded > 0) {
+                // Re-fetch models after download
+                downloadedModels = await getDownloadedModels();
+                const filtered = filterBlacklistedModels(downloadedModels);
+                downloadedModels = filtered.allowed;
+            }
+        }
+        
+        if (downloadedModels.length === 0) {
+            throw new Error('No models found in LM Studio (after filtering blacklist)');
+        }
+        
+        console.log(`[Bootstrap] Found ${downloadedModels.length} models (after blacklist filtering)`);
         
         // Step 2: Check if bootstrap model is available
         let useBootstrapModel = await isModelDownloaded(BOOTSTRAP_MODEL);
@@ -704,5 +889,12 @@ module.exports = {
     setStatusBroadcastCallback,
     getDownloadedModels,
     analyzeModelHeuristic,
-    analyzeModelWithLLM
+    analyzeModelWithLLM,
+    // Blacklist functions
+    isModelBlacklisted,
+    filterBlacklistedModels,
+    removeBlacklistedModels,
+    MODEL_BLACKLIST,
+    // Auto-download
+    downloadEssentialModels
 };
