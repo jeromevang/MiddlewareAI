@@ -2595,7 +2595,7 @@ app.post('/gpu/optimize', async (req, res) => {
         
         // Set up WebSocket broadcasting for status updates
         setStatusCallback((data) => {
-            broadcastDashboardUpdate(data);
+            broadcastWsMessage(data);
         });
         
         // Get currently loaded models with size estimates
@@ -2625,13 +2625,13 @@ app.post('/gpu/optimize', async (req, res) => {
             logger.info(`[API] GPU optimization complete: ${JSON.stringify(result.settings)}`);
             
             // Broadcast completion
-            broadcastDashboardUpdate({
+            broadcastWsMessage({
                 type: 'gpu-optimization-complete',
                 payload: result
             });
         } catch (optError) {
             logger.error('[API] GPU optimization failed:', optError.message);
-            broadcastDashboardUpdate({
+            broadcastWsMessage({
                 type: 'gpu-optimization-error',
                 payload: { error: optError.message }
             });

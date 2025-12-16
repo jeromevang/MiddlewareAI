@@ -154,9 +154,6 @@ export function GPUOptimizer() {
   const progress = gpuStatus?.optimization?.progress || 0;
   const message = gpuStatus?.optimization?.message || '';
 
-  // Debug logging
-  console.log('[GPUOptimizer] Status:', { gpuStatus, statusLoading, statusError });
-
   const handleManualOverride = (modelId: string, role: string) => {
     const gpu = manualOverrides[modelId];
     if (gpu !== undefined) {
