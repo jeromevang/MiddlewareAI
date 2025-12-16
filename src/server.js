@@ -6192,7 +6192,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             // and only stream the final response back to the client.
             
             if (hasToolCalls) {
-                console.log('[Tools] Streaming request with tools - using internal tool loop');
+                console.log('[Tools] Streaming request with tools - hybrid streaming mode');
                 
                 // Prepare SSE headers first
                 res.setHeader('Content-Type', 'text/event-stream');
@@ -6202,19 +6202,32 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                     res.write(`data: ${JSON.stringify({ type: 'session', sessionId })}\n\n`);
                 }
                 
+                // Helper to send progress updates to client
+                const sendProgress = (message, toolName = null) => {
+                    if (!res.writableEnded) {
+                        res.write(`data: ${JSON.stringify({
+                            type: 'tool_progress',
+                            message,
+                            tool: toolName,
+                            timestamp: Date.now()
+                        })}\n\n`);
+                    }
+                };
+                
                 const MAX_TOOL_ITERATIONS = 10;
                 let currentMessages = [...enhancedMessages];
                 let iteration = 0;
-                let finalContent = '';
                 let toolIterations = 0;
+                let streamedContent = '';
                 
                 try {
                     while (iteration < MAX_TOOL_ITERATIONS) {
                         iteration++;
                         console.log(`[Tools] Streaming tool loop iteration ${iteration}`);
                         
-                        // Use non-streaming to detect tool_calls
-                        const loopPayload = {
+                        // Check if this might be the final iteration
+                        // We peek with non-streaming first to detect tool_calls
+                        const peekPayload = {
                             model: modelToUse,
                             messages: currentMessages,
                             temperature,
@@ -6224,8 +6237,10 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                             ...rest,
                         };
                         
-                        const loopResponse = await proxyChatCompletion(loopPayload, null);
-                        const assistantMessage = loopResponse?.choices?.[0]?.message;
+                        sendProgress(`🤔 Thinking... (iteration ${iteration})`);
+                        
+                        const peekResponse = await proxyChatCompletion(peekPayload, null);
+                        const assistantMessage = peekResponse?.choices?.[0]?.message;
                         
                         if (!assistantMessage) {
                             console.error('[Tools] No assistant message in response');
@@ -6235,10 +6250,25 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                         const toolCalls = assistantMessage.tool_calls || [];
                         
                         if (toolCalls.length === 0) {
-                            // No tool calls - we have the final response
-                            console.log(`[Tools] Final streaming response after ${iteration} iteration(s)`);
-                            finalContent = assistantMessage.content || '';
+                            // No tool calls - this is the final response!
+                            // Now re-request with STREAMING enabled for real-time output
+                            console.log(`[Tools] Final iteration ${iteration} - streaming real response`);
                             toolIterations = iteration;
+                            
+                            sendProgress('✨ Generating response...');
+                            
+                            const streamPayload = {
+                                model: modelToUse,
+                                messages: currentMessages,
+                                temperature,
+                                stream: true,
+                                // Don't include tools on final call to avoid tool_calls
+                                ...rest,
+                            };
+                            
+                            // Stream the real response
+                            streamedContent = await proxyChatCompletion(streamPayload, res);
+                            streamedContent = sanitizeAssistantText(streamedContent);
                             break;
                         }
                         
@@ -6248,11 +6278,28 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                         
                         console.log(`[Tools] LLM called ${toolCalls.length} tools: ${middlewareToolCalls.length} middleware, ${externalToolCalls.length} external`);
                         
-                        // If all external, we can't help - return what we have
+                        // If all external, we can't help - stream the partial response
                         if (middlewareToolCalls.length === 0 && externalToolCalls.length > 0) {
-                            console.log('[Tools] All tool calls are external - returning partial response');
-                            finalContent = assistantMessage.content || 'I tried to use tools that are not available. Please try a different approach.';
+                            console.log('[Tools] All tool calls are external - streaming partial response');
                             toolIterations = iteration;
+                            
+                            const partialContent = assistantMessage.content || 'I tried to use tools that are not available. Please try a different approach.';
+                            
+                            // Stream the partial content
+                            const chunkSize = 20;
+                            for (let i = 0; i < partialContent.length; i += chunkSize) {
+                                const chunk = partialContent.slice(i, i + chunkSize);
+                                if (!res.writableEnded) {
+                                    res.write(`data: ${JSON.stringify({
+                                        id: `chatcmpl-${Date.now()}`,
+                                        object: 'chat.completion.chunk',
+                                        created: Math.floor(Date.now() / 1000),
+                                        model: modelToUse,
+                                        choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }]
+                                    })}\n\n`);
+                                }
+                            }
+                            streamedContent = partialContent;
                             break;
                         }
                         
@@ -6263,7 +6310,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                             tool_calls: toolCalls
                         });
                         
-                        // Execute middleware tools
+                        // Execute middleware tools with progress updates
                         for (const toolCall of middlewareToolCalls) {
                             const toolName = toolCall.function?.name;
                             let args = {};
@@ -6273,8 +6320,38 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                                 console.error(`[Tools] Failed to parse arguments for ${toolName}:`, parseErr.message);
                             }
                             
+                            // Send progress update to client
+                            const toolEmoji = {
+                                'rag_search': '🔍',
+                                'file_read': '📄',
+                                'file_write': '✏️',
+                                'file_patch': '🔧',
+                                'file_list': '📁',
+                                'file_search': '🔎',
+                                'web_search': '🌐',
+                                'fetch_url': '🌍',
+                                'npm_info': '📦',
+                                'grep': '🔍',
+                                'run_command': '⚙️',
+                                'memory_store': '💾',
+                                'memory_retrieve': '📖',
+                                'memory_list': '📋',
+                                'repo_map': '🗺️',
+                                'browser_automation': '🌐',
+                                'get_file_summary': '📝',
+                            }[toolName] || '🔧';
+                            
+                            sendProgress(`${toolEmoji} Executing ${toolName}...`, toolName);
+                            
                             console.log(`[Tools] Executing middleware tool: ${toolName}`);
                             const result = await executeMiddlewareTool(toolName, args);
+                            
+                            // Send completion update
+                            if (result.success) {
+                                sendProgress(`✅ ${toolName} completed`, toolName);
+                            } else {
+                                sendProgress(`❌ ${toolName} failed: ${result.error}`, toolName);
+                            }
                             
                             currentMessages.push({
                                 role: 'tool',
@@ -6286,6 +6363,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                         // Handle external tool calls with error message
                         for (const toolCall of externalToolCalls) {
                             const toolName = toolCall.function?.name;
+                            sendProgress(`⚠️ Skipping external tool: ${toolName}`, toolName);
                             currentMessages.push({
                                 role: 'tool',
                                 tool_call_id: toolCall.id,
@@ -6296,47 +6374,31 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                         }
                     }
                     
-                    if (!finalContent && iteration >= MAX_TOOL_ITERATIONS) {
-                        finalContent = 'Tool execution exceeded maximum iterations.';
-                    }
-                    
-                    finalContent = sanitizeAssistantText(finalContent);
-                    
-                    // Now stream the final content as SSE
-                    // Simulate streaming by chunking the response
-                    const chunkSize = 20; // Characters per chunk
-                    for (let i = 0; i < finalContent.length; i += chunkSize) {
-                        const chunk = finalContent.slice(i, i + chunkSize);
+                    if (iteration >= MAX_TOOL_ITERATIONS && !streamedContent) {
+                        const errorMsg = 'Tool execution exceeded maximum iterations.';
                         if (!res.writableEnded) {
                             res.write(`data: ${JSON.stringify({
                                 id: `chatcmpl-${Date.now()}`,
                                 object: 'chat.completion.chunk',
                                 created: Math.floor(Date.now() / 1000),
                                 model: modelToUse,
-                                choices: [{
-                                    index: 0,
-                                    delta: { content: chunk },
-                                    finish_reason: null
-                                }]
+                                choices: [{ index: 0, delta: { content: errorMsg }, finish_reason: null }]
                             })}\n\n`);
                         }
+                        streamedContent = errorMsg;
                     }
                     
-                    // Send final chunk
+                    // Send final done message if not already sent by proxyChatCompletion
                     if (!res.writableEnded) {
                         res.write(`data: ${JSON.stringify({
-                            id: `chatcmpl-${Date.now()}`,
-                            object: 'chat.completion.chunk',
-                            created: Math.floor(Date.now() / 1000),
-                            model: modelToUse,
-                            choices: [{
-                                index: 0,
-                                delta: {},
-                                finish_reason: 'stop'
-                            }],
-                            tool_iterations: toolIterations
+                            type: 'tool_summary',
+                            iterations: toolIterations,
+                            timestamp: Date.now()
                         })}\n\n`);
-                        res.write('data: [DONE]\n\n');
+                        // proxyChatCompletion already sends [DONE], so we just end
+                        if (!streamedContent) {
+                            res.write('data: [DONE]\n\n');
+                        }
                         res.end();
                     }
                     
@@ -6347,7 +6409,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                     const persistedTurn = await persistConversationTurn({
                         sessionId,
                         userPrompt,
-                        assistantResponse: finalContent,
+                        assistantResponse: streamedContent,
                         rawContextText,
                         composedContextText: composedPrompt,
                         budgetInfo,
