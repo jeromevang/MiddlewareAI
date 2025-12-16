@@ -2782,6 +2782,57 @@ app.post('/rag/ensure-models', async (req, res) => {
 });
 
 /**
+ * POST /rag/reset - Clear all RAG indexed data (FAISS + DB chunks) without reindexing
+ */
+app.post('/rag/reset', async (req, res) => {
+    try {
+        if (!isRagFeatureEnabled()) {
+            return res.status(400).json({ error: 'RAG is disabled in the current runtime mode.' });
+        }
+
+        // Get counts before clearing
+        const faissCountBefore = faissIndexManager.idMap?.length || 0;
+        const dbStatsBefore = await sqliteCacheManager.getStats();
+        const chunkCountBefore = dbStatsBefore?.chunkCount || 0;
+
+        // Stop any active indexing
+        await stopActiveIndexer('rag-reset');
+
+        // Clear FAISS index
+        console.log('[RAG Reset] Clearing FAISS index...');
+        await faissIndexManager.clear();
+
+        // Clear SQLite chunks (keeps rolling summaries)
+        console.log('[RAG Reset] Clearing SQLite chunks...');
+        await sqliteCacheManager.clearChunks();
+
+        // Get counts after clearing
+        const faissCountAfter = faissIndexManager.idMap?.length || 0;
+        const dbStatsAfter = await sqliteCacheManager.getStats();
+        const chunkCountAfter = dbStatsAfter?.chunkCount || 0;
+
+        appendLog(`RAG reset complete: cleared ${faissCountBefore} FAISS entries, ${chunkCountBefore} DB chunks`, 'info');
+
+        res.json({
+            status: 'ok',
+            message: 'RAG data cleared successfully',
+            cleared: {
+                faissEntries: faissCountBefore - faissCountAfter,
+                dbChunks: chunkCountBefore - chunkCountAfter
+            },
+            current: {
+                faissEntries: faissCountAfter,
+                dbChunks: chunkCountAfter
+            }
+        });
+    } catch (error) {
+        appendLog(`RAG reset failed: ${error.message}`, 'error');
+        console.error('[API] Failed to reset RAG:', error.message);
+        res.status(500).json({ error: 'Failed to reset RAG', details: error.message });
+    }
+});
+
+/**
  * POST /rag/reindex - Trigger RAG reindexing (clears and rebuilds index)
  */
 app.post('/rag/reindex', async (req, res) => {
