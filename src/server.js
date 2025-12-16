@@ -4009,6 +4009,37 @@ async function start() {
             console.warn('[Server] Model bootstrap failed:', error.message);
         }
 
+        // Auto-load active preset models (in background, non-blocking)
+        const systemConfig = (getConfig().system || {});
+        if (systemConfig.autoLoadModels !== false) { // Default to true
+            const activePreset = getConfig().models?.activePreset || 'medium';
+            const delayMs = systemConfig.autoLoadDelayMs || 2000;
+
+            console.log(`[Server] Auto-loading preset '${activePreset}' in ${delayMs}ms...`);
+
+            setTimeout(async () => {
+                try {
+                    const { ensurePresetModelsLoaded } = require('./lmstudio/model_manager.js');
+                    const result = await ensurePresetModelsLoaded(activePreset);
+
+                    const loadedCount = result.loaded.length;
+                    const keptCount = result.kept.length;
+                    const failedCount = result.failed.length;
+
+                    console.log(`[Server] ✅ Auto-loaded preset '${activePreset}': loaded=${loadedCount}, kept=${keptCount}, failed=${failedCount}`);
+
+                    if (failedCount > 0) {
+                        console.warn(`[Server] ⚠️  Some models failed to load:`, result.failed);
+                    }
+                } catch (error) {
+                    console.warn(`[Server] ❌ Auto-loading failed for preset '${activePreset}':`, error.message);
+                    console.warn('[Server] Models will need to be loaded manually via the UI');
+                }
+            }, delayMs);
+        } else {
+            console.log('[Server] Auto-loading disabled (system.autoLoadModels = false)');
+        }
+
         const config = getConfig();
         const port = (config.server && config.server.port) || 3001;
         const httpServer = http.createServer(app);

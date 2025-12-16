@@ -94,6 +94,16 @@ function validateConfig(config) {
         }
     }
 
+    // Validate system settings
+    if (config.system) {
+        if (typeof config.system.autoLoadModels !== 'undefined' && typeof config.system.autoLoadModels !== 'boolean') {
+            throw new Error('system.autoLoadModels must be a boolean');
+        }
+        if (typeof config.system.autoLoadDelayMs !== 'undefined' && typeof config.system.autoLoadDelayMs !== 'number') {
+            throw new Error('system.autoLoadDelayMs must be a number');
+        }
+    }
+
     if (!config.lmstudio.url) {
         throw new Error('Missing LM Studio URL in configuration');
     }

@@ -17,7 +17,9 @@
     "maxContextCap": 131072,
     "vramHeadroomGB": 1.5,
     "dynamicContextScaling": true,
-    "filterBelowMinContext": true
+    "filterBelowMinContext": true,
+    "autoLoadModels": true,
+    "autoLoadDelayMs": 2000
   },
   "ragPipeline": {
     "tier": "medium",

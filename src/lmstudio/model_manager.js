@@ -51,18 +51,33 @@ function resolveModelNames(modelOrId) {
  */
 function modelIdMatches(target, loadedId) {
     if (!target || !loadedId) return false;
-    
+
     // Exact match (preferred for modelKeys)
     if (target === loadedId) return true;
-    
+
+    // Handle LM Studio instance suffixes (:2, :3, etc.)
+    // If target is "model" and loaded is "model:2", they match for "is this model loaded?" checks
+    // But for preset management, we want exact matches only
+    const targetBase = target.replace(/:\d+$/, '');
+    const loadedBase = loadedId.replace(/:\d+$/, '');
+    if (targetBase === loadedBase) return true;
+
     // Normalized comparison for legacy/backward compatibility
     const t = normalizeModelId(target);
     const l = normalizeModelId(loadedId);
     if (!t || !l) return false;
     if (t === l) return true;
-    
+
     // Substring match as fallback
     return l.includes(t) || t.includes(l);
+}
+
+/**
+ * Check if a loaded model ID matches exactly what we need for a preset
+ * More strict than modelIdMatches - doesn't allow instance variants
+ */
+function modelIdMatchesExactly(neededId, loadedId) {
+    return neededId === loadedId;
 }
 
 async function isModelLoadedRemote(identifier) {
@@ -750,21 +765,21 @@ async function ensurePresetModelsLoaded(presetName) {
         console.warn('[LM Studio] Could not get loaded models list:', error.message);
     }
 
-    // Determine what to unload (loaded but not needed)
+    // Determine what to unload (loaded but not exactly matching what we need)
     const neededIds = new Set(resolvedModels.map(m => m.actualId));
     const modelsToUnload = currentlyLoaded.filter(loadedId => {
-        // Check if this loaded model matches any needed model
-        return ![...neededIds].some(neededId => modelIdMatches(neededId, loadedId));
+        // Unload if this loaded model doesn't exactly match any needed model
+        return ![...neededIds].some(neededId => modelIdMatchesExactly(neededId, loadedId));
     });
 
-    // Determine what's already loaded and can be kept
+    // Determine what's already loaded and can be kept (exact matches only)
     const modelsToKeep = currentlyLoaded.filter(loadedId => {
-        return [...neededIds].some(neededId => modelIdMatches(neededId, loadedId));
+        return [...neededIds].some(neededId => modelIdMatchesExactly(neededId, loadedId));
     });
 
-    // Determine what needs to be loaded (needed but not loaded)
+    // Determine what needs to be loaded (needed but not exactly loaded)
     const modelsToLoad = resolvedModels.filter(model => {
-        return !currentlyLoaded.some(loadedId => modelIdMatches(model.actualId, loadedId));
+        return !currentlyLoaded.some(loadedId => modelIdMatchesExactly(model.actualId, loadedId));
     });
 
     console.log(`[LM Studio] Smart unloading: unload ${modelsToUnload.length}, keep ${modelsToKeep.length}, load ${modelsToLoad.length}`);
@@ -960,6 +975,7 @@ module.exports = {
     normalizeModelId,
     resolveModelNames,
     modelIdMatches,
+    modelIdMatchesExactly,
     ensureModelLoaded,
     warmModel,
     warmEmbeddingModel,
