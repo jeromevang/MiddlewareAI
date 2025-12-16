@@ -5,9 +5,9 @@
  * and shows cached settings with manual override capabilities.
  */
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader2, Zap, Settings, RefreshCw, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, Zap, RefreshCw, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface GPUStatus {
   optimization: {
@@ -74,15 +74,15 @@ export function GPUOptimizer() {
       if (!res.ok) throw new Error('Failed to fetch GPU status');
       return res.json();
     },
-    refetchInterval: (data) => {
+    refetchInterval: (query) => {
       // Poll more frequently when optimizing
-      return data?.optimization?.isOptimizing ? 1000 : 10000;
+      return query.state.data?.optimization?.isOptimizing ? 1000 : 10000;
     },
     staleTime: 2000,
   });
 
   // Fetch cached settings
-  const { data: cachedSettings, isLoading: settingsLoading } = useQuery<CachedSettings>({
+  const { data: cachedSettings } = useQuery<CachedSettings>({
     queryKey: ['gpuSettings'],
     queryFn: async () => {
       const res = await fetch('/gpu/settings');
