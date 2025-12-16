@@ -7,7 +7,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Check, Download, Loader2, HardDrive, Info, Star, Lock, Unlock, AlertTriangle } from "lucide-react";
 import { getModelDisplayName } from './model-config/constants';
 import { getModelStatus, getModelLocks, toggleModelLock } from "../../lib/api";
-import { ModelCapabilityBadges, RoleBadge, AgenticWarning } from "../ui/ModelCapabilityBadges";
+import { ModelCapabilityBadges } from "../ui/ModelCapabilityBadges";
 
 interface MainModelSelectorProps {
   quality: 'high' | 'medium' | 'low';
@@ -202,7 +202,9 @@ export function MainModelSelector({
 
                   {/* Warning for non-agentic main models */}
                   {showWarning && (
-                    <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0" title={capabilities.agenticViableReason} />
+                    <span title={capabilities.agenticViableReason || 'Not recommended for agentic tasks'}>
+                      <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0" />
+                    </span>
                   )}
                 </div>
 
@@ -302,15 +304,22 @@ export function MainModelSelector({
                     <div>
                       <div className="text-white/60">Quality Rating:</div>
                       <div className="text-white flex items-center gap-1">
-                        {[...Array(5)].map((_, i) => (
-                          <Star
-                            key={i}
-                            className={`h-3 w-3 ${
-                              i < stars ? 'text-yellow-400 fill-yellow-400' : 'text-white/20'
-                            }`}
-                          />
-                        ))}
-                        <span className="ml-1">{label}</span>
+                        {(() => {
+                          const rating = getStarRating(modelId);
+                          return (
+                            <>
+                              {[...Array(5)].map((_, i) => (
+                                <Star
+                                  key={i}
+                                  className={`h-3 w-3 ${
+                                    i < rating.stars ? 'text-yellow-400 fill-yellow-400' : 'text-white/20'
+                                  }`}
+                                />
+                              ))}
+                              <span className="ml-1">{rating.label}</span>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
                     <div>
