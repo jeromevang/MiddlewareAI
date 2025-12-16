@@ -2,7 +2,7 @@
 // Simple Model Configuration Panel - Demonstrates Reorganized Layout
 // =============================================================================
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Card } from "../ui/Card";
 import { Button } from "../ui/Button";
@@ -25,7 +25,7 @@ export default function ModelConfigPanel() {
 
   // Basic state
   const [mode, setMode] = useState<"local" | "cloud">("local");
-  const [quality, setQuality] = useState<"high" | "medium" | "low" | "custom">("high");
+  const [quality, setQuality] = useState<"high" | "medium" | "low" | "custom">("low"); // Will sync from backend
   const [showModelDiscovery, setShowModelDiscovery] = useState(false);
   const [ragTier, setRagTier] = useState<RagTier>('low');
   const [pendingTierChange, setPendingTierChange] = useState<RagTier | null>(null);
@@ -55,15 +55,38 @@ export default function ModelConfigPanel() {
     staleTime: 30000, // 30 seconds
   });
 
-  // Fetch current config
+  // Fetch current config from /status endpoint
   const { data: configData } = useQuery({
-    queryKey: ['config'],
+    queryKey: ['status'],
     queryFn: async () => {
-      const response = await fetch('/api/config');
-      if (!response.ok) throw new Error('Failed to fetch config');
+      const response = await fetch('/status');
+      if (!response.ok) throw new Error('Failed to fetch status');
       return response.json();
     },
+    staleTime: 10000, // 10 seconds
   });
+
+  // Sync quality state from backend when config loads
+  useEffect(() => {
+    if (configData?.config?.models?.activePreset) {
+      const backendPreset = configData.config.models.activePreset;
+      if (backendPreset !== quality) {
+        console.log('[ModelConfigPanel] Syncing preset from backend:', backendPreset);
+        setQuality(backendPreset);
+      }
+    }
+  }, [configData?.config?.models?.activePreset]);
+
+  // Sync RAG tier from backend
+  useEffect(() => {
+    if (configData?.config?.ragPipeline?.tier) {
+      const backendTier = configData.config.ragPipeline.tier as RagTier;
+      if (backendTier !== ragTier) {
+        console.log('[ModelConfigPanel] Syncing RAG tier from backend:', backendTier);
+        setRagTier(backendTier);
+      }
+    }
+  }, [configData?.config?.ragPipeline?.tier]);
 
   // Prepare presets data
   const presets = presetsData?.presets || {

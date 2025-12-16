@@ -34,7 +34,7 @@
     "endpoint": null
   },
   "ragPipeline": {
-    "tier": "high",
+    "tier": "low",
     "locked": true,
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },
@@ -46,8 +46,8 @@
       "userSelectable": true
     },
     "rollingSummarization": {
-      "model_name": "qwen2.5-coder-0.5b-instruct",
-      "identifier": "qwen2.5-coder-0.5b-instruct",
+      "model_name": "tinyllama-1.1b-chat-v1.0",
+      "identifier": "tinyllama-1.1b-chat-v1.0",
       "context_length": 4096,
       "userSelectable": true
     },
