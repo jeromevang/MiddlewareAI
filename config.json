@@ -51,7 +51,7 @@
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },
   "models": {
-    "activePreset": "low",
+    "activePreset": "medium",
     "main": {
       "model_name": "qwen/qwen3-4b-2507",
       "identifier": "qwen/qwen3-4b-2507",
@@ -70,7 +70,7 @@
     },
     "perQualityRollingSummarizers": {
       "high": "qwen2.5-coder-1.5b-instruct",
-      "medium": "mistral-7b-instruct-v0.3",
+      "medium": "tinyllama-1.1b-chat-v1.0",
       "low": "tinyllama-1.1b-chat-v1.0"
     }
   },

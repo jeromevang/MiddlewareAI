@@ -338,9 +338,12 @@ async function _openModelImpl(modelOrId, options = {}) {
     // Wait for model to be fully loaded
     await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Verify model is loaded by checking loaded models list
+    // Invalidate cache after model state change
+    invalidateLoadedModelsCache();
+
+    // Verify model is loaded by checking loaded models list (force refresh)
     try {
-        const loadedModels = await listLoadedModels();
+        const loadedModels = await listLoadedModels(true);
         const isLoaded = loadedModels.some(m => modelIdMatches(modelName, m.id));
         if (!isLoaded) {
             console.warn(`[LM Studio Load] Model ${modelName} not found in loaded list after CLI load`);
@@ -433,6 +436,9 @@ async function _unloadModelImpl(modelOrId, options = {}) {
         console.log(`[LM Studio Unload] Successfully unloaded model: ${identifier}`);
         console.log(`[LM Studio Unload] CLI output: ${stdout.trim()}`);
 
+        // Invalidate cache after model state change
+        invalidateLoadedModelsCache();
+
         return { success: true, output: stdout.trim() };
     } catch (error) {
         console.error(`[LM Studio Unload] Failed to unload model ${identifier}:`, error.message);
@@ -462,6 +468,9 @@ async function unloadAllModels() {
         loadedModels.clear();
         loadingModels.clear();
 
+        // Invalidate cache after model state change
+        invalidateLoadedModelsCache();
+
         console.log(`[LM Studio Unload] Successfully unloaded all models`);
         console.log(`[LM Studio Unload] CLI output: ${stdout.trim()}`);
 
@@ -475,7 +484,23 @@ async function unloadAllModels() {
 // Cache to track loaded models state and prevent log flooding
 let _lastLoadedModelIds = null;
 
-async function listLoadedModels() {
+// Time-based cache for listLoadedModels to reduce LM Studio API calls
+let _loadedModelsCache = { data: null, timestamp: 0 };
+const LOADED_MODELS_CACHE_TTL_MS = 5000; // 5 seconds
+
+/**
+ * List loaded models from LM Studio with caching
+ * @param {boolean} forceRefresh - Bypass cache and fetch fresh data
+ * @returns {Promise<Array>} - Array of loaded model objects
+ */
+async function listLoadedModels(forceRefresh = false) {
+    const now = Date.now();
+    
+    // Return cached result if fresh enough and not forcing refresh
+    if (!forceRefresh && _loadedModelsCache.data && (now - _loadedModelsCache.timestamp < LOADED_MODELS_CACHE_TTL_MS)) {
+        return _loadedModelsCache.data;
+    }
+
     try {
         const res = await axios.get(`${LM_STUDIO_URL}/api/v0/models`, { timeout: LM_STUDIO_TIMEOUT_MS });
         const models = res.data?.data || [];
@@ -486,6 +511,9 @@ async function listLoadedModels() {
             size: m.size,
             context_length: m.context_length
         }));
+
+        // Update cache
+        _loadedModelsCache = { data: loaded, timestamp: now };
 
         // Only log when model list changes (prevents log flooding)
         const currentIds = loaded.map(m => m.id).sort().join(',');
@@ -499,6 +527,13 @@ async function listLoadedModels() {
         console.error(`[LM Studio Models] Failed to list models:`, error.message);
         throw error;
     }
+}
+
+/**
+ * Invalidate the loaded models cache (call after load/unload operations)
+ */
+function invalidateLoadedModelsCache() {
+    _loadedModelsCache = { data: null, timestamp: 0 };
 }
 
 /**
@@ -1128,6 +1163,7 @@ module.exports = {
     unloadModel,
     unloadAllModels,
     listLoadedModels,
+    invalidateLoadedModelsCache,
     getModelContextLength,
     updateMainModelContext,
     getServerStatus,
