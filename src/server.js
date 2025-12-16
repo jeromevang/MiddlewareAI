@@ -4130,6 +4130,91 @@ const MIDDLEWARE_TOOLS = {
     }
 };
 
+// =========================
+// Client Detection & Smart Tool Injection
+// =========================
+
+/**
+ * Cursor's distinctive tool names - if we see these, it's Cursor
+ */
+const CURSOR_TOOL_SIGNATURES = new Set([
+    'codebase_search',
+    'grep', 
+    'read_file',
+    'edit_file',
+    'run_terminal_cmd',
+    'list_dir',
+    'file_search',
+    'delete_file',
+    'search_replace',
+    'write'
+]);
+
+/**
+ * Detect if the request is coming from Cursor IDE
+ * Detection methods:
+ * 1. x-cursor-session header (most reliable)
+ * 2. Presence of Cursor-specific tools in the request
+ * @param {object} req - Express request object
+ * @param {Array} tools - Tools array from request body
+ * @returns {{isCursor: boolean, confidence: string, reason: string}}
+ */
+function detectClient(req, tools = []) {
+    // Method 1: Check for Cursor-specific header
+    const cursorSession = req.headers?.['x-cursor-session'];
+    if (cursorSession) {
+        return { isCursor: true, confidence: 'high', reason: 'x-cursor-session header present' };
+    }
+    
+    // Method 2: Check for Cursor-specific tools
+    if (Array.isArray(tools) && tools.length > 0) {
+        const toolNames = tools.map(t => t.function?.name).filter(Boolean);
+        const cursorTools = toolNames.filter(name => CURSOR_TOOL_SIGNATURES.has(name));
+        
+        if (cursorTools.length >= 2) {
+            return { 
+                isCursor: true, 
+                confidence: 'high', 
+                reason: `Found Cursor tools: ${cursorTools.slice(0, 3).join(', ')}` 
+            };
+        } else if (cursorTools.length === 1) {
+            return { 
+                isCursor: true, 
+                confidence: 'medium', 
+                reason: `Found Cursor tool: ${cursorTools[0]}` 
+            };
+        }
+    }
+    
+    // Method 3: Check user-agent for cursor mentions
+    const userAgent = req.headers?.['user-agent'] || '';
+    if (userAgent.toLowerCase().includes('cursor')) {
+        return { isCursor: true, confidence: 'medium', reason: 'User-agent contains cursor' };
+    }
+    
+    return { isCursor: false, confidence: 'high', reason: 'No Cursor indicators found' };
+}
+
+/**
+ * Get tools to inject based on client type
+ * - Cursor: Only inject rag_search (complementary semantic search)
+ * - Other clients: Inject all middleware tools
+ * @param {boolean} isCursor - Whether the client is Cursor
+ * @param {boolean} hasExistingTools - Whether the request already has tools
+ * @returns {Array} Array of tool definitions to inject
+ */
+function getToolsToInject(isCursor, hasExistingTools) {
+    if (isCursor) {
+        // Cursor has its own file reading/search tools
+        // Only inject rag_search for semantic codebase search
+        return [MIDDLEWARE_TOOLS.rag_search];
+    }
+    
+    // For other clients (Continue, etc.): inject all middleware tools
+    // This enables RAG search, file reading, and summaries
+    return Object.values(MIDDLEWARE_TOOLS);
+}
+
 /**
  * Execute a custom middleware tool
  * @param {string} toolName - Name of the tool to execute
@@ -4276,26 +4361,50 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         }
         
         // =========================
-        // Tool Calling Support
+        // Smart Tool Injection with Client Detection
         // =========================
-        const hasToolCalls = requestTools && Array.isArray(requestTools) && requestTools.length > 0;
-        let toolsToUse = requestTools || [];
+        const clientDetection = detectClient(req, requestTools);
+        const hasExistingTools = requestTools && Array.isArray(requestTools) && requestTools.length > 0;
+        let toolsToUse = requestTools ? [...requestTools] : [];
         let workingMessages = [...messages];
+        let toolChoiceToUse = tool_choice;
         
-        // If tools are requested, we use a different flow that preserves message structure
-        if (hasToolCalls) {
-            console.log(`[Tools] Request includes ${requestTools.length} tools, tool_choice: ${tool_choice || 'auto'}`);
-            
-            // Inject middleware tools if not already present
-            const middlewareToolDefs = getMiddlewareToolDefinitions();
-            const existingToolNames = new Set(toolsToUse.map(t => t.function?.name));
-            for (const mwTool of middlewareToolDefs) {
-                if (!existingToolNames.has(mwTool.function.name)) {
-                    toolsToUse.push(mwTool);
-                }
+        // Log client detection
+        console.log(`[Tools] Client detection: isCursor=${clientDetection.isCursor}, confidence=${clientDetection.confidence}, reason="${clientDetection.reason}"`);
+        
+        // Determine which middleware tools to inject
+        const toolsToInject = getToolsToInject(clientDetection.isCursor, hasExistingTools);
+        const existingToolNames = new Set(toolsToUse.map(t => t.function?.name));
+        
+        // Inject middleware tools that aren't already present
+        let injectedCount = 0;
+        for (const mwTool of toolsToInject) {
+            if (!existingToolNames.has(mwTool.function.name)) {
+                toolsToUse.push(mwTool);
+                injectedCount++;
             }
+        }
+        
+        // For clients without tools (like Continue), we now have tools to offer
+        const hasToolCalls = toolsToUse.length > 0;
+        
+        if (injectedCount > 0) {
+            const injectedNames = toolsToInject.map(t => t.function.name).join(', ');
+            console.log(`[Tools] Injected ${injectedCount} middleware tool(s): ${injectedNames}`);
             
-            // Process any pending tool calls from previous messages
+            // For clients that didn't send tools, set tool_choice to auto
+            if (!hasExistingTools) {
+                toolChoiceToUse = 'auto';
+                console.log(`[Tools] Set tool_choice to 'auto' for client without existing tools`);
+            }
+        }
+        
+        if (hasExistingTools) {
+            console.log(`[Tools] Request includes ${requestTools.length} client tools + ${injectedCount} middleware tools`);
+        }
+        
+        // Process any pending tool calls from previous messages
+        if (hasToolCalls) {
             const { processedMessages, toolResults } = await processToolCallMessages(workingMessages);
             if (toolResults.length > 0) {
                 console.log(`[Tools] Processed ${toolResults.length} middleware tool calls`);
@@ -4390,14 +4499,23 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
         
         // Check if this is a tool-calling request - preserve message structure
         if (hasToolCalls) {
+            // Build tool awareness prompt for injected tools
+            const injectedToolNames = toolsToInject.map(t => t.function.name);
+            const toolAwarenessPrompt = injectedCount > 0 
+                ? `\n\nYou have access to the following tools:\n${injectedToolNames.map(name => {
+                    const tool = MIDDLEWARE_TOOLS[name];
+                    return `- ${name}: ${tool?.function?.description || 'No description'}`;
+                }).join('\n')}\n\nUse these tools when appropriate to help answer questions about the codebase.`
+                : '';
+            
             // For tool calls: preserve full message structure including tool_calls and tool responses
             // Only inject RAG context into system message if one exists
             const existingSystem = workingMessages.find(m => m.role === 'system');
             if (existingSystem) {
-                // Enhance existing system message with RAG context
+                // Enhance existing system message with RAG context and tool awareness
                 enhancedMessages.push({
                     ...existingSystem,
-                    content: existingSystem.content + '\n\n--- Codebase Context ---\n' + composedPrompt
+                    content: existingSystem.content + toolAwarenessPrompt + '\n\n--- Codebase Context ---\n' + composedPrompt
                 });
                 // Add rest of messages (excluding the system we just modified)
                 for (const msg of workingMessages) {
@@ -4406,10 +4524,10 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                     }
                 }
             } else {
-                // No system message - prepend one with context
+                // No system message - prepend one with context and tool awareness
                 enhancedMessages.push({
                     role: 'system',
-                    content: 'You are a coding assistant with access to tools. Use the provided codebase context.\n\n--- Codebase Context ---\n' + composedPrompt
+                    content: `You are a coding assistant with access to tools. Use the provided codebase context and tools when helpful.${toolAwarenessPrompt}\n\n--- Codebase Context ---\n` + composedPrompt
                 });
                 enhancedMessages.push(...workingMessages);
             }
@@ -4477,7 +4595,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                 messages: enhancedMessages,
                 temperature,
                 stream: true,
-                ...(hasToolCalls ? { tools: toolsToUse, tool_choice: tool_choice || 'auto' } : {}),
+                ...(hasToolCalls ? { tools: toolsToUse, tool_choice: toolChoiceToUse || 'auto' } : {}),
                 ...rest,
             };
             
@@ -4581,7 +4699,7 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
                 temperature,
                 stream: false,
                 tools: toolsToUse,
-                tool_choice: tool_choice || 'auto',
+                tool_choice: toolChoiceToUse || 'auto',
                 ...rest,
             };
             completionResponse = await proxyChatCompletion(nonStreamPayload, null);
