@@ -21,9 +21,9 @@ function normalizeModelId(id) {
     // For modelKeys with publisher prefix (e.g., qwen/qwen3-8b), keep it
     // Only strip for legacy IDs
     if (!s.includes('/')) {
-        s = s.replace(/\.gguf$/, '');
-        s = s.replace(/^text-embedding-/, '');
-        s = s.replace(/-gguf$/, '');
+    s = s.replace(/\.gguf$/, '');
+    s = s.replace(/^text-embedding-/, '');
+    s = s.replace(/-gguf$/, '');
     }
     return s;
 }
@@ -271,7 +271,7 @@ async function openModel(modelOrId, options = {}) {
     const { identifier, loadName } = resolveModelNames(modelOrId);
     const modelName = loadName || identifier;
     const requestId = generateRequestId();
-    
+
     // Get role-specific settings if provided
     const { role, gpu, contextLength } = options;
 
@@ -326,8 +326,8 @@ async function openModel(modelOrId, options = {}) {
             console.log(`[LM Studio Load] Model already loaded: ${modelName}`);
         } else {
             console.error(`[LM Studio Load] Failed to load model ${modelName}:`, errorMsg);
-            throw loadError;
-        }
+        throw loadError;
+    }
     }
 
     // Wait for model to be fully loaded
@@ -758,12 +758,19 @@ async function ensurePresetModelsLoaded(presetName) {
         console.log(`[LM Studio] Using rolling summarizer: ${rollingSummarizerId}`);
     }
 
-    // Main model - can come from new role-based options or old format
+    // Main model - priority: user selection > preset options > default
     let mainModelId = null;
 
-    // First try the new role-based main options if they exist
-    if (preset.mainOptions && preset.mainOptions.length > 0) {
-        mainModelId = preset.mainOptions[0]; // Use first option
+    // First check for user selections in config (highest priority)
+    const userSelectedMain = config.models?.perQualityMainModels?.[presetName];
+    if (userSelectedMain) {
+        mainModelId = userSelectedMain;
+        console.log(`[LM Studio] Using user-selected main model for ${presetName}: ${mainModelId}`);
+    }
+    // Then try the new role-based main options if they exist
+    else if (preset.mainOptions && preset.mainOptions.length > 0) {
+        mainModelId = preset.mainOptions[0]; // Use first/best option
+        console.log(`[LM Studio] Using first main model option from preset: ${mainModelId}`);
     }
 
     if (mainModelId) {
@@ -773,7 +780,6 @@ async function ensurePresetModelsLoaded(presetName) {
             presetId: mainModelId,
             loadOptions: getRoleDefaults('main')
         });
-        console.log(`[LM Studio] Using main model from preset: ${mainModelId}`);
     }
 
     // Resolve all preset IDs to actual LM Studio modelKeys
@@ -839,7 +845,7 @@ async function ensurePresetModelsLoaded(presetName) {
             if (unloadResult?.locked) {
                 result.kept.push(modelId);
             } else {
-                result.unloaded.push(modelId);
+            result.unloaded.push(modelId);
             }
         } catch (error) {
             console.warn(`[LM Studio] Failed to unload ${modelId}:`, error.message);

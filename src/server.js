@@ -3714,15 +3714,36 @@ async function handleChatCompletions(req, res, pathLabel = '/v1/chat/completions
             console.warn('[Summary] Context fitting failed, using original messages:', summaryError?.message || summaryError);
         }
 
-        // Call main model with enhanced context
-        // Always use the configured main model - ignore whatever Cursor sends
-        // This ensures we use the model that's actually loaded in LM Studio
-        const mainModel = getModelConfig('main').identifier;
-        const modelToUse = mainModel;
-        
+        // Determine which model to use based on active preset
+        let modelToUse;
+        const config = getConfig();
+        const activePreset = config.models?.activePreset;
+
+        if (activePreset === 'custom') {
+            // Use custom preset selection
+            modelToUse = config.models?.customPreset?.main || config.models?.main?.identifier;
+        } else if (activePreset && ['high', 'medium', 'low'].includes(activePreset)) {
+            // Use quality preset selection
+            const presetModel = config.models?.perQualityMainModels?.[activePreset];
+            if (presetModel) {
+                modelToUse = presetModel;
+            } else {
+                // Fall back to default main model
+                modelToUse = config.models?.main?.identifier;
+            }
+        } else {
+            // No preset or unknown preset, use default main model
+            modelToUse = config.models?.main?.identifier;
+        }
+
+        // Ensure we have a valid model
+        if (!modelToUse) {
+            modelToUse = getModelConfig('main').identifier;
+        }
+
         // Log if Cursor requested a different model (for debugging)
-        if (requestedModel && requestedModel !== mainModel) {
-            console.log(`[Server] Cursor requested model '${requestedModel}', using configured main model '${mainModel}'`);
+        if (requestedModel && requestedModel !== modelToUse) {
+            console.log(`[Server] Cursor requested model '${requestedModel}', using selected model '${modelToUse}'`);
         }
         
         if (stream) {
