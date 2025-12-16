@@ -53,12 +53,12 @@
     },
     "perQualityMainModels": {
       "high": "llama-3.1-nemotron-70b-instruct-hf@q2_k_l",
-      "medium": "qwen2.5-coder-0.5b-instruct",
+      "medium": "qwen/qwen3-8b",
       "low": "qwen/qwen3-4b-2507"
     },
     "perQualityRollingSummarizers": {
       "high": "mistral-7b-instruct-v0.3",
-      "medium": "qwen2.5-coder-0.5b-instruct",
+      "medium": "mistral-7b-instruct-v0.3",
       "low": "tinyllama-1.1b-chat-v1.0"
     }
   },
