@@ -2405,23 +2405,164 @@ app.get('/models/available', async (req, res) => {
         const { models } = await syncModels();
         console.log('[API] /models/available returning', models.length, 'models');
         
-        // Format for frontend consumption
+        // Format for frontend consumption with full capability info
         const formatted = models.map(m => ({
             id: m.modelKey,
             modelKey: m.modelKey,
             name: m.displayName || m.modelKey,
             sizeGB: m.sizeGB,
+            paramsString: m.paramsString,
+            paramSize: m.paramSize,
+            
+            // Capability info
             trainedForToolUse: m.trainedForToolUse || false,
             maxContextLength: m.maxContextLength,
+            capabilities: m.capabilities,
+            
+            // Agentic info
+            agenticScore: m.agenticScore,
+            roleBadge: m.roleBadge, // 'agentic', 'toolUse', 'chat', 'summarizer', 'embedder'
+            agenticViable: m.agenticViable,
+            agenticViableReason: m.agenticViableReason,
+            
+            // Quantization info
+            quantQuality: m.quantQuality,
+            quantLabel: m.quantLabel,
+            quantBits: m.quantBits,
+            reliableForTools: m.reliableForTools,
+            
+            // Classification
             type: m.function, // 'main', 'summarizer', 'embedder'
             tiers: m.tiers,
-            architecture: m.architecture
+            architecture: m.architecture,
+            vision: m.vision || false
         }));
         
         res.json({ status: 'ok', models: formatted, count: formatted.length });
     } catch (error) {
         console.error('[API] Failed to get available models:', error.message);
         res.status(500).json({ error: 'Failed to get available models', details: error.message });
+    }
+});
+
+/**
+ * GET /models/capabilities/:id - Get detailed capabilities for a specific model
+ */
+app.get('/models/capabilities/:id(*)', async (req, res) => {
+    try {
+        const modelId = decodeURIComponent(req.params.id);
+        const { syncModels, getModelByKey, QUANT_QUALITY } = require('./lmstudio/model_sync.js');
+        
+        // Ensure models are synced
+        await syncModels();
+        const model = await getModelByKey(modelId);
+        
+        if (!model) {
+            return res.status(404).json({ error: 'Model not found', modelId });
+        }
+        
+        // Badge definitions for frontend
+        const BADGE_DEFINITIONS = {
+            agentic: { icon: '🤖', label: 'Agentic', color: 'green', description: 'Full tool calling support with reliable execution' },
+            toolUse: { icon: '🔧', label: 'Tool Use', color: 'blue', description: 'Has tool calling but may have limitations' },
+            chat: { icon: '💬', label: 'Chat', color: 'gray', description: 'Good for chat but no tool support' },
+            summarizer: { icon: '📊', label: 'Summarizer', color: 'purple', description: 'Optimized for summarization tasks' },
+            embedder: { icon: '🧮', label: 'Embedder', color: 'orange', description: 'Embedding model only' },
+            vision: { icon: '👁️', label: 'Vision', color: 'cyan', description: 'Can process images' },
+            longContext: { icon: '📜', label: 'Long Context', color: 'teal', description: '32K+ context window' },
+            fast: { icon: '⚡', label: 'Fast', color: 'yellow', description: 'Small and fast model' }
+        };
+        
+        res.json({
+            status: 'ok',
+            modelId: model.modelKey,
+            displayName: model.displayName,
+            
+            // Size info
+            sizeGB: model.sizeGB,
+            paramsString: model.paramsString,
+            paramSize: model.paramSize,
+            
+            // Primary badge
+            roleBadge: model.roleBadge,
+            roleBadgeInfo: BADGE_DEFINITIONS[model.roleBadge],
+            
+            // Agentic assessment
+            agenticScore: model.agenticScore,
+            agenticViable: model.agenticViable,
+            agenticViableReason: model.agenticViableReason,
+            
+            // Quantization
+            quantization: {
+                bits: model.quantBits,
+                label: model.quantLabel,
+                quality: model.quantQuality,
+                reliableForTools: model.reliableForTools,
+                allTiers: QUANT_QUALITY
+            },
+            
+            // Capabilities
+            capabilities: model.capabilities,
+            trainedForToolUse: model.trainedForToolUse,
+            vision: model.vision,
+            maxContextLength: model.maxContextLength,
+            
+            // Classification
+            function: model.function,
+            tiers: model.tiers,
+            
+            // Badge definitions for frontend to render
+            badgeDefinitions: BADGE_DEFINITIONS,
+            
+            // Tool availability
+            toolsAvailable: 9, // Current middleware tools count
+            toolsSupported: model.agenticViable
+        });
+    } catch (error) {
+        console.error('[API] Failed to get model capabilities:', error.message);
+        res.status(500).json({ error: 'Failed to get model capabilities', details: error.message });
+    }
+});
+
+/**
+ * GET /models/agentic - Get only agentic-viable models (for main model selection)
+ */
+app.get('/models/agentic', async (req, res) => {
+    try {
+        const { syncModels } = require('./lmstudio/model_sync.js');
+        const { models } = await syncModels();
+        
+        // Filter to only agentic-viable models
+        const agenticModels = models.filter(m => m.agenticViable);
+        
+        // Sort by agentic score descending
+        agenticModels.sort((a, b) => (b.agenticScore || 0) - (a.agenticScore || 0));
+        
+        const formatted = agenticModels.map(m => ({
+            id: m.modelKey,
+            modelKey: m.modelKey,
+            name: m.displayName || m.modelKey,
+            sizeGB: m.sizeGB,
+            paramsString: m.paramsString,
+            agenticScore: m.agenticScore,
+            roleBadge: m.roleBadge,
+            quantLabel: m.quantLabel,
+            quantBits: m.quantBits,
+            maxContextLength: m.maxContextLength,
+            trainedForToolUse: m.trainedForToolUse,
+            vision: m.vision
+        }));
+        
+        res.json({ 
+            status: 'ok', 
+            models: formatted, 
+            count: formatted.length,
+            totalModels: models.length,
+            description: 'Models suitable for agentic/tool-calling tasks (Q4+ with tool support)'
+        });
+    } catch (error) {
+        console.error('[API] Failed to get agentic models:', error.message);
+        res.status(500).json({ error: 'Failed to get agentic models', details: error.message });
     }
 });
 

@@ -157,6 +157,131 @@ function determineModelTiers(model) {
 }
 
 /**
+ * Quantization quality tiers
+ */
+const QUANT_QUALITY = {
+    8: { tier: 'excellent', minBits: 8, label: 'Q8', reliable: true },
+    6: { tier: 'very_good', minBits: 6, label: 'Q6', reliable: true },
+    5: { tier: 'good', minBits: 5, label: 'Q5', reliable: true },
+    4: { tier: 'acceptable', minBits: 4, label: 'Q4', reliable: true },
+    3: { tier: 'degraded', minBits: 3, label: 'Q3', reliable: false },
+    2: { tier: 'poor', minBits: 2, label: 'Q2', reliable: false },
+    1: { tier: 'very_poor', minBits: 1, label: 'Q1', reliable: false }
+};
+
+/**
+ * Get quantization quality info
+ * @param {object} model - Model object
+ * @returns {object} Quantization quality info
+ */
+function getQuantQuality(model) {
+    const bits = model.quantization?.bits || 4;
+    const quality = QUANT_QUALITY[bits] || QUANT_QUALITY[4];
+    return {
+        bits,
+        ...quality,
+        isReliableForTools: bits >= 4
+    };
+}
+
+/**
+ * Calculate agentic score (0-100)
+ * Higher = better for agentic/tool-calling tasks
+ * @param {object} model - Model object
+ * @returns {number} Score 0-100
+ */
+function calculateAgenticScore(model) {
+    let score = 0;
+    
+    // Tool use support is critical (40 points)
+    if (model.trainedForToolUse) score += 40;
+    
+    // Quantization quality (25 points max)
+    const bits = model.quantization?.bits || 4;
+    if (bits >= 6) score += 25;
+    else if (bits >= 5) score += 20;
+    else if (bits >= 4) score += 15;
+    else if (bits >= 3) score += 5;
+    // Q2 and below get 0 points
+    
+    // Context length (20 points max)
+    const ctx = model.maxContextLength || 4096;
+    if (ctx >= 32768) score += 20;
+    else if (ctx >= 16384) score += 15;
+    else if (ctx >= 8192) score += 10;
+    else if (ctx >= 4096) score += 5;
+    
+    // Model size for reasoning capability (15 points max)
+    const params = parseParamSize(model.paramsString);
+    if (params >= 30) score += 15;
+    else if (params >= 13) score += 12;
+    else if (params >= 7) score += 10;
+    else if (params >= 3) score += 5;
+    
+    return Math.min(100, score);
+}
+
+/**
+ * Determine model's role badge
+ * @param {object} model - Model object
+ * @returns {string} Role badge: 'agentic', 'toolUse', 'chat', 'summarizer', 'embedder'
+ */
+function getModelRoleBadge(model) {
+    // Embedding models
+    if (model.type === 'embedding') return 'embedder';
+    
+    const agenticScore = calculateAgenticScore(model);
+    const quantBits = model.quantization?.bits || 4;
+    
+    // Full agentic: tool support + good quant + good context
+    if (model.trainedForToolUse && quantBits >= 4 && agenticScore >= 70) {
+        return 'agentic';
+    }
+    
+    // Has tool use but limited (low quant or context)
+    if (model.trainedForToolUse && quantBits >= 4) {
+        return 'toolUse';
+    }
+    
+    // Small/fast models good for summarization
+    const params = parseParamSize(model.paramsString);
+    if (params > 0 && params <= 3) {
+        return 'summarizer';
+    }
+    
+    // Default to chat
+    return 'chat';
+}
+
+/**
+ * Check if model is suitable for main/agentic role
+ * @param {object} model - Model object
+ * @returns {{suitable: boolean, reason: string}}
+ */
+function isAgenticViable(model) {
+    const quantBits = model.quantization?.bits || 4;
+    const ctx = model.maxContextLength || 4096;
+    
+    if (model.type === 'embedding') {
+        return { suitable: false, reason: 'Embedding model cannot be used for chat' };
+    }
+    
+    if (!model.trainedForToolUse) {
+        return { suitable: false, reason: 'Model not trained for tool use' };
+    }
+    
+    if (quantBits < 4) {
+        return { suitable: false, reason: `Quantization too low (Q${quantBits}) - unreliable for tool calling` };
+    }
+    
+    if (ctx < 8192) {
+        return { suitable: false, reason: 'Context too small for agentic tasks' };
+    }
+    
+    return { suitable: true, reason: 'Model is suitable for agentic tasks' };
+}
+
+/**
  * Generate capability badges for a model
  * @param {object} model - Model from LM Studio
  * @returns {string[]} Array of capability badge keys
@@ -168,7 +293,12 @@ function getModelCapabilities(model) {
     if (model.vision) capabilities.push('vision');
     if (model.maxContextLength > 32768) capabilities.push('longContext');
     if (model.type === 'embedding') capabilities.push('embedding');
-    if (model.quantization?.bits >= 6) capabilities.push('highQuality');
+    
+    // Quantization quality
+    const bits = model.quantization?.bits || 4;
+    if (bits >= 6) capabilities.push('highQuality');
+    else if (bits >= 4) capabilities.push('goodQuality');
+    else capabilities.push('lowQuality');
     
     // Check if it's a small/fast model
     const params = parseFloat(model.paramsString) || 0;
@@ -199,6 +329,10 @@ function categorizeModel(model) {
     const tiers = determineModelTiers(model);
     const capabilities = getModelCapabilities(model);
     const paramSize = parseParamSize(model.paramsString);
+    const agenticScore = calculateAgenticScore(model);
+    const roleBadge = getModelRoleBadge(model);
+    const quantQuality = getQuantQuality(model);
+    const agenticViability = isAgenticViable(model);
     
     return {
         // Core identification - modelKey is the canonical ID
@@ -210,6 +344,18 @@ function categorizeModel(model) {
         function: func,
         tiers,
         capabilities,
+        
+        // Agentic/capability info
+        agenticScore,
+        roleBadge, // 'agentic', 'toolUse', 'chat', 'summarizer', 'embedder'
+        agenticViable: agenticViability.suitable,
+        agenticViableReason: agenticViability.reason,
+        
+        // Quantization quality
+        quantQuality: quantQuality.tier,
+        quantLabel: quantQuality.label,
+        quantBits: quantQuality.bits,
+        reliableForTools: quantQuality.isReliableForTools,
         
         // Size info
         sizeGB: Math.round(sizeGB * 100) / 100,
@@ -371,6 +517,12 @@ module.exports = {
     getRoleDefaults,
     getAllRoleDefaults,
     invalidateSyncCache,
-    ROLE_DEFAULTS
+    ROLE_DEFAULTS,
+    // New agentic/capability functions
+    calculateAgenticScore,
+    getModelRoleBadge,
+    isAgenticViable,
+    getQuantQuality,
+    QUANT_QUALITY
 };
 

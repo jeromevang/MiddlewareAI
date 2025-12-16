@@ -4,9 +4,10 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Download, Loader2, HardDrive, Info, Star, Lock, Unlock } from "lucide-react";
+import { Check, Download, Loader2, HardDrive, Info, Star, Lock, Unlock, AlertTriangle } from "lucide-react";
 import { getModelDisplayName } from './model-config/constants';
 import { getModelStatus, getModelLocks, toggleModelLock } from "../../lib/api";
+import { ModelCapabilityBadges, RoleBadge, AgenticWarning } from "../ui/ModelCapabilityBadges";
 
 interface MainModelSelectorProps {
   quality: 'high' | 'medium' | 'low';
@@ -44,6 +45,23 @@ export function MainModelSelector({
     queryKey: ['modelLocks'],
     queryFn: getModelLocks,
     staleTime: 5000,
+  });
+
+  // Fetch available models with capabilities
+  const { data: availableModelsData } = useQuery({
+    queryKey: ['availableModels'],
+    queryFn: async () => {
+      const response = await fetch('/models/available');
+      if (!response.ok) throw new Error('Failed to fetch models');
+      return response.json();
+    },
+    staleTime: 60000,
+  });
+
+  // Map of model ID to capability info
+  const modelCapabilities: Record<string, any> = {};
+  (availableModelsData?.models || []).forEach((m: any) => {
+    modelCapabilities[m.modelKey] = m;
   });
 
   // Mutation for toggling lock state
@@ -132,65 +150,82 @@ export function MainModelSelector({
           const available = isModelAvailable(modelId);
           const downloading = isModelDownloading(modelId);
           const isSelected = selectedModel === modelId;
-          const { stars, label } = getStarRating(modelId);
+          const capabilities = modelCapabilities[modelId] || {};
+          const isAgentic = capabilities.agenticViable;
+          const showWarning = role === 'main' && !isAgentic && available;
 
           return (
             <div key={modelId} className="space-y-2">
               <div
-                className={`flex items-center justify-between p-3 rounded-lg border transition-all ${
+                className={`flex flex-col gap-2 p-3 rounded-lg border transition-all ${
                   isSelected
                     ? 'border-cyan-400 bg-cyan-400/10'
+                    : showWarning
+                    ? 'border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/10 cursor-pointer'
                     : available
                     ? 'border-white/20 bg-white/5 hover:bg-white/10 cursor-pointer'
                     : 'border-amber-500/20 bg-amber-500/5 hover:bg-amber-500/10 cursor-pointer'
                 }`}
                 onClick={() => available ? onSelect(modelId) : onModelDownload(modelId)}
               >
-                <div className="flex items-center gap-3">
-                  {/* Status indicators */}
-                  <div className="flex flex-col gap-1">
-                    {(() => {
-                      if (isSelected) {
-                        return <Check className="h-4 w-4 text-green-400 flex-shrink-0" />;
-                      } else if (available) {
-                        return <div className="h-4 w-4 flex-shrink-0" />;
-                      } else if (downloading) {
-                        return <Loader2 className="h-4 w-4 text-amber-400 animate-spin flex-shrink-0" />;
-                      } else {
-                        return <Download className="h-4 w-4 text-amber-400 flex-shrink-0" />;
-                      }
-                    })()}
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {/* Status indicators */}
+                    <div className="flex flex-col gap-1">
+                      {(() => {
+                        if (isSelected) {
+                          return <Check className="h-4 w-4 text-green-400 flex-shrink-0" />;
+                        } else if (available) {
+                          return <div className="h-4 w-4 flex-shrink-0" />;
+                        } else if (downloading) {
+                          return <Loader2 className="h-4 w-4 text-amber-400 animate-spin flex-shrink-0" />;
+                        } else {
+                          return <Download className="h-4 w-4 text-amber-400 flex-shrink-0" />;
+                        }
+                      })()}
 
-                    {/* Loaded indicator */}
-                    {isModelLoaded(modelId) && (
-                      <div className="h-2 w-2 bg-green-500 rounded-full flex-shrink-0" title="Loaded in LM Studio" />
-                    )}
-                  </div>
-
-                  <div className="flex-1">
-                    <div className={`text-sm font-medium ${available ? 'text-white' : 'text-white/60'}`}>
-                      {getModelDisplayName(modelId)}
+                      {/* Loaded indicator */}
+                      {isModelLoaded(modelId) && (
+                        <div className="h-2 w-2 bg-green-500 rounded-full flex-shrink-0" title="Loaded in LM Studio" />
+                      )}
                     </div>
-                    <div className="text-xs text-white/50">
-                      {modelId.split('/')[0]}
+
+                    <div className="flex-1">
+                      <div className={`text-sm font-medium ${available ? 'text-white' : 'text-white/60'}`}>
+                        {getModelDisplayName(modelId)}
+                      </div>
+                      <div className="text-xs text-white/50">
+                        {modelId.split('/')[0]}
+                      </div>
                     </div>
                   </div>
 
-                  {/* Star rating */}
-                  <div className="flex items-center gap-1">
-                    {[...Array(5)].map((_, i) => (
-                      <Star
-                        key={i}
-                        className={`h-3 w-3 ${
-                          i < stars ? 'text-yellow-400 fill-yellow-400' : 'text-white/20'
-                        }`}
-                      />
-                    ))}
-                    <span className="text-xs text-white/60 ml-1">{label}</span>
-                  </div>
+                  {/* Warning for non-agentic main models */}
+                  {showWarning && (
+                    <AlertTriangle className="h-4 w-4 text-amber-400 flex-shrink-0" title={capabilities.agenticViableReason} />
+                  )}
                 </div>
 
-                <div className="flex items-center gap-2">
+                {/* Capability badges - show if we have capability data */}
+                {Object.keys(capabilities).length > 0 && (
+                  <ModelCapabilityBadges 
+                    model={capabilities} 
+                    compact 
+                    showScore={role === 'main'}
+                    showContext={role === 'main'}
+                  />
+                )}
+
+                {/* Warning message for non-agentic models selected as main */}
+                {showWarning && isSelected && (
+                  <div className="text-xs text-amber-400 flex items-center gap-1.5 mt-1">
+                    <AlertTriangle className="h-3 w-3" />
+                    {capabilities.agenticViableReason || 'May not work well for tool calling'}
+                  </div>
+                )}
+
+                {/* Action buttons row */}
+                <div className="flex items-center justify-end gap-2 mt-1">
                   {/* Lock button - prevents removal from presets */}
                   {available && (
                     <button
