@@ -59,7 +59,7 @@
     "perQualityRollingSummarizers": {
       "high": "mistral-7b-instruct-v0.3",
       "medium": "mistral-7b-instruct-v0.3",
-      "low": "qwen2.5-coder-0.5b-instruct"
+      "low": "tinyllama-1.1b-chat-v1.0"
     }
   },
   "processing": {

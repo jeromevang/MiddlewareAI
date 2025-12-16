@@ -227,6 +227,28 @@ export default function ModelConfigPanel() {
     },
   });
 
+  // Handle preset selection - ACTUALLY LOADS THE MODELS
+  const loadPresetMutation = useMutation({
+    mutationFn: async (preset: 'high' | 'medium' | 'low' | 'custom') => {
+      console.log(`[Preset] Loading preset: ${preset}`);
+      const res = await fetch(`/lmstudio/models/load-preset/${preset}`, { method: 'POST' });
+      if (!res.ok) {
+        const error = await res.text();
+        throw new Error(error || 'Failed to load preset');
+      }
+      return res.json();
+    },
+    onSuccess: (result, preset) => {
+      console.log(`[Preset] Successfully loaded ${preset}:`, result);
+      queryClient.invalidateQueries({ queryKey: ['modelStatus'] });
+      queryClient.invalidateQueries({ queryKey: ['status'] });
+    },
+    onError: (err) => {
+      console.error('[Preset] Failed to load preset:', err);
+      alert(`Failed to load preset: ${err.message}`);
+    },
+  });
+
   // RAG Tier Change Handlers
   const handleTierChange = (newTier: RagTier) => {
     if (newTier === ragTier) return;
@@ -404,7 +426,11 @@ export default function ModelConfigPanel() {
                       }`}
                       onClick={() => {
                         setQuality(key);
-                        // Temporarily disabled automatic RAG tier changes to prevent model loading issues
+                        // ACTUALLY LOAD THE PRESET MODELS IN LM STUDIO
+                        if (key !== 'custom') {
+                          loadPresetMutation.mutate(key as 'high' | 'medium' | 'low');
+                        }
+                        // Note: RAG tier changes are separate and require re-indexing
                         // if (!isCustom && key !== quality) {
                         //   // Update RAG tier to match the preset quality
                         //   const ragTierMap = { high: 'high', medium: 'medium', low: 'low' };
@@ -418,7 +444,13 @@ export default function ModelConfigPanel() {
                       <p className="text-sm text-white/70">{meta.description}</p>
 
                       {quality === key && (
-                        <div className="mt-2 text-xs text-green-400 font-semibold">✓ Selected</div>
+                        <div className="mt-2 text-xs font-semibold flex items-center gap-1">
+                          {loadPresetMutation.isPending ? (
+                            <><Loader2 className="w-3 h-3 animate-spin" /> Loading models...</>
+                          ) : (
+                            <span className="text-green-400">✓ Active</span>
+                          )}
+                        </div>
                       )}
                     </div>
                   );
