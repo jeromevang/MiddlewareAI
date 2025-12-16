@@ -4190,6 +4190,85 @@ const MIDDLEWARE_TOOLS = {
                 required: ['package_name']
             }
         }
+    },
+    file_list: {
+        type: 'function',
+        function: {
+            name: 'file_list',
+            description: 'List files and directories in a given path. Returns file names, types (file/directory), and sizes.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: {
+                        type: 'string',
+                        description: 'Directory path relative to workspace root (default: "." for root)'
+                    },
+                    recursive: {
+                        type: 'boolean',
+                        description: 'Whether to list recursively (default: false, max depth: 3)'
+                    },
+                    pattern: {
+                        type: 'string',
+                        description: 'Optional glob pattern to filter files (e.g., "*.js", "**/*.ts")'
+                    }
+                },
+                required: []
+            }
+        }
+    },
+    file_search: {
+        type: 'function',
+        function: {
+            name: 'file_search',
+            description: 'Search for files by name pattern or content. Returns matching file paths.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'Search query - can be a filename pattern (e.g., "*.config.js") or text to search in files'
+                    },
+                    search_content: {
+                        type: 'boolean',
+                        description: 'If true, search inside file contents. If false (default), search filenames only.'
+                    },
+                    file_pattern: {
+                        type: 'string',
+                        description: 'Glob pattern to limit which files to search (e.g., "**/*.ts")'
+                    },
+                    max_results: {
+                        type: 'number',
+                        description: 'Maximum results to return (default: 20)'
+                    }
+                },
+                required: ['query']
+            }
+        }
+    },
+    file_write: {
+        type: 'function',
+        function: {
+            name: 'file_write',
+            description: 'Write or create a file in the workspace. Use with caution - will overwrite existing files. Only works within workspace directory.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    path: {
+                        type: 'string',
+                        description: 'File path relative to workspace root'
+                    },
+                    content: {
+                        type: 'string',
+                        description: 'Content to write to the file'
+                    },
+                    create_dirs: {
+                        type: 'boolean',
+                        description: 'Create parent directories if they don\'t exist (default: true)'
+                    }
+                },
+                required: ['path', 'content']
+            }
+        }
     }
 };
 
@@ -4524,6 +4603,246 @@ async function executeMiddlewareTool(toolName, args) {
                     }
                     console.error('[Tools] npm_info error:', npmError.message);
                     return { success: false, error: `NPM lookup failed: ${npmError.message}` };
+                }
+            }
+            
+            case 'file_list': {
+                const fs = require('fs').promises;
+                const path = require('path');
+                const dirPath = args.path || '.';
+                const recursive = args.recursive || false;
+                const pattern = args.pattern;
+                
+                const fullPath = path.resolve(process.cwd(), dirPath);
+                
+                // Security: ensure path is within workspace
+                if (!fullPath.startsWith(process.cwd())) {
+                    return { success: false, error: 'Path must be within workspace' };
+                }
+                
+                try {
+                    const results = [];
+                    const maxDepth = 3;
+                    
+                    async function listDir(dir, depth = 0) {
+                        if (depth > maxDepth) return;
+                        
+                        const entries = await fs.readdir(dir, { withFileTypes: true });
+                        
+                        for (const entry of entries) {
+                            // Skip hidden files and common ignored directories
+                            if (entry.name.startsWith('.') || 
+                                ['node_modules', 'dist', 'build', '.git', '__pycache__'].includes(entry.name)) {
+                                continue;
+                            }
+                            
+                            const entryPath = path.join(dir, entry.name);
+                            const relativePath = path.relative(process.cwd(), entryPath);
+                            
+                            // Check pattern match if provided
+                            if (pattern) {
+                                const minimatch = require('minimatch');
+                                if (!minimatch(relativePath, pattern, { matchBase: true })) {
+                                    if (!entry.isDirectory()) continue;
+                                }
+                            }
+                            
+                            if (entry.isDirectory()) {
+                                results.push({ name: relativePath, type: 'directory' });
+                                if (recursive) {
+                                    await listDir(entryPath, depth + 1);
+                                }
+                            } else {
+                                try {
+                                    const stats = await fs.stat(entryPath);
+                                    results.push({
+                                        name: relativePath,
+                                        type: 'file',
+                                        size: stats.size,
+                                        modified: stats.mtime.toISOString()
+                                    });
+                                } catch {
+                                    results.push({ name: relativePath, type: 'file' });
+                                }
+                            }
+                        }
+                    }
+                    
+                    await listDir(fullPath);
+                    
+                    // Limit results
+                    const limited = results.slice(0, 100);
+                    return { 
+                        success: true, 
+                        result: {
+                            path: dirPath,
+                            entries: limited,
+                            total: results.length,
+                            truncated: results.length > 100
+                        }
+                    };
+                } catch (listError) {
+                    console.error('[Tools] file_list error:', listError.message);
+                    return { success: false, error: `Failed to list directory: ${listError.message}` };
+                }
+            }
+            
+            case 'file_search': {
+                const fs = require('fs').promises;
+                const path = require('path');
+                const query = args.query;
+                const searchContent = args.search_content || false;
+                const filePattern = args.file_pattern || '**/*';
+                const maxResults = Math.min(args.max_results || 20, 50);
+                
+                if (!query) {
+                    return { success: false, error: 'Query is required' };
+                }
+                
+                try {
+                    const results = [];
+                    const searchRegex = new RegExp(query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+                    
+                    async function searchDir(dir, depth = 0) {
+                        if (depth > 5 || results.length >= maxResults) return;
+                        
+                        let entries;
+                        try {
+                            entries = await fs.readdir(dir, { withFileTypes: true });
+                        } catch {
+                            return;
+                        }
+                        
+                        for (const entry of entries) {
+                            if (results.length >= maxResults) break;
+                            
+                            // Skip hidden and ignored
+                            if (entry.name.startsWith('.') || 
+                                ['node_modules', 'dist', 'build', '.git', '__pycache__', 'coverage'].includes(entry.name)) {
+                                continue;
+                            }
+                            
+                            const entryPath = path.join(dir, entry.name);
+                            const relativePath = path.relative(process.cwd(), entryPath);
+                            
+                            if (entry.isDirectory()) {
+                                await searchDir(entryPath, depth + 1);
+                            } else {
+                                // Check filename match
+                                const filenameMatch = searchRegex.test(entry.name);
+                                
+                                if (searchContent && !filenameMatch) {
+                                    // Search content
+                                    try {
+                                        const content = await fs.readFile(entryPath, 'utf-8');
+                                        if (searchRegex.test(content)) {
+                                            // Find matching lines
+                                            const lines = content.split('\n');
+                                            const matchingLines = [];
+                                            lines.forEach((line, idx) => {
+                                                if (searchRegex.test(line) && matchingLines.length < 3) {
+                                                    matchingLines.push({ line: idx + 1, content: line.trim().slice(0, 100) });
+                                                }
+                                            });
+                                            results.push({ 
+                                                path: relativePath, 
+                                                matchType: 'content',
+                                                matches: matchingLines
+                                            });
+                                        }
+                                    } catch {
+                                        // Skip binary or unreadable files
+                                    }
+                                } else if (filenameMatch) {
+                                    results.push({ path: relativePath, matchType: 'filename' });
+                                }
+                            }
+                        }
+                    }
+                    
+                    await searchDir(process.cwd());
+                    
+                    return { 
+                        success: true, 
+                        result: {
+                            query,
+                            searchContent,
+                            results,
+                            total: results.length
+                        }
+                    };
+                } catch (searchError) {
+                    console.error('[Tools] file_search error:', searchError.message);
+                    return { success: false, error: `Search failed: ${searchError.message}` };
+                }
+            }
+            
+            case 'file_write': {
+                const fs = require('fs').promises;
+                const path = require('path');
+                const filePath = args.path;
+                const content = args.content;
+                const createDirs = args.create_dirs !== false;
+                
+                if (!filePath) {
+                    return { success: false, error: 'Path is required' };
+                }
+                if (content === undefined || content === null) {
+                    return { success: false, error: 'Content is required' };
+                }
+                
+                const fullPath = path.resolve(process.cwd(), filePath);
+                
+                // Security checks
+                if (!fullPath.startsWith(process.cwd())) {
+                    return { success: false, error: 'Path must be within workspace' };
+                }
+                
+                // Block dangerous paths
+                const dangerousPaths = ['.git', 'node_modules', '.env', 'package-lock.json'];
+                if (dangerousPaths.some(p => filePath.includes(p))) {
+                    return { success: false, error: `Cannot write to protected path: ${filePath}` };
+                }
+                
+                // Block dangerous extensions in certain directories
+                const ext = path.extname(filePath).toLowerCase();
+                if (['.exe', '.dll', '.so', '.dylib', '.sh', '.bat', '.cmd', '.ps1'].includes(ext)) {
+                    return { success: false, error: `Cannot write executable files: ${ext}` };
+                }
+                
+                try {
+                    // Create directories if needed
+                    if (createDirs) {
+                        await fs.mkdir(path.dirname(fullPath), { recursive: true });
+                    }
+                    
+                    // Check if file exists
+                    let existed = false;
+                    try {
+                        await fs.access(fullPath);
+                        existed = true;
+                    } catch {
+                        existed = false;
+                    }
+                    
+                    // Write file
+                    await fs.writeFile(fullPath, content, 'utf-8');
+                    
+                    const stats = await fs.stat(fullPath);
+                    
+                    return { 
+                        success: true, 
+                        result: {
+                            path: filePath,
+                            created: !existed,
+                            overwritten: existed,
+                            size: stats.size,
+                            message: existed ? `File overwritten: ${filePath}` : `File created: ${filePath}`
+                        }
+                    };
+                } catch (writeError) {
+                    console.error('[Tools] file_write error:', writeError.message);
+                    return { success: false, error: `Failed to write file: ${writeError.message}` };
                 }
             }
             
