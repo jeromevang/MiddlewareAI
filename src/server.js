@@ -4127,6 +4127,69 @@ const MIDDLEWARE_TOOLS = {
                 required: ['path']
             }
         }
+    },
+    web_search: {
+        type: 'function',
+        function: {
+            name: 'web_search',
+            description: 'Search the web for programming information, documentation, Stack Overflow answers, or general knowledge. Returns relevant search results with titles, snippets, and URLs.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    query: {
+                        type: 'string',
+                        description: 'The search query'
+                    },
+                    num_results: {
+                        type: 'number',
+                        description: 'Number of results to return (default: 5, max: 10)'
+                    }
+                },
+                required: ['query']
+            }
+        }
+    },
+    fetch_url: {
+        type: 'function',
+        function: {
+            name: 'fetch_url',
+            description: 'Fetch and read content from a URL. Great for reading documentation, API docs, GitHub files, or any web page. Returns the text content of the page.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    url: {
+                        type: 'string',
+                        description: 'The URL to fetch'
+                    },
+                    selector: {
+                        type: 'string',
+                        description: 'Optional CSS selector to extract specific content (e.g., "article", ".main-content", "#readme")'
+                    },
+                    max_length: {
+                        type: 'number',
+                        description: 'Maximum characters to return (default: 10000)'
+                    }
+                },
+                required: ['url']
+            }
+        }
+    },
+    npm_info: {
+        type: 'function',
+        function: {
+            name: 'npm_info',
+            description: 'Get information about an npm package including latest version, description, dependencies, and readme excerpt.',
+            parameters: {
+                type: 'object',
+                properties: {
+                    package_name: {
+                        type: 'string',
+                        description: 'The npm package name (e.g., "express", "lodash", "@types/node")'
+                    }
+                },
+                required: ['package_name']
+            }
+        }
     }
 };
 
@@ -4205,13 +4268,18 @@ function detectClient(req, tools = []) {
  */
 function getToolsToInject(isCursor, hasExistingTools) {
     if (isCursor) {
-        // Cursor has its own file reading/search tools
-        // Only inject rag_search for semantic codebase search
-        return [MIDDLEWARE_TOOLS.rag_search];
+        // Cursor has its own file reading/search tools but NOT web search
+        // Inject: rag_search (semantic codebase search), web_search, fetch_url, npm_info
+        return [
+            MIDDLEWARE_TOOLS.rag_search,
+            MIDDLEWARE_TOOLS.web_search,
+            MIDDLEWARE_TOOLS.fetch_url,
+            MIDDLEWARE_TOOLS.npm_info
+        ];
     }
     
     // For other clients (Continue, etc.): inject all middleware tools
-    // This enables RAG search, file reading, and summaries
+    // This enables RAG search, file reading, summaries, and web tools
     return Object.values(MIDDLEWARE_TOOLS);
 }
 
@@ -4278,6 +4346,185 @@ async function executeMiddlewareTool(toolName, args) {
                     };
                 }
                 return { success: false, error: `No summary found for file: ${filePath}` };
+            }
+            
+            case 'web_search': {
+                const query = args.query;
+                const numResults = Math.min(args.num_results || 5, 10);
+                if (!query) {
+                    return { success: false, error: 'Query is required' };
+                }
+                try {
+                    // Use DuckDuckGo HTML search (no API key required)
+                    const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+                    const response = await axios.get(searchUrl, {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        },
+                        timeout: 10000
+                    });
+                    
+                    // Parse results from HTML
+                    const html = response.data;
+                    const results = [];
+                    
+                    // Simple regex parsing for DuckDuckGo results
+                    const resultRegex = /<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>[\s\S]*?<a[^>]*class="result__snippet"[^>]*>([^<]*)/g;
+                    let match;
+                    while ((match = resultRegex.exec(html)) !== null && results.length < numResults) {
+                        const url = match[1];
+                        const title = match[2].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+                        const snippet = match[3].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').trim();
+                        if (url && title) {
+                            results.push({ title, url, snippet });
+                        }
+                    }
+                    
+                    // Fallback: try alternate parsing if no results
+                    if (results.length === 0) {
+                        const altRegex = /<a[^>]*rel="nofollow"[^>]*href="([^"]*)"[^>]*>([^<]*)<\/a>/g;
+                        while ((match = altRegex.exec(html)) !== null && results.length < numResults) {
+                            if (match[1].startsWith('http') && !match[1].includes('duckduckgo.com')) {
+                                results.push({ title: match[2], url: match[1], snippet: '' });
+                            }
+                        }
+                    }
+                    
+                    if (results.length === 0) {
+                        return { success: true, result: { message: 'No results found', query } };
+                    }
+                    
+                    return { success: true, result: { query, results } };
+                } catch (searchError) {
+                    console.error('[Tools] web_search error:', searchError.message);
+                    return { success: false, error: `Search failed: ${searchError.message}` };
+                }
+            }
+            
+            case 'fetch_url': {
+                const url = args.url;
+                const selector = args.selector;
+                const maxLength = args.max_length || 10000;
+                
+                if (!url) {
+                    return { success: false, error: 'URL is required' };
+                }
+                
+                // Validate URL
+                try {
+                    new URL(url);
+                } catch (e) {
+                    return { success: false, error: 'Invalid URL format' };
+                }
+                
+                try {
+                    const response = await axios.get(url, {
+                        headers: {
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+                        },
+                        timeout: 15000,
+                        maxContentLength: 5 * 1024 * 1024 // 5MB max
+                    });
+                    
+                    let content = response.data;
+                    
+                    // If HTML, try to extract text content
+                    if (typeof content === 'string' && content.includes('<html')) {
+                        // Try to use cheerio if available, otherwise basic extraction
+                        try {
+                            const cheerio = require('cheerio');
+                            const $ = cheerio.load(content);
+                            
+                            // Remove script and style elements
+                            $('script, style, nav, footer, header, aside').remove();
+                            
+                            // If selector provided, use it
+                            if (selector) {
+                                const selected = $(selector);
+                                if (selected.length > 0) {
+                                    content = selected.text().trim();
+                                } else {
+                                    content = $('body').text().trim();
+                                }
+                            } else {
+                                // Try common content selectors
+                                const mainContent = $('article, main, .content, .post-content, #content, #readme').first();
+                                if (mainContent.length > 0) {
+                                    content = mainContent.text().trim();
+                                } else {
+                                    content = $('body').text().trim();
+                                }
+                            }
+                            
+                            // Clean up whitespace
+                            content = content.replace(/\s+/g, ' ').replace(/\n\s*\n/g, '\n\n');
+                        } catch (cheerioError) {
+                            // Cheerio not available, basic text extraction
+                            content = content
+                                .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+                                .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+                                .replace(/<[^>]+>/g, ' ')
+                                .replace(/\s+/g, ' ')
+                                .trim();
+                        }
+                    }
+                    
+                    // Truncate if needed
+                    if (content.length > maxLength) {
+                        content = content.slice(0, maxLength) + `\n\n... (truncated, ${content.length - maxLength} chars remaining)`;
+                    }
+                    
+                    return { 
+                        success: true, 
+                        result: { 
+                            url, 
+                            content,
+                            contentLength: content.length
+                        } 
+                    };
+                } catch (fetchError) {
+                    console.error('[Tools] fetch_url error:', fetchError.message);
+                    return { success: false, error: `Fetch failed: ${fetchError.message}` };
+                }
+            }
+            
+            case 'npm_info': {
+                const packageName = args.package_name;
+                if (!packageName) {
+                    return { success: false, error: 'Package name is required' };
+                }
+                
+                try {
+                    // Fetch from npm registry
+                    const registryUrl = `https://registry.npmjs.org/${encodeURIComponent(packageName)}`;
+                    const response = await axios.get(registryUrl, { timeout: 10000 });
+                    const data = response.data;
+                    
+                    const latestVersion = data['dist-tags']?.latest;
+                    const latestInfo = data.versions?.[latestVersion] || {};
+                    
+                    const result = {
+                        name: data.name,
+                        description: data.description,
+                        latestVersion,
+                        license: latestInfo.license || data.license,
+                        homepage: data.homepage,
+                        repository: data.repository?.url,
+                        keywords: (data.keywords || []).slice(0, 10),
+                        dependencies: Object.keys(latestInfo.dependencies || {}).slice(0, 20),
+                        devDependencies: Object.keys(latestInfo.devDependencies || {}).slice(0, 10),
+                        readme: data.readme ? data.readme.slice(0, 2000) + (data.readme.length > 2000 ? '...' : '') : 'No readme available'
+                    };
+                    
+                    return { success: true, result };
+                } catch (npmError) {
+                    if (npmError.response?.status === 404) {
+                        return { success: false, error: `Package '${packageName}' not found on npm` };
+                    }
+                    console.error('[Tools] npm_info error:', npmError.message);
+                    return { success: false, error: `NPM lookup failed: ${npmError.message}` };
+                }
             }
             
             default:
