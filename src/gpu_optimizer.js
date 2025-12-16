@@ -10,7 +10,7 @@
 
 const crypto = require('crypto');
 const { logger } = require('./logger.js');
-const { getGPUInfo, getVRAMUsage, monitorDuringBenchmark, getGPUMetrics } = require('./gpu_monitor.js');
+const { getGPUInfo, getVRAMUsage, getGPUMetrics } = require('./gpu_monitor.js');
 const { getConfig } = require('./config.js');
 
 // In-memory optimization state
@@ -171,11 +171,25 @@ async function runBenchmark(modelId, role, options = {}) {
         logger.warn(`[GPU Optimizer] Warm-up failed for ${modelId}:`, error.message);
     }
     
-    // Start GPU monitoring
-    const monitorPromise = monitorDuringBenchmark(30000, 100); // 30 second max
+    // Run benchmarks with concurrent GPU monitoring
+    // We'll sample GPU during actual inference, not wait for a fixed duration
+    const benchmarkStart = Date.now();
+    let gpuSamples = [];
+    let monitorInterval = null;
     
-    // Run actual benchmarks
-    for (let i = 0; i < benchmarkPrompts; i++) {
+    // Start GPU sampling (using already imported getGPUMetrics)
+    monitorInterval = setInterval(async () => {
+        try {
+            const metrics = await getGPUMetrics();
+            if (metrics.gpuUtilization >= 0) {
+                gpuSamples.push(metrics.gpuUtilization);
+            }
+        } catch (e) { /* ignore */ }
+    }, 200);
+    
+    // Run actual benchmarks (reduced to 2 for speed)
+    const actualBenchmarkCount = Math.min(benchmarkPrompts, 2);
+    for (let i = 0; i < actualBenchmarkCount; i++) {
         try {
             const startTime = Date.now();
             const response = await sendTestCompletion(modelId, testPrompts[i], contextSize);
@@ -194,14 +208,26 @@ async function runBenchmark(modelId, role, options = {}) {
             totalTokens += tokens;
             totalTimeMs += timeMs;
             
-            logger.info(`[GPU Optimizer] Benchmark ${i + 1}/${benchmarkPrompts}: ${tokens} tokens in ${timeMs}ms (${((tokens / timeMs) * 1000).toFixed(1)} t/s)`);
+            logger.info(`[GPU Optimizer] Benchmark ${i + 1}/${actualBenchmarkCount}: ${tokens} tokens in ${timeMs}ms (${((tokens / timeMs) * 1000).toFixed(1)} t/s)`);
         } catch (error) {
             logger.error(`[GPU Optimizer] Benchmark ${i + 1} failed:`, error.message);
         }
     }
     
-    // Get GPU metrics from monitoring
-    const gpuMetrics = await monitorPromise;
+    // Stop GPU monitoring
+    if (monitorInterval) clearInterval(monitorInterval);
+    
+    // Calculate GPU metrics
+    const gpuMetrics = {
+        gpuUtilization: gpuSamples.length > 0 ? {
+            avg: gpuSamples.reduce((a, b) => a + b, 0) / gpuSamples.length,
+            max: Math.max(...gpuSamples),
+            min: Math.min(...gpuSamples)
+        } : { avg: -1, max: -1, min: -1 },
+        vramUsedGB: { avg: 0 }
+    };
+    
+    logger.info(`[GPU Optimizer] Benchmark complete: ${gpuSamples.length} GPU samples, avg: ${gpuMetrics.gpuUtilization.avg.toFixed(1)}%`);
     
     if (results.length === 0) {
         throw new Error('All benchmark attempts failed');
@@ -307,7 +333,8 @@ function estimateTokens(text) {
  */
 async function optimizeSingleModel(model, availableVRAM) {
     const config = getConfig();
-    const maxIterations = config.gpuOptimization?.maxIterationsPerModel || 4;
+    // Reduced to 2 iterations max for speed (smart initial guess usually gets close)
+    const maxIterations = Math.min(config.gpuOptimization?.maxIterationsPerModel || 4, 2);
     
     const { id: modelId, role, sizeGB } = model;
     let currentGPU = calculateInitialGPU(sizeGB, availableVRAM);
