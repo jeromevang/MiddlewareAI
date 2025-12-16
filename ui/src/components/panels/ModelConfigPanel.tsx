@@ -66,6 +66,30 @@ export default function ModelConfigPanel() {
     staleTime: 10000, // 10 seconds
   });
 
+  // Fetch RAG tier configuration from API (single source of truth)
+  const { data: ragTierData } = useQuery({
+    queryKey: ['ragTier'],
+    queryFn: async () => {
+      const response = await fetch('/rag/tier');
+      if (!response.ok) throw new Error('Failed to fetch RAG tier config');
+      return response.json();
+    },
+    staleTime: 30000, // 30 seconds
+  });
+
+  // Build dynamic RAG_TIERS from API data, falling back to hardcoded constants only if API unavailable
+  const dynamicRagTiers = ragTierData?.availableTiers?.reduce((acc: Record<string, any>, tier: any) => {
+    acc[tier.id] = {
+      name: tier.name,
+      description: tier.description,
+      targetGPU: tier.targetGPU,
+      // Use full embedder/ragSummarizer config directly from API
+      embedder: tier.embedder || RAG_TIERS[tier.id as RagTier]?.embedder,
+      ragSummarizer: tier.ragSummarizer || RAG_TIERS[tier.id as RagTier]?.ragSummarizer,
+    };
+    return acc;
+  }, {} as Record<string, any>) || RAG_TIERS;
+
   // Sync quality state from backend when config loads
   useEffect(() => {
     if (configData?.config?.models?.activePreset) {
@@ -311,8 +335,8 @@ export default function ModelConfigPanel() {
               <div className="space-y-4">
                 {/* Tier Selector */}
                 <div className="grid grid-cols-3 gap-2">
-                  {(Object.keys(RAG_TIERS) as RagTier[]).map((tier) => {
-                    const tierConfig = RAG_TIERS[tier];
+                  {(Object.keys(dynamicRagTiers) as RagTier[]).map((tier) => {
+                    const tierConfig = dynamicRagTiers[tier];
                     const isSelected = ragTier === tier;
                     const isPending = pendingTierChange === tier;
 
@@ -344,7 +368,7 @@ export default function ModelConfigPanel() {
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm text-yellow-200">
-                          ⚠️ Change to <strong>{RAG_TIERS[pendingTierChange].name}</strong>?
+                          ⚠️ Change to <strong>{dynamicRagTiers[pendingTierChange]?.name || pendingTierChange}</strong>?
                         </p>
                         <p className="text-xs text-yellow-200/70">
                           This will re-index your entire codebase.
@@ -371,15 +395,15 @@ export default function ModelConfigPanel() {
 
                 {/* Current Tier Models Display */}
                 <div className="mt-4 p-3 bg-white/5 border border-white/10 rounded-lg">
-                  <h4 className="text-sm font-semibold text-white mb-2">Current Configuration ({RAG_TIERS[ragTier].name})</h4>
+                  <h4 className="text-sm font-semibold text-white mb-2">Current Configuration ({dynamicRagTiers[ragTier]?.name || ragTier})</h4>
                   <div className="grid grid-cols-2 gap-3 text-sm">
                     <div>
                       <span className="text-white/60">Embedder:</span>
-                      <span className="ml-2 text-white">{RAG_TIERS[ragTier].embedder.model_name}</span>
+                      <span className="ml-2 text-white">{dynamicRagTiers[ragTier]?.embedder?.model_name || 'Loading...'}</span>
                     </div>
                     <div>
                       <span className="text-white/60">RAG Summarizer:</span>
-                      <span className="ml-2 text-white">{RAG_TIERS[ragTier].ragSummarizer.model_name}</span>
+                      <span className="ml-2 text-white">{dynamicRagTiers[ragTier]?.ragSummarizer?.model_name || 'Loading...'}</span>
                     </div>
                   </div>
                 </div>

@@ -39,7 +39,7 @@
     "note": "RAG pipeline is a closed system. Change tier to adjust quality. Requires re-index."
   },
   "models": {
-    "activePreset": "low",
+    "activePreset": "high",
     "main": {
       "model_name": "qwen/qwen3-4b-2507",
       "identifier": "qwen/qwen3-4b-2507",

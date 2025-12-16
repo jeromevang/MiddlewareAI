@@ -168,6 +168,112 @@ process.on('exit', (code) => {
     });
 });
 
+// =============================================================================
+// CONFIG VALIDATION - Run at startup to catch misconfigurations early
+// =============================================================================
+
+async function validateConfigConsistency() {
+    const issues = [];
+    const warnings = [];
+
+    try {
+        const config = getConfig();
+        const { getRagPipelineConfig, RAG_PIPELINE_TIERS } = require('./rag_pipeline_config.js');
+        const modelsJson = JSON.parse(fs.readFileSync(path.join(__dirname, '../data/models.json'), 'utf-8'));
+
+        // 1. Check if activePreset is valid
+        const activePreset = config.models?.activePreset;
+        if (activePreset && !['high', 'medium', 'low', 'custom'].includes(activePreset)) {
+            issues.push(`Invalid activePreset: "${activePreset}". Must be high/medium/low/custom.`);
+        }
+
+        // 2. Check if RAG tier is valid
+        const ragTier = config.ragPipeline?.tier;
+        if (ragTier && !['high', 'medium', 'low'].includes(ragTier)) {
+            issues.push(`Invalid ragPipeline.tier: "${ragTier}". Must be high/medium/low.`);
+        }
+
+        // 3. Check if saved model selections exist in preset options
+        const presets = modelsJson.presets || {};
+        for (const tier of ['high', 'medium', 'low']) {
+            const savedMain = config.models?.perQualityMainModels?.[tier];
+            const savedRolling = config.models?.perQualityRollingSummarizers?.[tier];
+            const presetOptions = presets[tier]?.mainOptions || [];
+            const rollingSummarizerOptions = presets[tier]?.rollingSummarizerOptions || [];
+
+            if (savedMain && presetOptions.length > 0 && !presetOptions.includes(savedMain)) {
+                warnings.push(`Saved main model for ${tier} ("${savedMain}") not in preset options. Will use first available.`);
+                // Auto-fix: set to first option
+                if (!config.models.perQualityMainModels) config.models.perQualityMainModels = {};
+                config.models.perQualityMainModels[tier] = presetOptions[0];
+            }
+
+            if (savedRolling && rollingSummarizerOptions.length > 0 && !rollingSummarizerOptions.includes(savedRolling)) {
+                warnings.push(`Saved rolling summarizer for ${tier} ("${savedRolling}") not in preset options. Will use first available.`);
+                // Auto-fix: set to first option
+                if (!config.models.perQualityRollingSummarizers) config.models.perQualityRollingSummarizers = {};
+                config.models.perQualityRollingSummarizers[tier] = rollingSummarizerOptions[0];
+            }
+        }
+
+        // 4. Check models.json presets have required rollingSummarizerOptions
+        for (const tier of ['high', 'medium', 'low']) {
+            if (!presets[tier]?.rollingSummarizerOptions || presets[tier].rollingSummarizerOptions.length === 0) {
+                warnings.push(`Preset "${tier}" missing rollingSummarizerOptions. Users won't be able to select rolling summarizers.`);
+            }
+        }
+
+        // 5. Check RAG pipeline models match between rag_pipeline_config.js and models.json
+        for (const tier of ['high', 'medium', 'low']) {
+            const pipelineConfig = getRagPipelineConfig(tier);
+            const presetRagSum = presets[tier]?.ragSummarizer;
+            
+            if (pipelineConfig.ragSummarizer?.identifier && presetRagSum && 
+                pipelineConfig.ragSummarizer.identifier !== presetRagSum) {
+                warnings.push(`RAG summarizer mismatch for ${tier}: rag_pipeline_config.js says "${pipelineConfig.ragSummarizer.identifier}" but models.json says "${presetRagSum}".`);
+            }
+        }
+
+        // Log results
+        if (issues.length > 0) {
+            logger.error('❌ Config validation ERRORS (may cause issues):');
+            issues.forEach(issue => logger.error(`   - ${issue}`));
+        }
+
+        if (warnings.length > 0) {
+            logger.warn('⚠️  Config validation WARNINGS:');
+            warnings.forEach(warning => logger.warn(`   - ${warning}`));
+        }
+
+        if (issues.length === 0 && warnings.length === 0) {
+            logger.info('✅ Config validation passed - all configurations are consistent');
+        }
+
+        // Save auto-fixed config if warnings were found
+        if (warnings.length > 0) {
+            try {
+                updateConfigFile(cfg => {
+                    if (config.models?.perQualityMainModels) {
+                        cfg.models.perQualityMainModels = config.models.perQualityMainModels;
+                    }
+                    if (config.models?.perQualityRollingSummarizers) {
+                        cfg.models.perQualityRollingSummarizers = config.models.perQualityRollingSummarizers;
+                    }
+                    return cfg;
+                });
+                logger.info('✅ Auto-fixed config saved');
+            } catch (e) {
+                logger.warn('Could not save auto-fixed config:', e.message);
+            }
+        }
+
+        return { issues, warnings };
+    } catch (error) {
+        logger.error('Config validation failed:', error.message);
+        return { issues: [`Validation error: ${error.message}`], warnings: [] };
+    }
+}
+
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
@@ -2553,12 +2659,18 @@ app.get('/rag/tier', (req, res) => {
                 indexingSpeed: tierConfig.indexingSpeed,
                 summaryQuality: tierConfig.summaryQuality
             },
-            availableTiers: Object.keys(allTiers).map(key => ({
-                id: key,
-                name: allTiers[key].name,
-                description: allTiers[key].description,
-                targetGPU: allTiers[key].targetGPU
-            })),
+            // Include FULL config for each tier so frontend doesn't need hardcoded fallback
+            availableTiers: Object.keys(allTiers).map(key => {
+                const cfg = allTiers[key];
+                return {
+                    id: key,
+                    name: cfg.name,
+                    description: cfg.description,
+                    targetGPU: cfg.targetGPU,
+                    embedder: cfg.embedder,
+                    ragSummarizer: cfg.ragSummarizer
+                };
+            }),
             locked: true,
             note: 'RAG pipeline is a closed system. Changing tier requires re-indexing.'
         });
@@ -4457,6 +4569,13 @@ function setupWebsocketServer(httpServer) {
 async function start() {
     try {
         await ensureReady();
+
+        // Validate config consistency at startup
+        console.log('[Server] Validating configuration...');
+        const { issues, warnings } = await validateConfigConsistency();
+        if (issues.length > 0) {
+            console.warn('[Server] Config validation found issues - please check logs');
+        }
 
         // Initialize LM Studio and load required models
         console.log('[Server] Initializing LM Studio...');
