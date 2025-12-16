@@ -260,6 +260,15 @@ function updateSystemSettings(settings) {
     return config.system;
 }
 
+/**
+ * Force refresh the config cache from disk.
+ * Use this after external changes to ensure all subsequent getConfig() calls return fresh data.
+ */
+function refreshConfig() {
+    configCache = null;
+    return loadConfig();
+}
+
 module.exports = {
     getConfig,
     getLMStudioConfig,
@@ -273,5 +282,6 @@ module.exports = {
     updateConfigFile,
     getRagPipelineTier,
     setRagPipelineTier,
+    refreshConfig,
 };
 

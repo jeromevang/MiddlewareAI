@@ -30,7 +30,7 @@ const { embedText, summarizeConversation, generateCompletion, proxyChatCompletio
 const { SQLiteCacheManager } = require('./sqlite_cache.js');
 const { FAISSIndexManager } = require('./faiss_storage.js');
 const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js');
-const { getProcessingConfig, getModelConfig, getConfig, getLMStudioConfig, getStorageConfig, getSessionConfig, updateConfigFile } = require('./config.js');
+const { getProcessingConfig, getModelConfig, getConfig, getLMStudioConfig, getStorageConfig, getSessionConfig, updateConfigFile, refreshConfig } = require('./config.js');
 const { getRuntimeMode, isCloudMode, requireModeHealthCheck } = require('./runtime.js');
 const { main: runIndexer } = require('./middleware.js'); // to trigger reindex
 const { getIndexingStatus, initializeIndexingStatusFromDatabase } = require('./indexer/indexer.js');
@@ -2038,6 +2038,9 @@ app.post('/lmstudio/models/load-preset/:preset', async (req, res) => {
                 config.models.activePreset = preset;
                 return config;
             });
+            // Force refresh config cache to ensure all subsequent calls get the updated preset
+            refreshConfig();
+            console.log(`[API] Config cache refreshed after preset change to '${preset}'`);
         } catch (configError) {
             appendLog(`Failed to update active preset: ${configError.message}`, 'error');
             // Don't fail the request for config update issues
