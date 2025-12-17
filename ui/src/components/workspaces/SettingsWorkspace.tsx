@@ -16,10 +16,24 @@ interface SystemSettings {
   autoLoadDelayMs: number;
 }
 
+interface ToolCallingSettings {
+  enabled: boolean;
+  mode: 'auto' | 'full' | 'core-only' | 'disabled';
+  coreToolsAlways: boolean;
+  writeToolsEnabled: boolean;
+}
+
 interface SettingsResponse {
   status: string;
   settings: SystemSettings;
   note?: string;
+}
+
+interface ToolConfigResponse {
+  status: string;
+  config: ToolCallingSettings;
+  modes: string[];
+  modeDescriptions: Record<string, string>;
 }
 
 // API functions
@@ -38,6 +52,26 @@ async function updateSystemSettings(settings: Partial<SystemSettings>): Promise<
   if (!res.ok) {
     const err = await res.json();
     throw new Error(err.error || "Failed to update settings");
+  }
+  return res.json();
+}
+
+// Tool calling API functions
+async function getToolConfig(): Promise<ToolConfigResponse> {
+  const res = await fetch("/api/tools/config");
+  if (!res.ok) throw new Error("Failed to fetch tool config");
+  return res.json();
+}
+
+async function updateToolConfig(config: Partial<ToolCallingSettings>): Promise<{ status: string; config: ToolCallingSettings }> {
+  const res = await fetch("/api/tools/config", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to update tool config");
   }
   return res.json();
 }
@@ -129,9 +163,18 @@ function ToggleInput({
   );
 }
 
+// Tool mode options with descriptions
+const TOOL_MODES = [
+  { value: 'auto', label: 'Auto', desc: 'Core + Standard tools (recommended)' },
+  { value: 'full', label: 'Full', desc: 'All tools including write/execute' },
+  { value: 'core-only', label: 'Core Only', desc: 'Safe read-only tools only' },
+  { value: 'disabled', label: 'Disabled', desc: 'No tool injection' },
+] as const;
+
 export function SettingsWorkspace() {
   const queryClient = useQueryClient();
   const [localSettings, setLocalSettings] = useState<SystemSettings | null>(null);
+  const [localToolSettings, setLocalToolSettings] = useState<ToolCallingSettings | null>(null);
   const [hasChanges, setHasChanges] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
@@ -141,12 +184,25 @@ export function SettingsWorkspace() {
     queryFn: getSystemSettings,
   });
 
+  // Fetch tool config
+  const { data: toolData, isLoading: toolLoading } = useQuery({
+    queryKey: ["tool-config"],
+    queryFn: getToolConfig,
+  });
+
   // Initialize local state when data loads
   useEffect(() => {
     if (data?.settings && !localSettings) {
       setLocalSettings(data.settings);
     }
   }, [data, localSettings]);
+
+  // Initialize tool settings when data loads
+  useEffect(() => {
+    if (toolData?.config && !localToolSettings) {
+      setLocalToolSettings(toolData.config);
+    }
+  }, [toolData, localToolSettings]);
 
   // Save mutation
   const saveMutation = useMutation({
@@ -163,11 +219,34 @@ export function SettingsWorkspace() {
     },
   });
 
+  // Tool config save mutation
+  const saveToolMutation = useMutation({
+    mutationFn: updateToolConfig,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["tool-config"] });
+      setSaveMessage({ type: "success", text: "Tool settings saved" });
+      setTimeout(() => setSaveMessage(null), 3000);
+    },
+    onError: (err: Error) => {
+      setSaveMessage({ type: "error", text: err.message });
+      setTimeout(() => setSaveMessage(null), 5000);
+    },
+  });
+
   // Update local setting
   const updateSetting = <K extends keyof SystemSettings>(key: K, value: SystemSettings[K]) => {
     if (!localSettings) return;
     setLocalSettings({ ...localSettings, [key]: value });
     setHasChanges(true);
+  };
+
+  // Update tool setting (auto-saves immediately)
+  const updateToolSetting = <K extends keyof ToolCallingSettings>(key: K, value: ToolCallingSettings[K]) => {
+    if (!localToolSettings) return;
+    const updated = { ...localToolSettings, [key]: value };
+    setLocalToolSettings(updated);
+    // Auto-save tool settings immediately for better UX
+    saveToolMutation.mutate({ [key]: value });
   };
 
   // Reset to defaults
@@ -186,7 +265,7 @@ export function SettingsWorkspace() {
     setHasChanges(true);
   };
 
-  if (isLoading) {
+  if (isLoading || toolLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900">
         <HeaderBar telemetry={null} />
@@ -359,6 +438,97 @@ export function SettingsWorkspace() {
             />
           </div>
         </section>
+
+        {/* Tool Calling Settings */}
+        {localToolSettings && (
+          <section className="bg-white/5 rounded-xl border border-white/10 p-6 space-y-6">
+            <div className="flex items-center gap-3">
+              <span className="text-2xl">🔧</span>
+              <div>
+                <h2 className="text-lg font-semibold text-white">Tool Calling</h2>
+                <p className="text-sm text-white/50">Control which tools are available to the LLM</p>
+              </div>
+            </div>
+
+            {/* Master Enable Toggle */}
+            <ToggleInput
+              label="Enable Tool Calling"
+              checked={localToolSettings.enabled}
+              onChange={(v) => updateToolSetting("enabled", v)}
+              description="Master switch - disable to turn off all tool injection"
+            />
+
+            {/* Tool Mode Selector */}
+            {localToolSettings.enabled && (
+              <>
+                <div className="space-y-2">
+                  <label className="block text-sm font-medium text-white/80">Tool Mode</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {TOOL_MODES.map((mode) => (
+                      <button
+                        key={mode.value}
+                        onClick={() => updateToolSetting("mode", mode.value)}
+                        className={clsx(
+                          "px-4 py-3 rounded-lg text-left transition-all border",
+                          localToolSettings.mode === mode.value
+                            ? mode.value === 'disabled' 
+                              ? "bg-red-500/20 border-red-500/50 text-red-300"
+                              : mode.value === 'full'
+                                ? "bg-orange-500/20 border-orange-500/50 text-orange-300"
+                                : "bg-accent-primary/20 border-accent-primary/50 text-accent-primary"
+                            : "bg-gray-700/50 border-white/10 text-white/70 hover:bg-gray-600/50"
+                        )}
+                      >
+                        <span className="block font-medium">{mode.label}</span>
+                        <span className="block text-xs opacity-70">{mode.desc}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Additional options */}
+                <div className="border-t border-white/10 pt-4 space-y-2">
+                  <ToggleInput
+                    label="Always Parse Core Tools from Text"
+                    checked={localToolSettings.coreToolsAlways}
+                    onChange={(v) => updateToolSetting("coreToolsAlways", v)}
+                    description="Parse rag_search, file_read, file_list from text output even if model doesn't support structured tool calls"
+                  />
+
+                  <ToggleInput
+                    label="Enable Write Tools"
+                    checked={localToolSettings.writeToolsEnabled}
+                    onChange={(v) => updateToolSetting("writeToolsEnabled", v)}
+                    description="⚠️ Dangerous: Enable file_write, file_patch, run_command, browser_automation"
+                  />
+                </div>
+
+                {/* Tool Categories Legend */}
+                <div className="bg-gray-800/50 rounded-lg p-4 space-y-2">
+                  <div className="text-sm font-medium text-white/70 mb-2">Tool Categories:</div>
+                  <div className="flex flex-wrap gap-3 text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded-full bg-green-500"></span>
+                      <span className="text-white/60">Core (always safe)</span>
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded-full bg-blue-500"></span>
+                      <span className="text-white/60">Standard (read-only)</span>
+                    </span>
+                    <span className="flex items-center gap-1.5">
+                      <span className="w-3 h-3 rounded-full bg-orange-500"></span>
+                      <span className="text-white/60">Write (dangerous)</span>
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
+
+            {saveToolMutation.isPending && (
+              <div className="text-xs text-white/40">Saving...</div>
+            )}
+          </section>
+        )}
 
         {/* Resource Management */}
         <section className="bg-white/5 rounded-xl border border-white/10 p-6 space-y-6">
