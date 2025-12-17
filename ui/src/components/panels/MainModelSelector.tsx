@@ -199,7 +199,7 @@ export function MainModelSelector({
                     ? 'border-white/20 bg-white/5 hover:bg-white/10 cursor-pointer'
                     : 'border-amber-500/20 bg-amber-500/5 hover:bg-amber-500/10 cursor-pointer'
                 }`}
-                onClick={() => available ? onSelect(modelId) : onModelDownload(modelId)}
+                onClick={() => onSelect(modelId)}
               >
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">

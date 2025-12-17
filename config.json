@@ -68,7 +68,7 @@
     },
     "perQualityMainModels": {
       "high": "llama-3.1-nemotron-70b-instruct-hf@q2_k_l",
-      "medium": "mungert/osmosis-mcp-4b",
+      "medium": "lmstudio-community/mistral-nemo-instruct-2407",
       "low": "qwen/qwen3-4b-2507"
     },
     "perQualityRollingSummarizers": {
