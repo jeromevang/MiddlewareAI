@@ -116,7 +116,7 @@
   },
   "toolCalling": {
     "enabled": true,
-    "mode": "auto",
+    "mode": "core-only",
     "coreToolsAlways": true,
     "writeToolsEnabled": false
   }

@@ -165,10 +165,10 @@ function ToggleInput({
 
 // Tool mode options with descriptions
 const TOOL_MODES = [
-  { value: 'auto', label: 'Auto', desc: 'Core + Standard tools (recommended)' },
-  { value: 'full', label: 'Full', desc: 'All tools including write/execute' },
-  { value: 'core-only', label: 'Core Only', desc: 'Safe read-only tools only' },
-  { value: 'disabled', label: 'Disabled', desc: 'No tool injection' },
+  { value: 'auto', label: 'Auto', desc: 'RAG + Read + Web tools', color: 'accent' },
+  { value: 'full', label: 'Full', desc: 'All tools (includes write/execute)', color: 'orange' },
+  { value: 'core-only', label: 'RAG + Read', desc: 'rag_search, file_read, file_list only', color: 'green' },
+  { value: 'disabled', label: 'Disabled', desc: 'No tools injected', color: 'red' },
 ] as const;
 
 export function SettingsWorkspace() {
@@ -464,26 +464,33 @@ export function SettingsWorkspace() {
                 <div className="space-y-2">
                   <label className="block text-sm font-medium text-white/80">Tool Mode</label>
                   <div className="grid grid-cols-2 gap-2">
-                    {TOOL_MODES.map((mode) => (
-                      <button
-                        key={mode.value}
-                        onClick={() => updateToolSetting("mode", mode.value)}
-                        className={clsx(
-                          "px-4 py-3 rounded-lg text-left transition-all border",
-                          localToolSettings.mode === mode.value
-                            ? mode.value === 'disabled' 
-                              ? "bg-red-500/20 border-red-500/50 text-red-300"
-                              : mode.value === 'full'
-                                ? "bg-orange-500/20 border-orange-500/50 text-orange-300"
-                                : "bg-accent-primary/20 border-accent-primary/50 text-accent-primary"
-                            : "bg-gray-700/50 border-white/10 text-white/70 hover:bg-gray-600/50"
-                        )}
-                      >
-                        <span className="block font-medium">{mode.label}</span>
-                        <span className="block text-xs opacity-70">{mode.desc}</span>
-                      </button>
-                    ))}
+                    {TOOL_MODES.map((mode) => {
+                      const isSelected = localToolSettings.mode === mode.value;
+                      const colorClasses = {
+                        green: isSelected ? "bg-green-500/20 border-green-500/50 text-green-300" : "",
+                        orange: isSelected ? "bg-orange-500/20 border-orange-500/50 text-orange-300" : "",
+                        red: isSelected ? "bg-red-500/20 border-red-500/50 text-red-300" : "",
+                        accent: isSelected ? "bg-cyan-500/20 border-cyan-500/50 text-cyan-300" : "",
+                      };
+                      return (
+                        <button
+                          key={mode.value}
+                          onClick={() => updateToolSetting("mode", mode.value)}
+                          className={clsx(
+                            "px-4 py-3 rounded-lg text-left transition-all border",
+                            colorClasses[mode.color],
+                            !isSelected && "bg-gray-700/50 border-white/10 text-white/70 hover:bg-gray-600/50"
+                          )}
+                        >
+                          <span className="block font-medium">{mode.label}</span>
+                          <span className="block text-xs opacity-70">{mode.desc}</span>
+                        </button>
+                      );
+                    })}
                   </div>
+                  <p className="text-xs text-white/40 mt-2">
+                    💡 <strong>RAG + Read</strong> is the safest option - gives LLM access to search your codebase and read files without any write permissions.
+                  </p>
                 </div>
 
                 {/* Additional options */}
