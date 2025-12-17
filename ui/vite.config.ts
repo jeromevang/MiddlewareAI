@@ -9,7 +9,7 @@ const proxiedRoutes = [
   "/metrics",
   "/logs",
   "/history",
-  "/api/config",
+  "/api",
   "/telemetry",
   "/sessions",
   "/engines",
