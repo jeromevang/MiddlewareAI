@@ -4,7 +4,7 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Download, Loader2, HardDrive, Info, Star, Lock, Unlock, AlertTriangle, Zap, CheckCircle, XCircle, RefreshCw } from "lucide-react";
+import { Check, Download, Loader2, HardDrive, Info, Star, Lock, Unlock, AlertTriangle, Zap, CheckCircle, XCircle } from "lucide-react";
 import { getModelDisplayName } from './model-config/constants';
 import { getModelStatus, getModelLocks, toggleModelLock } from "../../lib/api";
 import { ModelCapabilityBadges } from "../ui/ModelCapabilityBadges";
