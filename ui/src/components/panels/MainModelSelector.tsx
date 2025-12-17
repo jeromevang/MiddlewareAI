@@ -4,10 +4,21 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, Download, Loader2, HardDrive, Info, Star, Lock, Unlock, AlertTriangle } from "lucide-react";
+import { Check, Download, Loader2, HardDrive, Info, Star, Lock, Unlock, AlertTriangle, Zap, CheckCircle, XCircle, RefreshCw } from "lucide-react";
 import { getModelDisplayName } from './model-config/constants';
 import { getModelStatus, getModelLocks, toggleModelLock } from "../../lib/api";
 import { ModelCapabilityBadges } from "../ui/ModelCapabilityBadges";
+
+// Tool probe result interface
+interface ToolProbeResult {
+  modelId: string;
+  toolCallFormat: 'structured' | 'text_xml' | 'text_json' | 'text_func' | 'none';
+  preferredNaming: string;
+  supportsStructuredCalls: boolean;
+  supportsTextCalls: boolean;
+  recommendation: string;
+  testedAt: string;
+}
 
 interface MainModelSelectorProps {
   quality: 'high' | 'medium' | 'low';
@@ -29,7 +40,29 @@ export function MainModelSelector({
   onModelDownload,
 }: MainModelSelectorProps) {
   const [showDetails, setShowDetails] = useState<string | null>(null);
+  const [probeResult, setProbeResult] = useState<ToolProbeResult | null>(null);
+  const [showProbeDetails, setShowProbeDetails] = useState(false);
   const queryClient = useQueryClient();
+
+  // Mutation for probing model tool capabilities
+  const probeMutation = useMutation({
+    mutationFn: async (modelId: string) => {
+      const response = await fetch('/api/tools/probe', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId }),
+      });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Probe failed');
+      }
+      return response.json();
+    },
+    onSuccess: (data) => {
+      setProbeResult(data.capabilities);
+      setShowProbeDetails(true);
+    },
+  });
 
   // Fetch model availability status - WebSocket provides real-time updates
   // Only fetch initially and on manual refresh (no polling!)
@@ -354,13 +387,120 @@ export function MainModelSelector({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Main Model Selection */}
         <div className="space-y-3">
-          <div className="flex items-center gap-2">
-            <HardDrive className="h-4 w-4 text-green-400" />
-            <div>
-              <h4 className="font-medium text-white">Main Chat Model</h4>
-              <p className="text-xs text-white/60">Handles chat completions and tool calling</p>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <HardDrive className="h-4 w-4 text-green-400" />
+              <div>
+                <h4 className="font-medium text-white">Main Chat Model</h4>
+                <p className="text-xs text-white/60">Handles chat completions and tool calling</p>
+              </div>
             </div>
+            
+            {/* Check Tooling Button */}
+            {selectedMainModel && (
+              <button
+                onClick={() => probeMutation.mutate(selectedMainModel)}
+                disabled={probeMutation.isPending}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  probeMutation.isPending
+                    ? 'bg-purple-500/20 text-purple-300 cursor-wait'
+                    : 'bg-purple-500/20 hover:bg-purple-500/30 text-purple-400 border border-purple-500/30'
+                }`}
+                title="Test if the current model supports tool calling"
+              >
+                {probeMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    Testing...
+                  </>
+                ) : (
+                  <>
+                    <Zap className="h-3.5 w-3.5" />
+                    Check Tooling
+                  </>
+                )}
+              </button>
+            )}
           </div>
+
+          {/* Probe Results */}
+          {showProbeDetails && probeResult && (
+            <div className={`p-3 rounded-lg border ${
+              probeResult.supportsStructuredCalls
+                ? 'bg-green-500/10 border-green-500/30'
+                : probeResult.supportsTextCalls
+                  ? 'bg-amber-500/10 border-amber-500/30'
+                  : 'bg-red-500/10 border-red-500/30'
+            }`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  {probeResult.supportsStructuredCalls ? (
+                    <CheckCircle className="h-4 w-4 text-green-400" />
+                  ) : probeResult.supportsTextCalls ? (
+                    <AlertTriangle className="h-4 w-4 text-amber-400" />
+                  ) : (
+                    <XCircle className="h-4 w-4 text-red-400" />
+                  )}
+                  <span className={`text-sm font-medium ${
+                    probeResult.supportsStructuredCalls
+                      ? 'text-green-400'
+                      : probeResult.supportsTextCalls
+                        ? 'text-amber-400'
+                        : 'text-red-400'
+                  }`}>
+                    {probeResult.supportsStructuredCalls 
+                      ? 'Full Tool Support'
+                      : probeResult.supportsTextCalls
+                        ? 'Text-Based Tools Only'
+                        : 'Limited Tool Support'}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setShowProbeDetails(false)}
+                  className="text-white/40 hover:text-white/60 text-xs"
+                >
+                  ✕
+                </button>
+              </div>
+              
+              <div className="space-y-1 text-xs">
+                <div className="flex items-center gap-2 text-white/70">
+                  <span className="text-white/50">Format:</span>
+                  <span className="font-mono bg-white/10 px-1.5 py-0.5 rounded">
+                    {probeResult.toolCallFormat}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-white/70">
+                  <span className="text-white/50">Naming:</span>
+                  <span className="font-mono bg-white/10 px-1.5 py-0.5 rounded">
+                    {probeResult.preferredNaming}
+                  </span>
+                </div>
+                <div className="mt-2 text-white/60 text-xs">
+                  {probeResult.supportsStructuredCalls 
+                    ? '✅ All middleware tools available (rag_search, file_read, web_search, etc.)'
+                    : probeResult.supportsTextCalls
+                      ? '⚠️ Core tools only (rag_search, file_read, file_list) - text parsing enabled'
+                      : '❌ Consider using "core-only" mode or switching to a model with tool support'}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Probe Error */}
+          {probeMutation.isError && (
+            <div className="p-2 rounded-lg bg-red-500/10 border border-red-500/30 text-red-400 text-xs flex items-center gap-2">
+              <XCircle className="h-4 w-4 flex-shrink-0" />
+              <span>Probe failed: {(probeMutation.error as Error)?.message}</span>
+              <button
+                onClick={() => probeMutation.reset()}
+                className="ml-auto text-white/40 hover:text-white/60"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+
           <ModelList
             options={mainOptions}
             selectedModel={selectedMainModel}

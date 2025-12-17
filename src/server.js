@@ -30,7 +30,7 @@ const { embedText, summarizeConversation, generateCompletion, proxyChatCompletio
 const { SQLiteCacheManager } = require('./sqlite_cache.js');
 const { FAISSIndexManager } = require('./faiss_storage.js');
 const { initializeLMStudio, isLMStudioRunning } = require('./lmstudio_manager.js');
-const { getProcessingConfig, getModelConfig, getConfig, getLMStudioConfig, getStorageConfig, getSessionConfig, updateConfigFile, refreshConfig } = require('./config.js');
+const { getProcessingConfig, getModelConfig, getConfig, getLMStudioConfig, getStorageConfig, getSessionConfig, updateConfigFile, refreshConfig, getToolCallingConfig, updateToolCallingConfig } = require('./config.js');
 const { getRuntimeMode, isCloudMode, requireModeHealthCheck } = require('./runtime.js');
 const { main: runIndexer } = require('./middleware.js'); // to trigger reindex
 const { getIndexingStatus, initializeIndexingStatusFromDatabase } = require('./indexer/indexer.js');
@@ -1665,6 +1665,293 @@ app.patch('/api/system-settings', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
+
+// =============================================================================
+// TOOL CALLING API
+// =============================================================================
+
+/**
+ * GET /api/tools/config - Get tool calling configuration
+ */
+app.get('/api/tools/config', async (_req, res) => {
+    try {
+        const config = getToolCallingConfig();
+        res.json({ 
+            status: 'ok', 
+            config,
+            modes: ['auto', 'full', 'core-only', 'disabled'],
+            modeDescriptions: {
+                'auto': 'Core + Standard tools (probe model, exclude write tools unless enabled)',
+                'full': 'All tools including write/execute tools',
+                'core-only': 'Only safe read-only tools (rag_search, file_read, file_list)',
+                'disabled': 'No tool injection'
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * PATCH /api/tools/config - Update tool calling configuration
+ */
+app.patch('/api/tools/config', async (req, res) => {
+    try {
+        const updates = req.body || {};
+        
+        // Validate mode
+        if (updates.mode !== undefined) {
+            const validModes = ['auto', 'full', 'core-only', 'disabled'];
+            if (!validModes.includes(updates.mode)) {
+                return res.status(400).json({ error: `Invalid mode. Must be one of: ${validModes.join(', ')}` });
+            }
+        }
+        
+        // Validate boolean fields
+        const boolFields = ['enabled', 'coreToolsAlways', 'writeToolsEnabled'];
+        for (const field of boolFields) {
+            if (updates[field] !== undefined && typeof updates[field] !== 'boolean') {
+                return res.status(400).json({ error: `Invalid ${field}: must be boolean` });
+            }
+        }
+        
+        const newConfig = updateToolCallingConfig(updates);
+        res.json({ 
+            status: 'ok', 
+            config: newConfig.toolCalling || newConfig
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/tools/categories - Get all tool categories with metadata
+ */
+app.get('/api/tools/categories', async (_req, res) => {
+    try {
+        const categories = getAllToolCategories();
+        const formatted = categories.map(cat => ({
+            names: cat.names,
+            color: cat.color,
+            description: cat.description,
+            alwaysParse: cat.alwaysParse,
+            tools: cat.tools.map(t => ({
+                name: t.function?.name,
+                description: t.function?.description
+            }))
+        }));
+        
+        res.json({ 
+            status: 'ok', 
+            categories: formatted,
+            allTools: Object.keys(MIDDLEWARE_TOOLS)
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * POST /api/tools/probe - Probe current main model for tool calling capabilities
+ * Tests if the model supports structured tool calling vs text-based tool calling
+ */
+app.post('/api/tools/probe', async (req, res) => {
+    try {
+        const { modelId } = req.body || {};
+        
+        // Get the model to test (default to current main model)
+        const config = getConfig();
+        const targetModel = modelId || config.models?.main?.identifier;
+        
+        if (!targetModel) {
+            return res.status(400).json({ error: 'No model specified and no main model configured' });
+        }
+        
+        console.log(`[Tools] Probing model for tool support: ${targetModel}`);
+        
+        // Create a simple test tool
+        const testTool = {
+            type: 'function',
+            function: {
+                name: 'test_tool',
+                description: 'A test tool that returns a greeting. Use this to say hello.',
+                parameters: {
+                    type: 'object',
+                    properties: {
+                        name: {
+                            type: 'string',
+                            description: 'Name to greet'
+                        }
+                    },
+                    required: ['name']
+                }
+            }
+        };
+        
+        const testMessages = [
+            { role: 'system', content: 'You have access to tools. Use the test_tool to greet the user.' },
+            { role: 'user', content: 'Please greet John using the test_tool.' }
+        ];
+        
+        // Make a non-streaming request to LM Studio with the test tool
+        const lmConfig = getLMStudioConfig();
+        const response = await fetch(`${lmConfig.url}/v1/chat/completions`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: targetModel,
+                messages: testMessages,
+                tools: [testTool],
+                tool_choice: 'auto',
+                max_tokens: 500,
+                temperature: 0.1
+            })
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            return res.status(500).json({ 
+                error: 'LM Studio request failed', 
+                details: errorText,
+                modelId: targetModel
+            });
+        }
+        
+        const result = await response.json();
+        const choice = result.choices?.[0];
+        const message = choice?.message;
+        const content = message?.content || '';
+        
+        // Analyze the response
+        let toolCallFormat = 'none';
+        let preferredNaming = 'snake_case';
+        let parsedToolCall = null;
+        
+        // Check for structured tool_calls (OpenAI format)
+        if (message?.tool_calls && Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+            toolCallFormat = 'structured';
+            const tc = message.tool_calls[0];
+            parsedToolCall = {
+                name: tc.function?.name,
+                arguments: tc.function?.arguments
+            };
+            console.log('[Tools] Probe result: structured tool_calls supported');
+        }
+        // Check for text-based tool calls (various formats)
+        else if (content) {
+            // Check for <tool_call> format
+            const toolCallMatch = content.match(/<tool_call>\s*({[\s\S]*?})\s*<\/tool_call>/);
+            if (toolCallMatch) {
+                toolCallFormat = 'text_xml';
+                try {
+                    parsedToolCall = JSON.parse(toolCallMatch[1]);
+                } catch (e) {
+                    parsedToolCall = { raw: toolCallMatch[1] };
+                }
+                console.log('[Tools] Probe result: text-based <tool_call> format');
+            }
+            // Check for ```json format
+            else if (content.includes('```json') && content.includes('"name"')) {
+                toolCallFormat = 'text_json';
+                const jsonMatch = content.match(/```json\s*([\s\S]*?)```/);
+                if (jsonMatch) {
+                    try {
+                        parsedToolCall = JSON.parse(jsonMatch[1]);
+                    } catch (e) {
+                        parsedToolCall = { raw: jsonMatch[1] };
+                    }
+                }
+                console.log('[Tools] Probe result: text-based ```json format');
+            }
+            // Check for function call syntax in text
+            else if (content.includes('test_tool(') || content.includes('test_tool {')) {
+                toolCallFormat = 'text_func';
+                console.log('[Tools] Probe result: text-based function syntax');
+            }
+            else {
+                console.log('[Tools] Probe result: no tool call detected in response');
+            }
+        }
+        
+        // Determine naming preference from the parsed call
+        if (parsedToolCall?.name) {
+            if (parsedToolCall.name.includes('_')) {
+                preferredNaming = 'snake_case';
+            } else if (parsedToolCall.name.includes('.')) {
+                preferredNaming = 'dot_notation';
+            } else if (/[A-Z]/.test(parsedToolCall.name)) {
+                preferredNaming = 'camelCase';
+            }
+        }
+        
+        // Build capability report
+        const capabilities = {
+            modelId: targetModel,
+            toolCallFormat,
+            preferredNaming,
+            supportsStructuredCalls: toolCallFormat === 'structured',
+            supportsTextCalls: toolCallFormat.startsWith('text_'),
+            parsedToolCall,
+            rawResponse: content?.slice(0, 500),
+            testedAt: new Date().toISOString()
+        };
+        
+        // Store probe result in model database if available
+        try {
+            const { setModelToolCapability } = require('./model_db_service.js');
+            if (typeof setModelToolCapability === 'function') {
+                await setModelToolCapability(targetModel, capabilities);
+            }
+        } catch (e) {
+            // Model DB storage not available, that's ok
+        }
+        
+        res.json({
+            status: 'ok',
+            capabilities,
+            recommendation: toolCallFormat === 'structured' 
+                ? 'Model supports structured tool calling - all tools available'
+                : toolCallFormat.startsWith('text_')
+                    ? 'Model uses text-based tool calling - core tools will be parsed from text'
+                    : 'Model may not support tool calling - consider using core-only mode'
+        });
+        
+    } catch (error) {
+        console.error('[Tools] Probe error:', error.message);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+/**
+ * GET /api/tools/list - List all middleware tools with their categories
+ */
+app.get('/api/tools/list', async (_req, res) => {
+    try {
+        const tools = Object.entries(MIDDLEWARE_TOOLS).map(([name, tool]) => {
+            const category = getToolCategory(name);
+            return {
+                name,
+                description: tool.function?.description,
+                category: category?.category || 'unknown',
+                color: category?.color || 'gray',
+                parameters: tool.function?.parameters
+            };
+        });
+        
+        res.json({ 
+            status: 'ok', 
+            tools,
+            count: tools.length
+        });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// =============================================================================
+// ENGINE CONTROLS
+// =============================================================================
 
 app.patch('/engines/:engine', async (req, res) => {
     const { engine } = req.params;
@@ -4646,6 +4933,101 @@ const MIDDLEWARE_TOOLS = {
 };
 
 // =========================
+// Tool Categories (Color-Coded)
+// =========================
+
+/**
+ * CORE TOOLS (Green) - Always available, even if model doesn't support structured tool calling
+ * These are safe, read-only operations that can be parsed from text output
+ */
+const CORE_TOOLS = {
+    names: ['rag_search', 'file_read', 'file_list'],
+    color: 'green',
+    description: 'Safe read-only tools - always available',
+    alwaysParse: true  // Parse from text output even if model doesn't support tool_calls
+};
+
+/**
+ * STANDARD TOOLS (Blue) - Available when model supports tool calling
+ * Read-only and low-risk operations
+ */
+const STANDARD_TOOLS = {
+    names: ['web_search', 'fetch_url', 'grep', 'memory_store', 'memory_retrieve', 'memory_list', 
+            'get_file_summary', 'file_search', 'repo_map', 'npm_info'],
+    color: 'blue',
+    description: 'Standard tools - require tool calling support',
+    alwaysParse: false
+};
+
+/**
+ * WRITE TOOLS (Orange) - Dangerous operations, require explicit opt-in
+ * Can modify files or execute commands
+ */
+const WRITE_TOOLS = {
+    names: ['file_write', 'file_patch', 'run_command', 'browser_automation'],
+    color: 'orange',
+    description: 'Write/execute tools - require explicit enablement',
+    alwaysParse: false
+};
+
+/**
+ * Get tool definitions by category
+ * @param {'core'|'standard'|'write'|'all'} category 
+ * @returns {Array} Array of tool definitions
+ */
+function getToolsByCategory(category) {
+    let toolNames = [];
+    
+    switch (category) {
+        case 'core':
+            toolNames = CORE_TOOLS.names;
+            break;
+        case 'standard':
+            toolNames = STANDARD_TOOLS.names;
+            break;
+        case 'write':
+            toolNames = WRITE_TOOLS.names;
+            break;
+        case 'all':
+            toolNames = [...CORE_TOOLS.names, ...STANDARD_TOOLS.names, ...WRITE_TOOLS.names];
+            break;
+        default:
+            return [];
+    }
+    
+    return toolNames.map(name => MIDDLEWARE_TOOLS[name]).filter(Boolean);
+}
+
+/**
+ * Get tool category info for a tool name
+ * @param {string} toolName 
+ * @returns {{category: string, color: string, description: string}|null}
+ */
+function getToolCategory(toolName) {
+    if (CORE_TOOLS.names.includes(toolName)) {
+        return { category: 'core', color: CORE_TOOLS.color, description: CORE_TOOLS.description };
+    }
+    if (STANDARD_TOOLS.names.includes(toolName)) {
+        return { category: 'standard', color: STANDARD_TOOLS.color, description: STANDARD_TOOLS.description };
+    }
+    if (WRITE_TOOLS.names.includes(toolName)) {
+        return { category: 'write', color: WRITE_TOOLS.color, description: WRITE_TOOLS.description };
+    }
+    return null;
+}
+
+/**
+ * Get all tool categories with metadata
+ */
+function getAllToolCategories() {
+    return [
+        { ...CORE_TOOLS, tools: getToolsByCategory('core') },
+        { ...STANDARD_TOOLS, tools: getToolsByCategory('standard') },
+        { ...WRITE_TOOLS, tools: getToolsByCategory('write') }
+    ];
+}
+
+// =========================
 // Client Detection & Smart Tool Injection
 // =========================
 
@@ -4711,40 +5093,228 @@ function detectClient(req, tools = []) {
 }
 
 /**
- * Get tools to inject based on client type
- * - Cursor: Only inject rag_search (complementary semantic search)
- * - Other clients: Inject all middleware tools
+ * Get tools to inject based on client type and config settings
+ * Respects toolCalling config: enabled, mode, coreToolsAlways, writeToolsEnabled
+ * 
+ * Modes:
+ * - 'disabled': No tools injected
+ * - 'core-only': Only core tools (rag_search, file_read, file_list)
+ * - 'auto': Core + Standard tools (excludes write tools unless explicitly enabled)
+ * - 'full': All tools including write tools
+ * 
  * @param {boolean} isCursor - Whether the client is Cursor
  * @param {boolean} hasExistingTools - Whether the request already has tools
+ * @param {object} modelCapabilities - Optional model capability info
  * @returns {Array} Array of tool definitions to inject
  */
-function getToolsToInject(isCursor, hasExistingTools) {
-    if (isCursor) {
-        // Cursor has its own file/code tools. We inject complementary tools:
-        // - rag_search: semantic codebase search (Cursor has codebase_search but this is different)
-        // - web_search, fetch_url, npm_info: web/package lookup
-        // - memory_store, memory_retrieve: agent state persistence
-        // - browser_automation: browser control (Cursor has MCP browser but not always enabled)
-        return [
-            MIDDLEWARE_TOOLS.rag_search,
-            MIDDLEWARE_TOOLS.web_search,
-            MIDDLEWARE_TOOLS.fetch_url,
-            MIDDLEWARE_TOOLS.npm_info,
-            MIDDLEWARE_TOOLS.memory_store,
-            MIDDLEWARE_TOOLS.memory_retrieve,
-            MIDDLEWARE_TOOLS.memory_list,
-            MIDDLEWARE_TOOLS.browser_automation
-        ];
+function getToolsToInject(isCursor, hasExistingTools, modelCapabilities = null) {
+    const toolConfig = getToolCallingConfig();
+    
+    // Master switch - if disabled, no tools
+    if (!toolConfig.enabled || toolConfig.mode === 'disabled') {
+        console.log('[Tools] Tool calling is disabled via config');
+        return [];
     }
     
-    // For other clients (Continue, etc.): inject all middleware tools
-    // This enables full agentic capabilities:
-    // - File operations: file_read, file_write, file_patch, file_list, file_search
-    // - Code intelligence: rag_search, get_file_summary, repo_map, grep
-    // - Web access: web_search, fetch_url, npm_info
-    // - Memory: memory_store, memory_retrieve, memory_list
-    // - Automation: run_command, browser_automation
-    return Object.values(MIDDLEWARE_TOOLS);
+    // Determine which tools to include based on mode
+    let toolsToInject = [];
+    
+    switch (toolConfig.mode) {
+        case 'core-only':
+            // Only core tools (green) - always safe
+            toolsToInject = getToolsByCategory('core');
+            console.log('[Tools] Mode: core-only - injecting core tools only');
+            break;
+            
+        case 'full':
+            // All tools including write tools
+            toolsToInject = getToolsByCategory('all');
+            console.log('[Tools] Mode: full - injecting all tools');
+            break;
+            
+        case 'auto':
+        default:
+            // Core + Standard, optionally with write tools
+            toolsToInject = [
+                ...getToolsByCategory('core'),
+                ...getToolsByCategory('standard')
+            ];
+            
+            // Only add write tools if explicitly enabled
+            if (toolConfig.writeToolsEnabled) {
+                toolsToInject.push(...getToolsByCategory('write'));
+                console.log('[Tools] Mode: auto - injecting core + standard + write tools');
+            } else {
+                console.log('[Tools] Mode: auto - injecting core + standard tools (write disabled)');
+            }
+            break;
+    }
+    
+    // For Cursor, filter to complementary tools only
+    if (isCursor) {
+        const cursorComplementaryTools = new Set([
+            'rag_search', 'web_search', 'fetch_url', 'npm_info',
+            'memory_store', 'memory_retrieve', 'memory_list', 'browser_automation'
+        ]);
+        
+        toolsToInject = toolsToInject.filter(t => 
+            cursorComplementaryTools.has(t.function?.name)
+        );
+        console.log(`[Tools] Filtered for Cursor: ${toolsToInject.length} complementary tools`);
+    }
+    
+    return toolsToInject;
+}
+
+// =========================
+// Text-Based Tool Call Parser
+// =========================
+
+/**
+ * Parse text-based tool calls from LLM output
+ * Supports multiple formats:
+ * - XML: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+ * - JSON block: ```json\n{"name": "...", ...}\n```
+ * - Function syntax: tool_name(arg1, arg2)
+ * 
+ * @param {string} content - LLM response content
+ * @returns {Array<{name: string, arguments: object}>} Parsed tool calls
+ */
+function parseTextToolCalls(content) {
+    if (!content || typeof content !== 'string') {
+        return [];
+    }
+    
+    const toolCalls = [];
+    
+    // Pattern 1: <tool_call>...</tool_call> format (most common for local models)
+    const xmlPattern = /<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/gi;
+    let match;
+    while ((match = xmlPattern.exec(content)) !== null) {
+        try {
+            const parsed = JSON.parse(match[1]);
+            if (parsed.name || parsed.function) {
+                toolCalls.push({
+                    name: parsed.name || parsed.function?.name || parsed.function,
+                    arguments: parsed.arguments || parsed.parameters || parsed.params || {}
+                });
+            }
+        } catch (e) {
+            // Try parsing as key-value if JSON fails
+            const nameMatch = match[1].match(/"?name"?\s*[:=]\s*"([^"]+)"/);
+            if (nameMatch) {
+                toolCalls.push({
+                    name: nameMatch[1],
+                    arguments: {}
+                });
+            }
+        }
+    }
+    
+    // Pattern 2: ```json {...} ``` with tool call structure
+    const jsonBlockPattern = /```(?:json)?\s*(\{[\s\S]*?"name"[\s\S]*?\})\s*```/gi;
+    while ((match = jsonBlockPattern.exec(content)) !== null) {
+        try {
+            const parsed = JSON.parse(match[1]);
+            if (parsed.name && !toolCalls.find(tc => tc.name === parsed.name)) {
+                toolCalls.push({
+                    name: parsed.name,
+                    arguments: parsed.arguments || parsed.parameters || {}
+                });
+            }
+        } catch (e) {
+            // JSON parse failed, skip
+        }
+    }
+    
+    // Pattern 3: [tool: name](arguments) markdown-style
+    const markdownPattern = /\[tool:\s*(\w+)\]\(([^)]*)\)/gi;
+    while ((match = markdownPattern.exec(content)) !== null) {
+        const name = match[1];
+        if (!toolCalls.find(tc => tc.name === name)) {
+            try {
+                const args = match[2] ? JSON.parse(match[2]) : {};
+                toolCalls.push({ name, arguments: args });
+            } catch (e) {
+                toolCalls.push({ name, arguments: { raw: match[2] } });
+            }
+        }
+    }
+    
+    // Pattern 4: Function call syntax: tool_name({"key": "value"})
+    const funcPattern = /\b(rag_search|file_read|file_list|web_search|fetch_url|grep|memory_\w+|file_\w+|run_command|get_file_summary|repo_map|npm_info|browser_automation)\s*\(\s*(\{[\s\S]*?\})\s*\)/gi;
+    while ((match = funcPattern.exec(content)) !== null) {
+        const name = match[1];
+        if (!toolCalls.find(tc => tc.name === name)) {
+            try {
+                const args = JSON.parse(match[2]);
+                toolCalls.push({ name, arguments: args });
+            } catch (e) {
+                // Parse failed, skip
+            }
+        }
+    }
+    
+    return toolCalls;
+}
+
+/**
+ * Check if content contains text-based tool calls
+ * @param {string} content 
+ * @returns {boolean}
+ */
+function hasTextToolCalls(content) {
+    if (!content) return false;
+    return (
+        content.includes('<tool_call>') ||
+        (content.includes('```json') && content.includes('"name"')) ||
+        content.includes('[tool:') ||
+        /\b(rag_search|file_read|web_search)\s*\(/.test(content)
+    );
+}
+
+/**
+ * Process text-based tool calls from LLM response
+ * Executes core tools found in text and returns results
+ * @param {string} content - LLM response content
+ * @param {boolean} coreOnly - Only process core tools (default: true for safety)
+ * @returns {Promise<{executed: Array, results: Array, remaining: string}>}
+ */
+async function processTextToolCalls(content, coreOnly = true) {
+    const toolCalls = parseTextToolCalls(content);
+    const executed = [];
+    const results = [];
+    
+    for (const tc of toolCalls) {
+        // Check if this tool should be executed
+        const category = getToolCategory(tc.name);
+        
+        // Safety check: only execute core tools from text unless explicitly allowed
+        if (coreOnly && category?.category !== 'core') {
+            console.log(`[Tools] Skipping text-based ${tc.name} (not a core tool)`);
+            continue;
+        }
+        
+        // Check if it's a valid middleware tool
+        if (!isMiddlewareTool(tc.name)) {
+            console.log(`[Tools] Skipping unknown tool: ${tc.name}`);
+            continue;
+        }
+        
+        console.log(`[Tools] Executing text-based tool: ${tc.name}`);
+        const result = await executeMiddlewareTool(tc.name, tc.arguments);
+        
+        executed.push(tc);
+        results.push({
+            toolName: tc.name,
+            arguments: tc.arguments,
+            success: result.success,
+            result: result.result,
+            error: result.error
+        });
+    }
+    
+    return { executed, results, originalContent: content };
 }
 
 /**

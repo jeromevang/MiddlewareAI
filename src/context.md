@@ -323,6 +323,58 @@ Access via `/settings` route or "System Settings" quick link on dashboard.
 ### Overview
 The middleware implements a comprehensive tool calling system that enables agentic capabilities for LLMs. Tools are automatically injected into chat completions and executed internally by the middleware.
 
+### Configuration (`config.json` → `toolCalling`)
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | true | Master switch for all tool calling |
+| `mode` | 'auto' | Tool injection mode (see below) |
+| `coreToolsAlways` | true | Parse core tools from text even without structured tool_calls |
+| `writeToolsEnabled` | false | Enable dangerous write/execute tools |
+
+**Modes:**
+- `auto` - Core + Standard tools; probes model capability; excludes write tools unless enabled
+- `full` - All tools including write/execute (file_write, run_command)
+- `core-only` - Only safe tools (rag_search, file_read, file_list)
+- `disabled` - No tool injection
+
+### Tool Categories (Color-Coded)
+| Category | Color | Tools | Availability |
+|----------|-------|-------|--------------|
+| **Core** | Green | `rag_search`, `file_read`, `file_list` | Always safe; can be parsed from text output |
+| **Standard** | Blue | `web_search`, `fetch_url`, `grep`, `memory_*`, etc. | Requires structured tool calling |
+| **Write** | Orange | `file_write`, `file_patch`, `run_command`, `browser_automation` | Requires explicit `writeToolsEnabled: true` |
+
+### Tool Probe Endpoint
+`POST /api/tools/probe` - Test if a model supports tool calling
+
+**Request:**
+```json
+{ "modelId": "qwen2.5-7b-instruct" }
+```
+
+**Response:**
+```json
+{
+  "capabilities": {
+    "modelId": "qwen2.5-7b-instruct",
+    "toolCallFormat": "structured",  // or "text_xml", "text_json", "none"
+    "preferredNaming": "snake_case",
+    "supportsStructuredCalls": true,
+    "supportsTextCalls": false
+  },
+  "recommendation": "Model supports structured tool calling - all tools available"
+}
+```
+
+### Text-Based Tool Parsing
+For models that output tool calls as text (not structured `tool_calls`), the middleware can parse:
+- `<tool_call>{"name": "...", "arguments": {...}}</tool_call>` (XML format)
+- ` ```json {"name": "..."} ``` ` (JSON block format)
+- `[tool: name]({"arg": "val"})` (Markdown format)
+- `tool_name({"arg": "val"})` (Function syntax)
+
+Only **core tools** are executed from text parsing (for safety).
+
 ### Tool Execution Loop
 When the LLM calls a middleware tool, the middleware:
 1. Detects the tool call in the LLM response
@@ -338,6 +390,15 @@ This loop runs for up to 10 iterations to prevent infinite loops.
 - **Streaming**: Tool loop runs internally (non-streaming), final response is chunked and streamed as SSE
 
 The response includes `tool_iterations` to indicate how many loop iterations were needed.
+
+### API Endpoints
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/tools/config` | GET | Get current tool calling configuration |
+| `/api/tools/config` | PATCH | Update tool calling settings |
+| `/api/tools/categories` | GET | Get all tool categories with metadata |
+| `/api/tools/probe` | POST | Probe model for tool calling capabilities |
+| `/api/tools/list` | GET | List all middleware tools with categories |
 
 ### Available Tools (17 total)
 

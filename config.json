@@ -113,5 +113,11 @@
   "customPreset": {
     "main": "nextcoder-32b",
     "rollingSummarizer": "qwen2.5-coder-0.5b-instruct"
+  },
+  "toolCalling": {
+    "enabled": true,
+    "mode": "auto",
+    "coreToolsAlways": true,
+    "writeToolsEnabled": false
   }
 }

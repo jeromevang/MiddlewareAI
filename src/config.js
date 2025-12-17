@@ -231,6 +231,32 @@ function getSessionConfig() {
 }
 
 /**
+ * Get tool calling configuration
+ * @returns {object} Tool calling settings with defaults
+ */
+function getToolCallingConfig() {
+    const config = loadConfig();
+    const defaults = {
+        enabled: true,
+        mode: 'auto',           // 'auto' | 'full' | 'core-only' | 'disabled'
+        coreToolsAlways: true,  // Parse core tools from text even if model doesn't support structured calls
+        writeToolsEnabled: false // Dangerous tools require explicit opt-in
+    };
+    return { ...defaults, ...(config.toolCalling || {}) };
+}
+
+/**
+ * Update tool calling configuration
+ * @param {object} settings - Partial settings to update
+ */
+function updateToolCallingConfig(settings) {
+    return updateConfigFile(cfg => {
+        cfg.toolCalling = { ...getToolCallingConfig(), ...settings };
+        return cfg;
+    });
+}
+
+/**
  * Get system settings for context limits, VRAM management, etc.
  * @returns {object} System settings with defaults
  */
@@ -284,5 +310,7 @@ module.exports = {
     getRagPipelineTier,
     setRagPipelineTier,
     refreshConfig,
+    getToolCallingConfig,
+    updateToolCallingConfig,
 };
 
